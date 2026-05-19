@@ -16,7 +16,7 @@ SET search_path TO refdata;
 
 CREATE TYPE contract_kind AS ENUM ('BINARY', 'SCALAR');
 CREATE TYPE contract_state AS ENUM (
-  'DRAFT', 'LISTED', 'OPEN', 'CLOSED', 'RESOLVING', 'SETTLED', 'CANCELLED'
+  'DRAFT', 'LISTED', 'OPEN', 'HALTED', 'CLOSED', 'RESOLVING', 'SETTLED', 'CANCELLED'
 );
 
 CREATE TABLE series (
@@ -57,6 +57,8 @@ CREATE TABLE contracts (
   expected_resolution_at    TIMESTAMPTZ NOT NULL,
   settlement_source         TEXT,
   oracle_policy             TEXT NOT NULL DEFAULT 'ADMIN',
+  settlement_rule           JSONB NOT NULL DEFAULT '{}', -- contract-specific payout mapping
+  close_global_seq          BIGINT,                      -- ME high-water mark at close
   created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at                TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -157,6 +159,19 @@ CREATE TABLE entries (
 CREATE INDEX ON entries(tx_id);
 CREATE INDEX ON entries(account_id, entry_id DESC);
 
+CREATE TABLE ledger_event_outbox (
+  id                BIGSERIAL PRIMARY KEY,
+  tx_id             BIGINT NOT NULL REFERENCES transactions(tx_id),
+  event_type        TEXT NOT NULL,
+  payload           JSONB NOT NULL,
+  status            TEXT NOT NULL DEFAULT 'PENDING', -- PENDING | PUBLISHED | FAILED
+  attempts          INT NOT NULL DEFAULT 0,
+  next_attempt_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(tx_id, event_type)
+);
+CREATE INDEX ON ledger_event_outbox(status, next_attempt_at);
+
 -- Enforce balanced transactions via constraint trigger
 CREATE OR REPLACE FUNCTION assert_tx_balanced() RETURNS trigger AS $$
 DECLARE
@@ -183,15 +198,26 @@ CREATE TABLE holds (
   hold_id           TEXT PRIMARY KEY,             -- e.g., "hold_<snowflake>"
   user_id           TEXT NOT NULL,
   amount_micro_usdc BIGINT NOT NULL CHECK (amount_micro_usdc >= 0),
-  committed_micro_usdc BIGINT NOT NULL DEFAULT 0,
-  released_micro_usdc  BIGINT NOT NULL DEFAULT 0,
+  committed_micro_usdc BIGINT NOT NULL DEFAULT 0 CHECK (committed_micro_usdc >= 0),
+  released_micro_usdc  BIGINT NOT NULL DEFAULT 0 CHECK (released_micro_usdc >= 0),
   reason            TEXT NOT NULL,
-  status            TEXT NOT NULL DEFAULT 'ACTIVE', -- ACTIVE | CLOSED
+  status            TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'CLOSED')),
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-  closed_at         TIMESTAMPTZ
+  closed_at         TIMESTAMPTZ,
+  CHECK (committed_micro_usdc + released_micro_usdc <= amount_micro_usdc)
 );
 CREATE INDEX ON holds(user_id);
 CREATE INDEX ON holds(status);
+
+CREATE TABLE hold_operations (
+  idempotency_key   TEXT PRIMARY KEY,
+  hold_id           TEXT NOT NULL REFERENCES holds(hold_id),
+  operation_type    TEXT NOT NULL CHECK (operation_type IN ('PLACE', 'RELEASE', 'COMMIT')),
+  amount_micro_usdc BIGINT NOT NULL CHECK (amount_micro_usdc >= 0),
+  ledger_tx_id      BIGINT,                       -- FK conceptually; ledger owns
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX ON hold_operations(hold_id);
 
 -- View: current balance per user
 CREATE OR REPLACE VIEW user_balances AS
@@ -235,7 +261,7 @@ SET search_path TO orders;
 CREATE TYPE order_side AS ENUM ('YES', 'NO', 'LONG', 'SHORT');
 CREATE TYPE order_action AS ENUM ('BUY', 'SELL');
 CREATE TYPE time_in_force AS ENUM ('GTC', 'IOC', 'FOK');
-CREATE TYPE order_status AS ENUM ('OPEN', 'PARTIAL', 'FILLED', 'CANCELLED', 'REJECTED', 'EXPIRED');
+CREATE TYPE order_status AS ENUM ('PENDING', 'OPEN', 'PARTIAL', 'FILLED', 'CANCELLED', 'REJECTED', 'EXPIRED');
 
 CREATE TABLE orders (
   order_id              TEXT PRIMARY KEY,         -- Snowflake
@@ -257,6 +283,8 @@ CREATE TABLE orders (
   avg_fill_price_ticks  BIGINT NOT NULL DEFAULT 0,
   reject_code           TEXT,
   reject_reason         TEXT,
+  me_global_seq         BIGINT,
+  me_contract_seq       BIGINT,
   created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
   expires_at            TIMESTAMPTZ,
@@ -272,20 +300,41 @@ CREATE TABLE fills (
   taker_order_id    TEXT NOT NULL REFERENCES orders(order_id),
   maker_user_id     TEXT NOT NULL,
   taker_user_id     TEXT NOT NULL,
+  maker_hold_id     TEXT,
+  taker_hold_id     TEXT,
   ticker            TEXT NOT NULL,
+  maker_side        order_side NOT NULL,
+  maker_action      order_action NOT NULL,
+  taker_side        order_side NOT NULL,
+  taker_action      order_action NOT NULL,
   price_ticks       BIGINT NOT NULL,
   count             BIGINT NOT NULL CHECK (count > 0),
-  aggressor_side    order_action NOT NULL,
+  aggressor_side    order_side NOT NULL,
   maker_fee_micro_usdc BIGINT NOT NULL DEFAULT 0,
   taker_fee_micro_usdc BIGINT NOT NULL DEFAULT 0,
   ticker_seq        BIGINT NOT NULL,             -- monotonic per ticker
-  global_seq        BIGINT NOT NULL,             -- monotonic across me-core
+  global_seq        BIGINT NOT NULL UNIQUE,      -- monotonic across me-core
+  ledger_post_status TEXT NOT NULL DEFAULT 'PENDING', -- PENDING | POSTED | FAILED
+  ledger_tx_id      BIGINT,                      -- FK conceptually; ledger owns
   ts                TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(ticker, ticker_seq)
 );
 CREATE INDEX ON fills(ticker, ts DESC);
 CREATE INDEX ON fills(maker_user_id, ts DESC);
 CREATE INDEX ON fills(taker_user_id, ts DESC);
+CREATE INDEX ON fills(ledger_post_status, global_seq);
+
+CREATE TABLE fill_posting_outbox (
+  fill_id           TEXT PRIMARY KEY REFERENCES fills(fill_id),
+  global_seq        BIGINT NOT NULL UNIQUE,
+  status            TEXT NOT NULL DEFAULT 'PENDING', -- PENDING | POSTED | FAILED
+  attempts          INT NOT NULL DEFAULT 0,
+  next_attempt_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_error        TEXT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX ON fill_posting_outbox(status, next_attempt_at);
 ```
 
 ---
@@ -341,7 +390,7 @@ CREATE TABLE positions (
   net_qty                     BIGINT NOT NULL DEFAULT 0,    -- signed
   avg_cost_micro_usdc         BIGINT NOT NULL DEFAULT 0,
   realized_pnl_micro_usdc     BIGINT NOT NULL DEFAULT 0,
-  last_trade_seq              BIGINT NOT NULL DEFAULT 0,    -- per-ticker
+  last_global_seq             BIGINT NOT NULL DEFAULT 0,    -- latest applied ME fill seq
   updated_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (user_id, ticker)
 );
@@ -354,7 +403,21 @@ CREATE TABLE position_history (
   net_qty_before    BIGINT NOT NULL,
   net_qty_after     BIGINT NOT NULL,
   fill_id           TEXT NOT NULL,
+  global_seq        BIGINT NOT NULL,
   ts                TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE applied_fills (
+  fill_id           TEXT PRIMARY KEY,
+  ticker            TEXT NOT NULL,
+  global_seq        BIGINT NOT NULL UNIQUE,
+  applied_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE consumer_offsets (
+  stream_name       TEXT PRIMARY KEY,
+  last_global_seq   BIGINT NOT NULL DEFAULT 0,
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE open_interest (
@@ -430,6 +493,9 @@ CREATE TABLE settlements (
   numeric_value                       BIGINT,
   categorical_value                   TEXT,
   winner_payout_per_contract_micro_usdc BIGINT NOT NULL,
+  close_global_seq                    BIGINT NOT NULL DEFAULT 0,
+  positions_source_global_seq         BIGINT NOT NULL DEFAULT 0,
+  rounding_sweep_tx_id                BIGINT,
   total_payout_micro_usdc             BIGINT NOT NULL DEFAULT 0,
   positions_settled                   INT NOT NULL DEFAULT 0,
   status                              TEXT NOT NULL DEFAULT 'PENDING', -- PENDING | IN_PROGRESS | COMPLETE | FAILED
@@ -445,6 +511,7 @@ CREATE TABLE settlement_payouts (
   payout_micro_usdc BIGINT NOT NULL,
   ledger_tx_id      BIGINT,                       -- FK conceptually; ledger owns
   idempotency_key   TEXT UNIQUE NOT NULL,         -- "settlement:<ticker>:<user>"
+  status            TEXT NOT NULL DEFAULT 'PENDING', -- PENDING | POSTED | FAILED
   posted_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX ON settlement_payouts(ticker);
@@ -512,14 +579,15 @@ INSERT INTO refdata.contracts (
   tick_size, min_price_ticks, max_price_ticks,
   max_order_size, position_limit_per_user, state,
   open_at, close_at, expected_resolution_at,
-  settlement_source, oracle_policy
+  settlement_source, oracle_policy, settlement_rule
 ) VALUES (
   'RBI-JUN26-CUT25', 'RBI-JUN26', 'RBI-RATEDECISION', 'BINARY',
   'Will the RBI cut repo rate by 25 bps or more at the June 2026 MPC?',
   1, 1, 99,
   100000, 250000, 'OPEN',
   '2026-04-01 00:00:00+00', '2026-06-06 08:30:00+00', '2026-06-06 11:00:00+00',
-  'https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx', 'MULTI_SOURCE_ATTEST'
+  'https://rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx', 'MULTI_SOURCE_ATTEST',
+  '{"type":"categorical_equals","yes_values":["CUT_25","CUT_50","CUT_75","CUT_100"]}'::jsonb
 );
 
 -- Contracts (scalar)
@@ -530,7 +598,7 @@ INSERT INTO refdata.contracts (
   lower_bound_ticks, upper_bound_ticks, multiplier_micro_usdc,
   max_order_size, position_limit_per_user, state,
   open_at, close_at, expected_resolution_at,
-  settlement_source, oracle_policy
+  settlement_source, oracle_policy, settlement_rule
 ) VALUES (
   'INDIA-CPI-JUN26-SCALAR', 'INDIA-CPI-JUN26', 'INDIA-CPI', 'SCALAR',
   'India CPI-C YoY % (basis points)',
@@ -538,7 +606,8 @@ INSERT INTO refdata.contracts (
   200, 800, 1000000,
   100000, 250000, 'OPEN',
   '2026-04-01 00:00:00+00', '2026-07-12 12:00:00+00', '2026-07-12 12:30:00+00',
-  'https://mospi.gov.in/cpi', 'SINGLE_SOURCE'
+  'https://mospi.gov.in/cpi', 'SINGLE_SOURCE',
+  '{"type":"scalar_numeric"}'::jsonb
 );
 ```
 
@@ -573,16 +642,16 @@ INSERT INTO risk.user_limits (user_id, kyc_tier, max_order_size_micro_usdc, dail
 | Service | Owns (R/W) | Reads-via-gRPC | Reads-via-NATS-event |
 |---|---|---|---|
 | `gw-rest` | — | refdata, orders, position, ledger, risk | — |
-| `gw-ws` | — | refdata | md.book, md.trade, md.ticker, ledger.events, exec.* |
-| `order-router` | orders | refdata, risk, ledger, me-core | exec.* |
-| `risk-svc` | risk | refdata | exec.*, ledger.events |
+| `gw-ws` | — | refdata | md.book, md.trade, md.ticker, ledger.balance.user.*, exec.user.*, exec.fills.user.* |
+| `order-router` | orders | refdata, risk, ledger, me-core | exec.events, exec.fills.* |
+| `risk-svc` | risk | refdata | exec.events, exec.fills.*, ledger.events |
 | `ledger-svc` | ledger, users | — | — |
-| `me-core` | (in-memory) | refdata (boot) | — |
-| `position-svc` | position | — | md.trade.* |
+| `me-core` | (in-memory) | refdata (boot), orders (demo restore exception) | — |
+| `position-svc` | position | order-router (fill replay) | exec.fills.* |
 | `refdata-svc` | refdata | — | — |
 | `oracle-svc` | oracle | refdata | — |
-| `settlement-svc` | settlement | refdata, oracle, position, ledger | resolution.finalized |
+| `settlement-svc` | settlement | refdata, oracle, position, ledger, order-router (fill replay/status) | oracle.resolutions.finalized.* |
 | `audit-svc` | audit | — | audit.events |
 | `admin-svc` | — | all services via admin RPCs | — |
 
-In production, each service connects with a dedicated Postgres role that has `USAGE` only on its own schema and no access to others. In demo, all services use the same role to keep things simple — but the **discipline is enforced in code review**.
+In production, each service connects with a dedicated Postgres role that has `USAGE` only on its own schema and no access to others. In demo, all services use the same role to keep things simple, but every cross-schema read must be listed above. The `me-core` restore read from `orders.orders` is a demo-only exception replaced by journal + snapshot in production.

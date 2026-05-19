@@ -15,23 +15,27 @@ Orchestrate the order entry pipeline: validate → risk check → place hold →
 ### 1.2 Inbound flow
 
 ```
-gw-rest → order-router.SubmitOrder()
+gw-rest -> order-router.SubmitOrder()
   1. Validate request shape (proto validation)
   2. Look up contract spec from refdata (Redis cache, 60s TTL)
   3. Validate: tick alignment, price range, qty, contract state == OPEN
   4. Generate order_id (Snowflake)
-  5. INSERT INTO orders.orders (status='PENDING') -- becomes the durable record
-  6. Risk.PreTradeCheck() → {approved, required_hold_micro_usdc}
+  5. INSERT INTO orders.orders (status='PENDING') -- durable before any side effect
+  6. Risk.PreTradeCheck() -> {approved, required_hold_micro_usdc}
      - On reject: UPDATE orders SET status='REJECTED'; return
-  7. Ledger.PlaceHold(idempotency_key=order_id, amount=required_hold) → {hold_id}
+  7. Ledger.PlaceHold(idempotency_key='place_hold:' + order_id, amount=required_hold) -> {hold_id}
      - On fail: UPDATE orders SET status='REJECTED' reason='INSUFFICIENT_FUNDS'; return
   8. MatchingEngine.SubmitOrder(order_id, hold_id, ticker, side, action, price, qty, flags, stp)
-     - On timeout: Ledger.ReleaseHold(hold_id); UPDATE orders SET status='REJECTED' reason='ME_TIMEOUT'; return 503
-     - On reject: Ledger.ReleaseHold(hold_id); UPDATE orders SET status='REJECTED' reason=<code>
-     - On accept: UPDATE orders SET status='OPEN' (or PARTIAL/FILLED if immediate fills)
-  9. For each immediate fill: persist to orders.fills; emit ledger fill transaction (async, see §1.5)
-  10. Return ack with order, fills
+     - RESOURCE_EXHAUSTED before enqueue: release hold; mark REJECTED/ENGINE_QUEUE_FULL
+     - DEADLINE_EXCEEDED after enqueue: keep order PENDING; do not release hold; start reconciliation
+     - ME reject: release hold idempotently; mark REJECTED with ME reject_code
+     - ME accept: mark OPEN/PARTIAL/FILLED using returned global_seq/contract_seq
+  9. For each returned fill: in one orders DB tx persist fills, update both orders, insert fill_posting_outbox rows
+ 10. Fill poster drains outbox and posts ledger transactions idempotently by fill_id
+ 11. Return ack. If the ME outcome is unknown, return the PENDING order with reject_code='ACK_UNKNOWN'
 ```
+
+A timeout after enqueue is deliberately not terminal. The reconciliation worker uses `order_id`, `MatchingEngine.StreamExecutions`, and `OrderRouter.GetOrder` state to resolve `PENDING` orders. Holds are released only after a terminal reject/cancel/expiry is known.
 
 ### 1.3 Order ID generation
 
@@ -82,44 +86,29 @@ Three layers, all required:
 
 | Layer | Key | TTL | Storage |
 |---|---|---|---|
-| Request-level | `Idempotency-Key` header | 24h | Redis |
+| Request-level | `Idempotency-Key` header + endpoint + user | 24h | Demo: in-memory LRU; production: Redis |
 | Client-order-level | `(user_id, client_order_id)` | forever | Postgres UNIQUE constraint |
-| ME-level | `order_id` | session | me-core's in-memory LRU |
+| ME-level | `order_id` | session/demo; journal/prod | me-core LRU in demo; journal in prod |
 
-If a client retries `POST /v1/orders` with the same `Idempotency-Key`, we return the previously computed response from Redis. If the client retries with a different `Idempotency-Key` but the same `client_order_id`, the Postgres UNIQUE constraint catches it; we look up the prior order_id and return the order in its current state.
+`POST /v1/orders` should require either a caller-supplied `client_order_id` or generate one at the gateway and echo it back. If a client retries with the same `Idempotency-Key`, return the captured response. If it retries with a different request key but the same `client_order_id`, the Postgres unique constraint wins and the router returns the existing order's current state.
 
 ### 1.5 Post-fill ledger work
 
-When the ME returns fills (synchronously), we need to:
-1. Persist fills to `orders.fills`.
-2. Update `orders.orders` filled/remaining counters.
-3. Commit the proportional hold and post the trade ledger transaction.
+When the ME returns fills, the router must make fill persistence durable before any async ledger work:
 
-Steps 1-2 are in the same Postgres transaction with the order update. Step 3 is **async** because it requires another service call and we want to ack the client first:
+1. Persist each immutable fill to `orders.fills` with `global_seq`, `contract_seq`, both users, both orders, both hold IDs, side/action pairs, price, qty, fees.
+2. Update both maker and taker `orders.orders` filled/remaining counters and statuses.
+3. Insert one `orders.fill_posting_outbox` row per fill in the same Postgres transaction.
+4. A fill-poster worker posts ledger transactions from the outbox using idempotency key `fill:<fill_id>`.
+5. On success, mark `orders.fills.ledger_post_status='POSTED'`, persist `ledger_tx_id`, and mark the outbox row `POSTED`.
 
-```go
-func handleFills(ctx, orderID, fills) {
-    tx := db.Begin()
-    for _, f := range fills {
-        tx.Exec(`INSERT INTO orders.fills (...)`, ...)
-    }
-    tx.Exec(`UPDATE orders.orders SET filled_count=$1, remaining_count=$2, status=$3 WHERE order_id=$4`,
-        totalFilled, remaining, newStatus, orderID)
-    tx.Commit()
+The outbox is required even in the demo. A Go channel may be used as a wake-up mechanism, but it is not the source of truth. On process restart, the worker drains all `PENDING`/retryable outbox rows ordered by `global_seq`.
 
-    // Async: post ledger transactions for each fill
-    for _, f := range fills {
-        ledgerTxQueue.Push(ledgerTxJob{
-            idempotencyKey: "fill:" + f.FillID,
-            entries: makeFillEntries(f),
-        })
-    }
-}
-```
+If ledger posting fails after retries, the contract is halted and settlement is blocked until all fills up to the contract `close_global_seq` have `ledger_post_status='POSTED'`. This avoids the state where money moved on the book but not in the ledger.
 
-The `ledgerTxQueue` is a Go channel feeding a worker pool. If a ledger post fails, we retry with exponential backoff (idempotency key prevents duplicates). After 10 retries, we alert and stop the order book for that contract — money has moved on the book but not on the ledger, which is a P0 incident.
+In production, the same outbox contract remains valid. The worker may be split into a dedicated `fill-poster` service consuming JetStream, but `fill_id` idempotency and the `orders.fills` ledger status remain the cross-service truth.
 
-In production we replace this with NATS JetStream: ME publishes fills to `exec.fills.<ticker>`; a dedicated `fill-poster` worker subscribes and posts to ledger with at-least-once + idempotency.
+Terminal non-fill events (`CANCELLED`, `EXPIRED`, `REJECTED`) are also idempotent by `order_id` + terminal reason. For `BOOK_CLOSED`, STP, user cancel, or admin cancel, order-router updates the order terminal state and calls `Ledger.ReleaseHold` for remaining unfilled quantity with a deterministic key such as `release:<order_id>:<reason_code>`.
 
 ### 1.6 Demo vs production differences
 
@@ -188,12 +177,12 @@ Balance enforcement lives in `ledger-svc`, not here. Reason: ledger is the only 
 
 ### 2.3 Working orders summary
 
-`risk.working_orders_summary` is maintained by subscribing to `exec.*` events:
-- On `OrderAccepted`: increment `(user, ticker, side).total_qty` and `.total_max_loss_micro_usdc`.
-- On `Fill`: decrement filled qty proportionally.
-- On `Cancel`: decrement cancelled qty.
+`risk.working_orders_summary` is maintained from internal execution events:
+- On accepted/open events from `exec.events`: increment `(user, ticker, side).total_qty` and `.total_max_loss_micro_usdc`.
+- On fills from `exec.fills.<ticker>`: decrement filled quantity proportionally for both maker and taker orders.
+- On cancel/expire/reject terminal events: decrement remaining reserved quantity.
 
-This is **eventually consistent**. Risk uses it for position projection. The tradeoff: a user could submit a flurry of orders faster than risk can update the summary, briefly exceeding the limit. In demo we accept this. In production, we add a Redis Lua script that atomically reads-and-increments the summary on each PreTradeCheck call.
+This is eventually consistent in the demo. A user could submit a burst of orders faster than the summary catches up and briefly exceed a position limit. Ledger holds still prevent spending more cash than available, but position-limit enforcement is approximate. In production, `PreTradeCheck` uses an atomic Redis Lua reservation keyed by `(user,ticker,side)`; execution events then confirm or release the reservation.
 
 ### 2.4 Demo simplifications
 
@@ -212,7 +201,7 @@ services/risk-svc/
 │   │   ├── sanity.go
 │   │   ├── margin.go
 │   │   ├── position_limit.go
-│   ├── consumer/      # NATS consumer for exec.* events
+│   ├── consumer/      # NATS consumer for exec.events / exec.fills.*
 │   ├── refclient/
 │   └── persistence/
 ├── go.mod
@@ -313,76 +302,46 @@ entries:
 
 ```go
 func (s *Server) PostTransaction(ctx, req) (*PostTransactionResponse, error) {
-    // 1. Validate balanced
+    // 1. Validate shape and balanced entries before opening the DB transaction.
     if err := assertBalanced(req.Entries); err != nil {
         return nil, status.Errorf(InvalidArgument, "unbalanced: %v", err)
     }
 
-    // 2. Idempotency check
-    var existingTxID int64
-    err := db.QueryRow(`SELECT tx_id FROM ledger.transactions WHERE idempotency_key=$1`,
-        req.IdempotencyKey).Scan(&existingTxID)
-    if err == nil {
-        return &PostTransactionResponse{TxId: strconv.FormatInt(existingTxID, 10)}, nil
+    // 2. Idempotency check. If a prior tx exists, return it without re-posting.
+    if existing := lookupByIdempotencyKey(req.IdempotencyKey); existing != nil {
+        return existing, nil
     }
 
-    // 3. Single Postgres transaction
-    tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
-    if err != nil { return nil, err }
+    // 3. Single Postgres transaction. Read committed is acceptable only because
+    // account rows are locked before balances are read; serializable is preferred
+    // for production ledger hardening.
+    tx := db.BeginTx(ctx, ...)
     defer tx.Rollback()
 
-    // 4. Insert transaction row
-    var txID int64
-    err = tx.QueryRow(`INSERT INTO ledger.transactions (idempotency_key, reason_code, metadata)
-                       VALUES ($1, $2, $3) RETURNING tx_id`,
-        req.IdempotencyKey, req.ReasonCode, req.Metadata).Scan(&txID)
-    if err != nil {
-        if isDuplicateKeyErr(err) {
-            // Concurrent caller won; look up and return
-            ...
-        }
-        return nil, err
-    }
+    // 4. Insert transaction row. Duplicate idempotency_key means another caller won.
+    txID := insertLedgerTransaction(tx, req)
 
-    // 5. Lock and resolve all accounts in deterministic order to avoid deadlock
-    accountIDs := make([]int64, 0, len(req.Entries))
-    accountCodes := uniqueSortedAccountCodes(req.Entries)
-    for _, code := range accountCodes {
-        accountID, err := ensureAccount(tx, code)  // lazy create
-        if err != nil { return nil, err }
-        accountIDs = append(accountIDs, accountID)
-    }
-    // Lock account rows in id-order
-    sortAndLock(tx, accountIDs)
+    // 5. Resolve/create accounts and lock account rows in deterministic account_id order.
+    accountIDs := ensureAccountsAndLockInOrder(tx, req.Entries)
 
-    // 6. For each entry: compute running balance and insert
-    for _, e := range req.Entries {
-        var prevBalance, prevSeq int64
-        err := tx.QueryRow(`SELECT running_balance_micro_usdc, account_seq
-                            FROM ledger.entries WHERE account_id=$1
-                            ORDER BY account_seq DESC LIMIT 1`,
-            accountIDFor(e), ).Scan(&prevBalance, &prevSeq)
-        if err == sql.ErrNoRows { prevBalance = 0; prevSeq = 0 }
+    // 6. For each entry, read the latest locked account balance/seq, compute the
+    // new running balance, enforce account-level non-negative rules for user CASH
+    // and HOLDS, and insert the entry.
+    insertEntriesWithRunningBalances(tx, txID, req.Entries, accountIDs)
 
-        newBalance := prevBalance + signedAmount(e)  // DR/CR sign convention by account_type
-        _, err = tx.Exec(`INSERT INTO ledger.entries
-            (tx_id, account_id, direction, amount_micro_usdc,
-             running_balance_micro_usdc, account_seq, memo)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-            txID, accountIDFor(e), e.Direction, e.AmountMicroUsdc,
-            newBalance, prevSeq+1, e.Memo)
-        if err != nil { return nil, err }
-    }
+    // 7. Insert ledger_event_outbox row(s) in the same transaction.
+    insertLedgerOutbox(tx, txID, req)
 
-    // 7. The deferred constraint trigger validates balance at commit
-    if err := tx.Commit(); err != nil { return nil, err }
+    // 8. Commit. Deferred trigger validates transaction balance.
+    tx.Commit()
 
-    // 8. Publish to NATS for downstream consumers (position-svc, audit-svc, gw-ws)
-    publishLedgerEvent(ctx, txID, req)
-
+    // 9. Wake the NATS publisher. If publish fails, the outbox is retried.
+    wakePublisher()
     return &PostTransactionResponse{TxId: strconv.FormatInt(txID, 10)}, nil
 }
 ```
+
+No caller may update a balance directly. Publishing to NATS is never the durability point; the committed ledger rows plus `ledger_event_outbox` are.
 
 ### 3.5 Sign convention for `running_balance_micro_usdc`
 
@@ -401,44 +360,31 @@ func signedAmount(e LedgerEntry, accountType AccountType) int64 {
 
 ### 3.6 Holds
 
-A hold is a logical reservation on top of two ledger transactions (place + release/commit). The `ledger.holds` table tracks state:
+A hold is a logical reservation backed by ledger transactions and by idempotent hold operation rows. Place, release, and commit must be atomic with their ledger entries.
 
-```go
-func (s *Server) PlaceHold(ctx, req) (*PlaceHoldResponse, error) {
-    holdID := req.IdempotencyKey  // typically order_id
+`PlaceHold(idempotency_key='place_hold:<order_id>')`:
+1. Start one DB transaction.
+2. Lock the user's CASH and HOLDS accounts in deterministic account order.
+3. Verify available CASH is sufficient under the lock.
+4. Insert the hold row if it does not exist.
+5. Insert `hold_operations(idempotency_key, operation_type='PLACE')`.
+6. Post the balanced ledger entries CASH -> HOLDS.
+7. Commit.
 
-    // 1. Pre-flight: check user has sufficient cash balance
-    cashBalance := s.getCashBalance(req.UserId)
-    if cashBalance < req.AmountMicroUsdc {
-        return nil, status.Errorf(FailedPrecondition, "INSUFFICIENT_FUNDS")
-    }
+`ReleaseHold(idempotency_key, hold_id, amount)`:
+- If the idempotency key exists, return success.
+- Lock the hold row and both accounts.
+- Release only uncommitted/unreleased amount. `amount=0` means remaining uncommitted.
+- Post HOLDS -> CASH, update `released_micro_usdc`, close the hold when fully consumed.
 
-    // 2. Post the transaction (cash → holds)
-    txReq := &PostTransactionRequest{
-        IdempotencyKey: "place_hold:" + holdID,
-        ReasonCode: "HOLD_PLACE",
-        Entries: []LedgerEntry{
-            {AccountCode: "LIAB:USER:" + req.UserId + ":CASH", Direction: "DR", AmountMicroUsdc: req.AmountMicroUsdc},
-            {AccountCode: "LIAB:USER:" + req.UserId + ":HOLDS", Direction: "CR", AmountMicroUsdc: req.AmountMicroUsdc},
-        },
-    }
-    if _, err := s.postTransactionInternal(ctx, txReq); err != nil {
-        return nil, err
-    }
+`CommitHold(idempotency_key, hold_id, commit_amount, release_amount, destination_account_code)`:
+- If the idempotency key exists, return success.
+- Lock the hold row and all involved accounts.
+- Move `commit_amount` from user HOLDS to the destination account, usually `LIAB:HOUSE:UNSETTLED_TRADES:<ticker>`.
+- Optionally release `release_amount` from HOLDS back to CASH in the same balanced transaction.
+- Update `committed_micro_usdc` and `released_micro_usdc`; close the hold when fully consumed.
 
-    // 3. Record the hold (idempotent)
-    _, err := s.db.ExecContext(ctx, `INSERT INTO ledger.holds
-        (hold_id, user_id, amount_micro_usdc, reason, status)
-        VALUES ($1, $2, $3, $4, 'ACTIVE')
-        ON CONFLICT (hold_id) DO NOTHING`,
-        holdID, req.UserId, req.AmountMicroUsdc, req.Reason)
-    if err != nil { return nil, err }
-
-    return &PlaceHoldResponse{HoldId: holdID}, nil
-}
-```
-
-`ReleaseHold` and `CommitHold` similarly post balanced transactions plus update the `holds` row.
+A fill normally commits both maker and taker holds with separate idempotency keys derived from the same fill, for example `commit:<fill_id>:maker` and `commit:<fill_id>:taker`, then posts fee entries under `fee:<fill_id>:maker|taker` or in the same fill transaction if the implementation keeps the entry set compact.
 
 ### 3.7 Demo vs production
 
@@ -476,75 +422,52 @@ services/ledger-svc/
 
 ### 4.1 Responsibility
 
-Maintain user × contract positions. Fed exclusively from the trade stream.
+Maintain user × contract positions. Fed exclusively from the internal fill stream (`exec.fills.*`) plus replay through `OrderRouter.ListFills`.
 
 ### 4.2 Consumer loop
 
+`position-svc` consumes the private fill stream, not public market data. Public `md.trade.*` intentionally omits user IDs.
+
+Demo consumer source:
+- Primary: NATS Core subscription to `exec.fills.*`.
+- Recovery: `OrderRouter.ListFills(from_global_seq=last_offset+1)` replay from `orders.fills`.
+
+Production consumer source:
+- JetStream durable consumer over `exec.fills.*`, with explicit ack after the DB transaction commits.
+
+Processing rules:
+1. Maintain `position.consumer_offsets('exec.fills')` as the last contiguous `global_seq` applied.
+2. If a fill arrives with `global_seq > last+1`, pause live apply and replay the missing range through `OrderRouter.ListFills`.
+3. If a fill arrives with `global_seq <= last`, skip only if `position.applied_fills(fill_id)` already exists; otherwise replay from the gap.
+4. In one DB transaction, insert `applied_fills`, update maker/taker positions, update open interest, write `position_history`, and advance the offset.
+
 ```go
-sub, _ := nats.Subscribe("md.trade.*", func(msg *nats.Msg) {
-    var trade TradeEvent
-    proto.Unmarshal(msg.Data, &trade)
-
-    // Idempotency: only apply if seq > last_trade_seq for this ticker
-    // For each user involved (maker + taker), update positions
-    applyTrade(ctx, trade)
-})
-```
-
-But wait — `md.trade.*` doesn't carry user IDs (it's public market data). We need user-attributed fills. So position-svc subscribes to `exec.*` instead:
-
-```go
-sub, _ := nats.Subscribe("exec.fills", func(msg *nats.Msg) {
-    var fill MeFill
-    proto.Unmarshal(msg.Data, &fill)
-    applyFill(ctx, fill)
-})
-
-func applyFill(ctx, fill MeFill) {
-    tx, _ := db.Begin()
+func applyFill(ctx, fill FillRecord) {
+    tx := db.Begin()
     defer tx.Rollback()
 
-    // Maker side
-    updatePosition(tx, fill.MakerUserId, fill.Ticker, makerSignedQty(fill), fill.PriceTicks, fill.GlobalSeq)
-    // Taker side
-    updatePosition(tx, fill.TakerUserId, fill.Ticker, takerSignedQty(fill), fill.PriceTicks, fill.GlobalSeq)
-    // Open interest
+    lockConsumerOffset(tx, "exec.fills")
+    ensureNextOrReplayGap(fill.GlobalSeq)
+    insertAppliedFill(tx, fill.FillId, fill.Ticker, fill.GlobalSeq)
+
+    updatePosition(tx, fill.MakerUserId, fill.Ticker, signedQty(fill.MakerSide, fill.MakerAction, fill.Count), fill.PriceTicks, fill.GlobalSeq)
+    updatePosition(tx, fill.TakerUserId, fill.Ticker, signedQty(fill.TakerSide, fill.TakerAction, fill.Count), fill.PriceTicks, fill.GlobalSeq)
     updateOpenInterest(tx, fill.Ticker, fill)
+    advanceOffset(tx, "exec.fills", fill.GlobalSeq)
 
     tx.Commit()
-}
-
-func updatePosition(tx, userID, ticker, signedQtyDelta, fillPriceTicks, fillSeq) {
-    // Read current
-    var (curQty, curAvgCost, curRealizedPnL, lastSeq int64)
-    tx.QueryRow(`SELECT net_qty, avg_cost_micro_usdc, realized_pnl_micro_usdc, last_trade_seq
-                 FROM position.positions
-                 WHERE user_id=$1 AND ticker=$2 FOR UPDATE`,
-        userID, ticker).Scan(&curQty, &curAvgCost, &curRealizedPnL, &lastSeq)
-
-    // Idempotency
-    if fillSeq <= lastSeq { return }  // already applied
-
-    newQty := curQty + signedQtyDelta
-    // ... position math (FIFO or weighted-avg cost); realized PnL on reduction
-    newAvgCost, deltaRealizedPnL := computePositionMath(curQty, curAvgCost, signedQtyDelta, fillPriceTicks)
-
-    tx.Exec(`INSERT INTO position.positions (user_id, ticker, net_qty, avg_cost_micro_usdc, realized_pnl_micro_usdc, last_trade_seq)
-             VALUES ($1, $2, $3, $4, $5, $6)
-             ON CONFLICT (user_id, ticker) DO UPDATE SET
-                net_qty = EXCLUDED.net_qty,
-                avg_cost_micro_usdc = EXCLUDED.avg_cost_micro_usdc,
-                realized_pnl_micro_usdc = EXCLUDED.realized_pnl_micro_usdc,
-                last_trade_seq = EXCLUDED.last_trade_seq,
-                updated_at = now()`,
-        userID, ticker, newQty, newAvgCost, curRealizedPnL + deltaRealizedPnL, fillSeq)
 }
 ```
 
 ### 4.3 Position math
 
-For binaries: signed_qty positive = long YES; negative = long NO (= short YES).
-For scalars: signed_qty positive = long; negative = short.
+For binaries, positions are normalized to a single signed YES axis:
+- `BUY YES` or `SELL NO` => `+count` (long YES)
+- `SELL YES` or `BUY NO` => `-count` (long NO / short YES)
+
+For scalars:
+- `BUY LONG` or `SELL SHORT` => `+count`
+- `SELL LONG` or `BUY SHORT` => `-count`
 
 Avg cost: weighted average. On reduction (qty change crosses zero or moves toward zero):
 - Realized PnL increases by `|reduce_qty| × (current_price - avg_cost)` for longs reducing, etc.
@@ -553,7 +476,7 @@ This is straightforward but error-prone; it has a dedicated test suite.
 
 ### 4.4 Demo vs production
 
-Same. position-svc is the same code in demo and production.
+Same state machine and math in demo and production. The source transport changes from NATS Core + replay fallback to JetStream durable consumption, but `global_seq` ordering and `applied_fills` idempotency do not change.
 
 ---
 
@@ -567,34 +490,40 @@ Authoritative metadata for contracts, events, series. Lifecycle state machine.
 
 ```
        admin           admin/scheduler    close_at         oracle finalized       settlement done
-DRAFT ──────► LISTED ─────────────► OPEN ────────► CLOSED ────────────────► RESOLVING ──────────► SETTLED
-                                          ▲                                                       ▲
-                                          │ admin: halt                                           │
-                                          ▼                                                       │
-                                       (HALTED via state transition; demo skips this)             │
-                                                                                                  │
-                          admin: cancel (refund all)                                               │
-DRAFT/LISTED/OPEN ──────────────────────────────────────────────────► CANCELLED ──────────────────┘
+DRAFT ------> LISTED ----------------> OPEN ------> CLOSED --------------> RESOLVING ---------> SETTLED
+                                          |             ^
+                                          |             |
+                                          v             |
+                                       HALTED ----------+
+                                          |
+                                          v
+                                      CANCELLED
+
+DRAFT/LISTED/OPEN/HALTED/CLOSED may transition to CANCELLED through admin cancel.
 ```
 
-Implemented as a state machine with permitted transitions encoded:
+Permitted transitions:
 
 ```go
 var permittedTransitions = map[ContractState][]ContractState{
     DRAFT:     {LISTED, CANCELLED},
     LISTED:    {OPEN, CANCELLED},
-    OPEN:      {CLOSED, CANCELLED},
+    OPEN:      {HALTED, CLOSED, CANCELLED},
+    HALTED:    {OPEN, CLOSED, CANCELLED},
     CLOSED:    {RESOLVING, CANCELLED},
     RESOLVING: {SETTLED, CANCELLED},
-    SETTLED:   {},  // terminal
-    CANCELLED: {},  // terminal
+    SETTLED:   {},
+    CANCELLED: {},
 }
 ```
 
-Transitions trigger:
-- `OPEN → CLOSED`: emit `md.lifecycle.<ticker>`; me-core stops accepting new orders for the ticker but doesn't drop the book yet.
-- `CLOSED → RESOLVING`: oracle-svc takes over.
-- `RESOLVING → SETTLED`: settlement-svc completes payouts.
+`OPEN -> CLOSED` is a coordinated transition:
+1. `refdata-svc` marks the contract as closing and rejects new open transitions.
+2. `admin-svc`/scheduler calls `me-core.CloseBook(ticker)`.
+3. `me-core` stops accepting new submits for the ticker, drains earlier commands, expires all resting orders with reason `BOOK_CLOSED`, and returns `close_global_seq`.
+4. `order-router` persists all terminal order events through `close_global_seq` and releases holds for unfilled resting quantity.
+5. `refdata-svc` persists `contracts.close_global_seq` and emits `md.lifecycle.<ticker>`.
+6. Settlement is allowed to start only after orders, hold releases, ledger posting, and position consumers have caught up through that sequence.
 
 ### 5.3 Demo behavior
 
@@ -606,7 +535,7 @@ In demo we manually override times to "in 30 seconds" so investors can watch the
 
 ### 5.4 Caching
 
-`refdata-svc` is hit on every order submission. We cache aggressively in callers (`order-router`, `risk-svc`, `me-core`) with a 60-second TTL and invalidate via a NATS broadcast (`refdata.contract_updated`).
+`refdata-svc` is hit on every order submission. We cache aggressively in callers (`order-router`, `risk-svc`, `me-core`) with a 60-second TTL and invalidate via a NATS broadcast (`refdata.contract_updated`). State transitions that close or halt trading must bypass stale cache by forcing a refdata refresh before the next order validation.
 
 ---
 
@@ -632,11 +561,11 @@ sub, _ := nats.Subscribe("audit.events", func(msg *nats.Msg) {
 
 ### 6.3 Event sources (who publishes)
 
-- `order-router`: ORDER_SUBMITTED, ORDER_CANCELLED, ORDER_AMENDED, ORDER_REJECTED, ORDER_FILLED
-- `ledger-svc`: HOLD_PLACED, HOLD_RELEASED, HOLD_COMMITTED, DEPOSIT_CREDITED, WITHDRAWAL_REQUESTED, FEE_CHARGED, SETTLEMENT_POSTED
+- `order-router`: ORDER_SUBMITTED, ORDER_PENDING, ORDER_ACCEPTED, ORDER_CANCELLED, ORDER_AMENDED, ORDER_REJECTED, ORDER_FILLED, FILL_LEDGER_POSTED
+- `ledger-svc`: HOLD_PLACED, HOLD_RELEASED, HOLD_COMMITTED, DEPOSIT_CREDITED, WITHDRAWAL_REQUESTED, FEE_CHARGED, SETTLEMENT_POSTED, LEDGER_EVENT_PUBLISHED
 - `refdata-svc`: CONTRACT_CREATED, CONTRACT_STATE_TRANSITION
 - `oracle-svc`: ATTESTATION_RECEIVED, RESOLUTION_PROPOSED, RESOLUTION_FINALIZED
-- `settlement-svc`: SETTLEMENT_STARTED, SETTLEMENT_COMPLETED
+- `settlement-svc`: SETTLEMENT_STARTED, SETTLEMENT_BLOCKED_WAITING_FOR_FILLS, SETTLEMENT_PAYOUT_POSTED, SETTLEMENT_COMPLETED
 - `admin-svc`: every admin RPC call (ADMIN_USER_FROZEN, ADMIN_CONTRACT_CANCELLED, etc.)
 - `gw-rest`: LOGIN_SUCCESS, LOGIN_FAILURE, MFA_CHALLENGE (production)
 
@@ -704,7 +633,7 @@ Health checks include downstream connectivity:
 - `gw-rest` ready iff order-router gRPC reachable + Redis pingable
 - `order-router` ready iff ME + risk + ledger + refdata reachable, Postgres pingable
 - `ledger-svc` ready iff Postgres pingable + NATS reachable
-- `me-core` ready iff books restored + NATS reachable + Postgres pingable (for restore)
+- `me-core` ready iff books restored + no crossed restored books + NATS reachable + Postgres pingable (for demo restore)
 
 Demo runs these but doesn't act on them. Production uses them for K8s readiness gates and ALB target groups.
 

@@ -84,9 +84,9 @@ Cleanup, document what you have so far. CI green. Tag `week1-complete`.
 - [ ] STP enforcement in listener
 - [ ] TIF (IOC, FOK, GTC) handling
 - [ ] POST_ONLY rejection
-- [ ] NATS publisher thread; emits `md.book.<ticker>`, `md.trade.<ticker>`, `exec.fills`
+- [ ] NATS publisher thread; emits `md.book.<ticker>`, `md.trade.<ticker>`, `exec.events`, `exec.fills.<ticker>`
 - [ ] gRPC `GetBookSnapshot` returns real book state
-- [ ] Demo recovery: read OPEN/PARTIAL orders from `orders.orders` on startup; rebuild books
+- [ ] Demo recovery: passive-restore OPEN/PARTIAL resting orders from `orders.orders` without emitting fills/events
 - [ ] Boot integration test: 10 orders submitted via gRPC → expected fills + book state
 
 ### Day 10 — Order router + risk + ledger MVP
@@ -94,9 +94,10 @@ Cleanup, document what you have so far. CI green. Tag `week1-complete`.
 - [ ] `order-router.SubmitOrder` does the full orchestration from §1.2 of `05_services.md`
 - [ ] Snowflake ID generator
 - [ ] Idempotency layer 1 (in-process map) and layer 2 (`UNIQUE(user_id, client_order_id)`)
+- [ ] ME timeout reconciliation: enqueued timeout leaves order PENDING and does not release hold until terminal outcome
 - [ ] `risk-svc.PreTradeCheck` with sanity + balance approximation (real margin check in Week 3)
-- [ ] `ledger-svc.PlaceHold` + `CommitHold` + `ReleaseHold` working with balanced transactions
-- [ ] Integration test: place hold, submit order, fill it, verify ledger entries balanced
+- [ ] `ledger-svc.PlaceHold` + idempotent `CommitHold` + `ReleaseHold` working atomically with balanced transactions
+- [ ] Integration test: place hold, submit order, fill it, persist fill outbox, post ledger, verify entries balanced and fill ledger status POSTED
 
 ### Day 11 — gw-rest + gw-ws
 
@@ -139,7 +140,7 @@ Cleanup, document what you have so far. CI green. Tag `week1-complete`.
 
 ### Day 15 — position-svc + refdata-svc
 
-- [ ] `position-svc` consumes `exec.fills`, maintains positions
+- [ ] `position-svc` consumes `exec.fills.*`, maintains positions with `global_seq` gap detection and `OrderRouter.ListFills` replay
 - [ ] gw-rest hooks `/v1/positions` and `/v1/portfolio` to position-svc
 - [ ] Frontend portfolio screen displays real positions
 - [ ] `refdata-svc` lifecycle FSM with permitted transitions
@@ -150,10 +151,10 @@ Cleanup, document what you have so far. CI green. Tag `week1-complete`.
 
 - [ ] `oracle-svc.AdminForceResolution` — admin issues outcome with audit trail
 - [ ] Publishes `oracle.resolutions.finalized.<event_ticker>`
-- [ ] `settlement-svc` consumes, computes payouts for binary and scalar contracts
+- [ ] `settlement-svc` consumes `oracle.resolutions.finalized.*`, waits for `close_global_seq`, computes payouts for binary and scalar contracts
 - [ ] Posts ledger transactions for each winner; sweeps rounding to REVENUE
 - [ ] Transitions contract: CLOSED → RESOLVING → SETTLED
-- [ ] Integration test: trade 100 contracts, resolve, verify all positions settled correctly
+- [ ] Integration test: trade 100 contracts, close book, resolve, verify all fills through `close_global_seq` ledger-posted and all positions settled correctly
 
 ### Day 17 — Admin frontend
 

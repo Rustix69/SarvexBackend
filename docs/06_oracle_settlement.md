@@ -30,8 +30,8 @@ Policy is per-contract, declared in `refdata.contracts.oracle_policy`.
    b. INSERT INTO oracle.resolutions (event_ticker, status='FINALIZED', numeric_value, categorical_value, finalized_at)
    c. INSERT INTO oracle.attestations (event_ticker, attestor_id='admin:<admin_id>', ...)
    d. Emit audit event RESOLUTION_FINALIZED
-   e. Publish NATS subject resolution.finalized.<event_ticker>
-4. settlement-svc consumes resolution.finalized, kicks off settlement (see §2)
+   e. Publish NATS subject oracle.resolutions.finalized.<event_ticker>
+4. settlement-svc consumes oracle.resolutions.finalized, kicks off settlement (see §2)
 ```
 
 ### 1.4 Production flow (`MULTI_SOURCE_ATTEST`)
@@ -49,7 +49,7 @@ Policy is per-contract, declared in `refdata.contracts.oracle_policy`.
    b. Updates oracle.resolutions.attestor_count
    c. On reaching required_quorum: sets status='PROPOSED', challenge_window_ends_at=now()+30min
 5. Challenge window: any registered attestor can submit a DISPUTING attestation
-6. After window expires with no dispute: oracle-svc auto-FinalizeResolution → publishes resolution.finalized
+6. After window expires with no dispute: oracle-svc auto-FinalizeResolution -> publishes oracle.resolutions.finalized
 7. If disputed: status='DISPUTED'; falls back to ADMIN policy (admin manually resolves with extra scrutiny)
 ```
 
@@ -82,68 +82,70 @@ When a resolution finalizes, settle every open position in every contract refere
 
 ```go
 sub, _ := nats.Subscribe("oracle.resolutions.finalized.*", func(msg *nats.Msg) {
-    var finalized ResolutionFinalizedEvent
+    var finalized Resolution
     proto.Unmarshal(msg.Data, &finalized)
     go settleEvent(ctx, finalized.EventTicker)
 })
 
 func settleEvent(ctx, eventTicker string) {
-    // 1. Get the resolution
+    // 1. Get finalized resolution from oracle-svc.
     res, _ := oracleClient.GetResolution(ctx, &GetResolutionRequest{EventTicker: eventTicker})
+    if res.Status != RESOLUTION_FINALIZED { return }
 
-    // 2. Find all contracts referencing this event
-    contracts, _ := refdataClient.ListContracts(ctx, &ListContractsRequest{}) // filter by event_ticker
+    // 2. Find all contracts referencing this event.
+    contracts, _ := refdataClient.ListContracts(ctx, &ListContractsRequest{})
     for _, c := range contracts {
         if c.EventTicker != eventTicker { continue }
-        if c.State != ContractState_CLOSED && c.State != ContractState_RESOLVING { continue }
+        if c.State != CLOSED && c.State != RESOLVING { continue }
         settleContract(ctx, c, res)
     }
 }
 ```
 
+Settlement never starts from a live/open book. Each contract must have `close_global_seq` set by `me-core.CloseBook` and persisted by `refdata-svc` during `OPEN -> CLOSED`.
+
 ### 2.3 Settling a single contract
 
 ```go
 func settleContract(ctx, contract Contract, res Resolution) {
-    // Transition state CLOSED → RESOLVING
+    // 0. Serialize by ticker. If another worker owns this ticker, exit.
+    settlement := lockOrCreateSettlementRow(contract.Ticker)
+    if settlement.Status == COMPLETE { return }
+
+    closeSeq := contract.CloseGlobalSeq
+    if closeSeq == 0 { fail("missing close_global_seq") }
+
+    // 1. Block until order/fill/ledger/position paths have caught up to closeSeq.
+    waitUntilOrderRouterHasPersistedFillsAndTerminalOrders(contract.Ticker, closeSeq)
+    waitUntilClosedOrderHoldsReleased(contract.Ticker, closeSeq)
+    waitUntilAllFillsLedgerPosted(contract.Ticker, closeSeq)
+    waitUntilPositionSvcApplied(contract.Ticker, closeSeq)
+
+    // 2. Transition state CLOSED -> RESOLVING if needed.
     refdataClient.TransitionState(ctx, &TransitionStateRequest{
         Ticker: contract.Ticker, NewState: RESOLVING,
     })
 
-    // Compute winner payout per contract
-    var payoutPerContract int64
-    switch contract.Kind {
-    case BINARY:
-        payoutPerContract = binaryPayout(contract, res)
-    case SCALAR:
-        payoutPerContract = scalarPayout(contract, res)
-    }
+    // 3. Compute payout per contract from settlement_rule and oracle value.
+    payoutPerContract := payoutPerContract(contract, res)
 
-    // Record settlement intent
-    db.Exec(`INSERT INTO settlement.settlements
-        (ticker, event_ticker, numeric_value, categorical_value,
-         winner_payout_per_contract_micro_usdc, status, started_at)
-        VALUES ($1, $2, $3, $4, $5, 'IN_PROGRESS', now())
-        ON CONFLICT (ticker) DO NOTHING`, ...)
+    // 4. Persist settlement intent with close_global_seq.
+    upsertSettlementInProgress(contract, res, payoutPerContract, closeSeq)
 
-    // Fetch all open positions in this contract
-    positions, _ := positionClient.ListAllPositionsForContract(ctx, contract.Ticker)
+    // 5. Fetch positions by contract after position-svc confirms min_global_seq.
+    positions, _ := positionClient.ListPositionsByContract(ctx, &ListPositionsByContractRequest{
+        Ticker: contract.Ticker, IncludeClosed: false, MinGlobalSeq: closeSeq,
+    })
 
-    // For each position, post a ledger transaction
+    // 6. For each position, persist payout intent and post ledger idempotently.
     for _, p := range positions {
         if p.NetQty == 0 { continue }
         payout := computeUserPayout(p, payoutPerContract, contract)
         idemKey := fmt.Sprintf("settlement:%s:%s", contract.Ticker, p.UserId)
 
-        // Persist intent
-        db.Exec(`INSERT INTO settlement.settlement_payouts
-            (ticker, user_id, position_qty, payout_micro_usdc, idempotency_key)
-            VALUES ($1, $2, $3, $4, $5) ON CONFLICT (idempotency_key) DO NOTHING`,
-            contract.Ticker, p.UserId, p.NetQty, payout, idemKey)
-
-        // Post ledger transaction
+        insertPayoutIntent(contract.Ticker, p, payout, idemKey)
         if payout > 0 {
-            ledgerClient.PostTransaction(ctx, &PostTransactionRequest{
+            txID := ledgerClient.PostTransaction(ctx, &PostTransactionRequest{
                 IdempotencyKey: idemKey,
                 ReasonCode: "SETTLEMENT",
                 Entries: []LedgerEntry{
@@ -153,76 +155,76 @@ func settleContract(ctx, contract Contract, res Resolution) {
                      Direction: "CR", AmountMicroUsdc: payout},
                 },
             })
+            markPayoutPosted(idemKey, txID)
         }
     }
 
-    // After all payouts: any residual in UNSETTLED_TRADES house account
-    // due to rounding is moved to REVENUE:SETTLEMENT_ROUNDING.
-    sweepRounding(ctx, contract.Ticker)
+    // 7. Sweep residual rounding only after all payouts are POSTED.
+    roundingTxID := sweepRounding(ctx, contract.Ticker)
 
-    // Mark contract settled
+    // 8. Mark settlement complete, then transition RESOLVING -> SETTLED.
+    markSettlementComplete(contract.Ticker, roundingTxID)
     refdataClient.TransitionState(ctx, &TransitionStateRequest{
         Ticker: contract.Ticker, NewState: SETTLED,
     })
-
-    // Update settlement row
-    db.Exec(`UPDATE settlement.settlements SET status='COMPLETE', completed_at=now() WHERE ticker=$1`,
-        contract.Ticker)
 
     audit.Emit(ctx, "SETTLEMENT_COMPLETED", "service:settlement-svc", contract.Ticker, ...)
 }
 ```
 
+If any prerequisite is missing, settlement remains `PENDING` or `IN_PROGRESS` and emits `SETTLEMENT_BLOCKED_WAITING_FOR_FILLS`. It must not mark the contract `SETTLED` until every payout row is `POSTED`, the rounding sweep has posted, and the unsettled-trades invariant passes.
+
 ### 2.4 Payout formulas
 
-**Binary (YES side wins):**
+**Binary:** the oracle reports an event outcome, not necessarily `YES`/`NO`. The contract's `settlement_rule` maps that outcome to the YES payout.
+
+Example rule for `RBI-JUN26-CUT25`:
+```json
+{"type":"categorical_equals","yes_values":["CUT_25","CUT_50","CUT_75","CUT_100"]}
+```
+
 ```go
 func binaryPayout(c Contract, r Resolution) (yesPayout, noPayout int64) {
-    // Demo binary: r.CategoricalValue is the "winning side" e.g., "YES" or "NO"
-    if r.CategoricalValue == "YES" {
-        return 1000000, 0   // $1.00 to YES holders, $0 to NO
-    }
+    yesWins := settlementRuleMatches(c.SettlementRule, r.CategoricalValue, r.NumericValue)
+    if yesWins { return 1000000, 0 }
     return 0, 1000000
 }
 
-// For a user holding net_qty contracts:
-//   positive net_qty in YES contract = "long YES"  → payout = qty * yesPayout
-//   negative net_qty in YES contract = "short YES" = "long NO" → payout = |qty| * noPayout
-// (We represent both YES and NO as one bookkeeping side; "NO contract" is just short YES.)
+// Positive net_qty = long YES. Negative net_qty = long NO.
 ```
 
-**Scalar:**
+**Scalar:** use integer arithmetic only. No floats in settlement.
+
 ```go
 func scalarPayout(c Contract, r Resolution) int64 {
-    realized := r.NumericValue                              // already in tick units
-    if realized < c.LowerBoundTicks { realized = c.LowerBoundTicks }
-    if realized > c.UpperBoundTicks { realized = c.UpperBoundTicks }
-    rangeTicks := c.UpperBoundTicks - c.LowerBoundTicks
-    fraction := float64(realized - c.LowerBoundTicks) / float64(rangeTicks)
-    return int64(fraction * float64(c.MultiplierMicroUsdc))
+    realized := clamp(r.NumericValue, c.LowerBoundTicks, c.UpperBoundTicks)
+    numerator := (realized - c.LowerBoundTicks) * c.MultiplierMicroUsdc
+    denominator := c.UpperBoundTicks - c.LowerBoundTicks
+    return numerator / denominator // round down to micro_usdc; residual swept later
 }
 
-// For a user holding net_qty contracts (signed):
-//   positive = long  → payout = qty * scalarPayout
-//   negative = short → payout = |qty| * (multiplier - scalarPayout)
+// Positive net_qty = long; negative net_qty = short.
+// short payout = multiplier_micro_usdc - scalarPayout.
 ```
 
-Rounding: any sub-micro_usdc remainder is dropped (we work in integer micro_usdc); the small residuals are swept to `REVENUE:SETTLEMENT_ROUNDING` at the end.
+Rounding: integer division may create residual micro_usdc in `LIAB:HOUSE:UNSETTLED_TRADES:<ticker>`. After all user payouts are posted, sweep residual to `REVENUE:SETTLEMENT_ROUNDING` and store `rounding_sweep_tx_id`.
 
 ### 2.5 Idempotency and crash safety
 
-Every payout has an idempotency key: `settlement:<ticker>:<user_id>`. If the settlement worker crashes mid-way:
-1. On restart, it sees the settlement row exists with `status=IN_PROGRESS`.
-2. It re-queries positions and replays. Each ledger.PostTransaction with the same idempotency key is a no-op.
-3. Eventually all payouts post; status transitions to COMPLETE.
+Every payout has idempotency key `settlement:<ticker>:<user_id>`. The settlement row is locked per ticker, so only one worker can settle a contract at a time.
 
-If `position-svc` is lagging when settlement runs (a real risk: settlement may fire moments after the last trade), settlement waits up to 30 seconds for `position-svc` to catch up to the close_at trade seq. If still lagging, settlement reads directly from `orders.fills` to reconstruct positions (a fallback path).
+Crash safety rules:
+1. If the worker crashes before payout intents are inserted, restart re-enters from the settlement row and recomputes against the same `close_global_seq`.
+2. If it crashes after some payout intents are inserted, restart resumes rows where `status != POSTED`.
+3. If it crashes after a ledger post but before marking the payout row posted, retrying `Ledger.PostTransaction` with the same idempotency key returns the same transaction.
+4. If `position-svc` lags, settlement waits for `ListPositionsByContract(min_global_seq=close_global_seq)`. If unavailable, it replays fills through `OrderRouter.ListFills` rather than reading another service's tables directly.
+5. Settlement cannot transition to `SETTLED` until all fills up to `close_global_seq` have `ledger_post_status='POSTED'`.
 
 ### 2.6 The `LIAB:HOUSE:UNSETTLED_TRADES:<ticker>` account
 
-When orders fill during normal trading, the buyer's hold becomes a CR to `UNSETTLED_TRADES:<ticker>`. At settlement, this account holds the total committed capital for the contract. Payouts DR from it. **After all payouts**, residual rounding stays in this account; we sweep it to REVENUE.
+When orders fill during normal trading, committed maker/taker holds become credits to `UNSETTLED_TRADES:<ticker>`. At settlement, this account holds the total committed capital for the contract. Payouts debit from it. **After all payouts**, residual rounding is swept to REVENUE.
 
-Invariant: after settlement is `COMPLETE`, `UNSETTLED_TRADES:<ticker>` balance should be ≤ a few micro_usdc (rounding dust). If it's more, something's wrong — alert.
+Invariant: after settlement is `COMPLETE`, `UNSETTLED_TRADES:<ticker>` balance must be 0 unless the documented rounding sweep leaves a bounded sub-contract dust amount before the sweep transaction. Anything larger is a P0 correctness issue.
 
 ---
 
@@ -241,7 +243,7 @@ T=7   Trading UI: contract state badge changes OPEN → CLOSED → RESOLVING →
       (each transition shows as a flash on the contract card)
 
 T=8   The retail user's blotter: open position +100 YES turns into "Settled +$100 USDC"
-      Balance display: +$62 → +$100 (the $62 hold released, $100 payout credited)
+      Balance display: settlement payout credited +$100; the earlier $62 trade cost already moved from hold to unsettled-trades escrow at fill time
 
 T=10  Switch to ops view: "Total settled: $1,247.00 across 8 positions. Settlement time: 1.4s."
       (numbers are real, from the live ledger)
@@ -295,7 +297,7 @@ services/settlement-svc/
 ### Integration
 - Trade 100 contracts at various prices, resolve YES, verify house UNSETTLED_TRADES drains to 0 ± dust.
 - Crash settlement worker mid-payout; restart; verify completion.
-- Position-svc lag scenario: settle while position-svc behind; verify wait-or-fallback works.
+- Position-svc lag scenario: settle while position-svc behind; verify wait for `close_global_seq` and replay through `OrderRouter.ListFills`.
 
 ---
 

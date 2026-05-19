@@ -36,9 +36,10 @@ Liquibook (github.com/enewhuis/liquibook) is a header-only C++ template library 
    │  Outbound ring → publisher thread                                  │
    │     ├── NATS publish:                                              │
    │     │     md.book.<ticker>       (BookDelta events)                │
-   │     │     md.trade.<ticker>      (Trade events)                    │
+   │     │     md.trade.<ticker>      (public trade tape)               │
    │     │     md.ticker.<ticker>     (debounced top-of-book)           │
-   │     │     exec.<order_id>         (per-order execution events)     │
+   │     │     exec.events            (all internal execution events)   │
+   │     │     exec.fills.<ticker>    (fill-only internal stream)       │
    │     └── gRPC stream responses to subscribed routers                │
    │                                                                    │
    │  [PRODUCTION] Snapshotter thread (every 30s):                      │
@@ -217,6 +218,8 @@ void Sequencer::apply_submit(const Command& cmd) {
 
   // STP enforcement happens inside the listener (it sees each proposed fill).
   // Liquibook calls back synchronously during book.add().
+  // Listener output includes full immutable fill facts: ticker, global_seq,
+  // contract_seq, both order IDs, both hold IDs, both side/action pairs, fees.
   current_taker_user_ = op->user_id();
   current_stp_policy_ = cmd.stp;
 
@@ -320,6 +323,8 @@ public:
     // Wait for ack (with deadline)
     auto future = promise.get_future();
     if (future.wait_for(std::chrono::milliseconds(100)) != std::future_status::ready) {
+      // The command may still be queued or already applied. Caller must treat
+      // this as UNKNOWN, not as a reject, and reconcile by order_id.
       return grpc::Status(grpc::DEADLINE_EXCEEDED, "match timeout");
     }
     AckResult ack = future.get();
@@ -327,14 +332,21 @@ public:
     return grpc::Status::OK;
   }
 
-  // CancelOrder, AmendOrder follow the same pattern.
+  // CancelOrder, AmendOrder, and CloseBook follow the same enqueue + ack pattern.
+  // CloseBook stops new submits for the ticker, expires all resting orders,
+  // emits terminal cancel/expire events with reason BOOK_CLOSED, and returns
+  // close_global_seq/close_contract_seq. Settlement must not run until all fills
+  // and terminal order events up to close_global_seq are persisted, ledger-posted
+  // where applicable, and applied to position/risk/order state.
 
   grpc::Status StreamExecutions(grpc::ServerContext* ctx,
                                  const StreamExecutionsRequest* req,
                                  grpc::ServerWriter<ExecutionEvent>* writer) override {
     // Subscribe a per-connection channel; sequencer's publisher writes
-    // ExecutionEvents to all active subscribers.
-    auto sub = execution_subscribers_.add();
+    // ExecutionEvents to all active subscribers. Demo supports live streaming
+    // plus a small in-memory replay window. Production serves historical replay
+    // from JetStream by from_global_seq.
+    auto sub = execution_subscribers_.add(req->from_global_seq());
     while (!ctx->IsCancelled()) {
       ExecutionEvent ev;
       if (sub->channel.dequeue_with_timeout(ev, 100ms)) {
@@ -355,17 +367,26 @@ private:
 
 ---
 
-## 9. Demo recovery: rebuild from `orders.orders`
+## 9. Timeout and retry semantics
+
+A gRPC `DEADLINE_EXCEEDED` after the command was enqueued is **not** a rejection. The command may still apply on the sequencer. Callers must mark the order `PENDING` and reconcile by `order_id` via `GetOrder`/execution stream before releasing holds or returning a terminal state to the client.
+
+`RESOURCE_EXHAUSTED` before enqueue means the command did not enter the sequencer; the caller may reject and release the hold. Duplicate `order_id` is idempotent: me-core returns the cached terminal ack if available, or `IDEMPOTENCY_EXPIRED` if the in-memory demo cache has aged out. Production derives duplicate handling from the journal.
+
+---
+
+## 10. Demo recovery: rebuild from `orders.orders`
 
 On startup, `me-core` does:
 
-1. Connect to refdata-svc via gRPC; load all OPEN/RESOLVING contracts.
+1. Connect to refdata-svc via gRPC; load all OPEN/HALTED/RESOLVING contracts.
 2. For each contract: `book.add_book_if_missing()`.
-3. Query `orders.orders` for `status IN ('OPEN', 'PARTIAL')` ordered by `order_id` (which is Snowflake; chronological).
-4. For each such order: synthesize a `SUBMIT` command and feed it to the sequencer (synchronously, before opening the gRPC port).
-5. Open gRPC port; serve traffic.
+3. Query `orders.orders` for `status IN ('OPEN', 'PARTIAL')` ordered by `order_id` (which is Snowflake; chronological). This is an explicit demo-only ownership exception; production uses journal + snapshot.
+4. For each row: synthesize a `RESTORE_RESTING` command carrying the remaining quantity and original price/time priority. Restore commands do **not** emit accepts, fills, ledger jobs, or market data.
+5. Validate the rebuilt book is not crossed. If it is crossed, fail readiness and require operator repair rather than silently matching during restore.
+6. Open gRPC port; serve traffic.
 
-This rebuilds the book deterministically. Caveat: any **fills that were emitted but not persisted** before a crash are lost. In demo we accept this (we crash so rarely it's not a real concern). Production handles this via journal+snapshot.
+This rebuilds the book deterministically enough for the demo. Caveat: any **fills emitted by me-core but not persisted by order-router before a crash** are lost in demo. The order-router fill outbox and demo smoke checks reduce this risk; production eliminates it with journal+snapshot.
 
 ```go
 // Pseudocode of what me-core's restore loop does (transliterated)
@@ -374,12 +395,12 @@ db.Query("SELECT order_id, user_id, hold_id, ticker, side, action,
           FROM orders.orders
           WHERE status IN ('OPEN', 'PARTIAL')
           ORDER BY order_id").
-    forEach(row => sequencer.feedRestoreCommand(row));
+    forEach(row => sequencer.feedRestoreRestingCommand(row));
 ```
 
 ---
 
-## 10. Production recovery: journal + snapshot
+## 11. Production recovery: journal + snapshot
 
 (Documented for clarity; not built in demo.)
 
@@ -419,7 +440,7 @@ The sequencer holds a `std::unique_ptr<Journal>`; demo wires `NoOpJournal`, prod
 
 ---
 
-## 11. Order ID generation
+## 12. Order ID generation
 
 64-bit Snowflake assigned by `order-router`, **not** me-core. Layout:
 ```
@@ -432,7 +453,7 @@ Order IDs are passed into `SubmitOrder`. me-core treats them as opaque strings (
 
 ---
 
-## 12. CMake / build
+## 13. CMake / build
 
 ```cmake
 # services/me-core/CMakeLists.txt
@@ -499,7 +520,7 @@ ENTRYPOINT ["/usr/local/bin/me-core"]
 
 ---
 
-## 13. What we explicitly don't enable
+## 14. What we explicitly don't enable
 
 | Feature | Reason |
 |---|---|
@@ -511,7 +532,7 @@ ENTRYPOINT ["/usr/local/bin/me-core"]
 
 ---
 
-## 14. Test plan
+## 15. Test plan
 
 ### Unit tests (`services/me-core/tests/`)
 
@@ -538,12 +559,12 @@ ENTRYPOINT ["/usr/local/bin/me-core"]
 
 ---
 
-## 15. Phase 1 (demo) ME scope checklist
+## 16. Phase 1 (demo) ME scope checklist
 
 - [x] Wrap Liquibook with `SarvaOrder` + `DepthOrderBook`
 - [x] Single-shard, multi-book in-process
 - [x] gRPC `SubmitOrder`, `CancelOrder`, `AmendOrder`, `GetBookSnapshot`, `StreamExecutions`
-- [x] NATS publish to `md.book.*`, `md.trade.*`, `exec.*`
+- [x] NATS publish to `md.book.*`, `md.trade.*`, `exec.events`, `exec.fills.*`
 - [x] Restore from Postgres on boot
 - [x] STP (`TAKER_AT_CROSS`, `MAKER`)
 - [x] TIF (`GTC`, `IOC`, `FOK`)

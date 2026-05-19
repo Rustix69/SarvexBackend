@@ -89,7 +89,7 @@ r.With(rateLimit(100, 200)).Delete("/v1/orders/{order_id}", h.cancelOrder)
 
 ### 1.6 Idempotency
 
-Every mutating endpoint accepts an optional `Idempotency-Key` header (max 64 chars). The middleware:
+Every mutating endpoint accepts an `Idempotency-Key` header (max 64 chars). Endpoints that can move funds or create exchange state, especially `POST /v1/orders`, should require it. The middleware:
 1. Hashes the key + endpoint + user_id.
 2. Looks up in cache. If present, returns cached response.
 3. Otherwise, captures the response (status + body) on the way out and stores with 24h TTL.
@@ -99,7 +99,13 @@ func IdempotencyMiddleware(cache IdemCache) func(http.Handler) http.Handler {
     return func(next http.Handler) http.Handler {
         return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
             key := r.Header.Get("Idempotency-Key")
-            if key == "" || r.Method == "GET" {
+            if r.Method == "GET" {
+                next.ServeHTTP(w, r); return
+            }
+            if requiresIdempotency(r) && key == "" {
+                writeError(w, 400, "IDEMPOTENCY_KEY_REQUIRED"); return
+            }
+            if key == "" {
                 next.ServeHTTP(w, r); return
             }
             cacheKey := fmt.Sprintf("%s:%s:%s",
@@ -121,6 +127,8 @@ func IdempotencyMiddleware(cache IdemCache) func(http.Handler) http.Handler {
     }
 }
 ```
+
+Order idempotency is not only the gateway cache. The router still enforces `(user_id, client_order_id)` and me-core still dedupes by `order_id`.
 
 ### 1.7 JSON ↔ proto conversion
 
@@ -258,31 +266,31 @@ type Subscription struct {
 
 | Channel | NATS subject | Auth? |
 |---|---|---|
-| `orderbook_snapshot` | (special: triggers gRPC pull from me-core + initial push) | no |
+| `orderbook_snapshot` | (special: gRPC pull from me-core + buffered deltas) | no |
 | `orderbook_delta` | `md.book.<ticker>` | no |
 | `trades` | `md.trade.<ticker>` | no |
 | `ticker` | `md.ticker.<ticker>` | no |
 | `market_lifecycle` | `md.lifecycle.<ticker>` | no |
-| `user_orders` | `exec.user.<user_id>` (router publishes here per-user) | yes |
-| `user_fills` | `exec.fills.user.<user_id>` | yes |
+| `user_orders` | `exec.user.<user_id>` (sanitized by order-router) | yes |
+| `user_fills` | `exec.fills.user.<user_id>` (sanitized by order-router) | yes |
 | `user_balance` | `ledger.balance.user.<user_id>` | yes |
 
-For authenticated channels, the connection must have completed JWT auth and the requested scope must match `userID`.
+Internal services consume `exec.events` and `exec.fills.<ticker>`. Gateways should not expose raw internal fill events because they include both counterparties.
 
 ### 2.6 Snapshot + delta protocol
 
-On subscribing to `orderbook_delta` for the first time:
-1. Server immediately issues a gRPC `MatchingEngine.GetBookSnapshot(ticker, depth=20)` call.
-2. Sends `{"type": "orderbook_snapshot", "sid": N, "seq": <snapshot.seq>, "msg": {...}}`.
-3. Begins streaming `orderbook_delta` events with `seq` starting from `snapshot.seq + 1`.
+On subscribing to `orderbook_delta` for a ticker:
+1. Server subscribes to `md.book.<ticker>` first and buffers deltas for this subscription.
+2. Server issues `MatchingEngine.GetBookSnapshot(ticker, depth=20)`.
+3. Server sends `{"type":"orderbook_snapshot","sid":N,"seq":snapshot.seq,"msg":...}`.
+4. Server discards buffered deltas with `seq <= snapshot.seq` and replays buffered deltas with `seq > snapshot.seq` in order.
+5. Server then switches the subscription to live forwarding.
 
 Client uses `seq` to detect gaps. If a gap is detected, client sends:
 ```json
 {"id": 99, "cmd": "resync", "params": {"sid": N}}
 ```
-Server re-fetches snapshot and replays.
-
-**Production enhancement:** server maintains a 1-second rolling cache of recent deltas per ticker. Small gaps (< 1s) recover from cache without a fresh snapshot. **Demo: every gap = full snapshot.**
+Server repeats the subscribe-buffer-snapshot-replay flow. Production additionally keeps a 1-second rolling cache of recent deltas per ticker so small gaps can recover without a full gRPC snapshot. Demo still does full snapshot on every detected gap, but it must buffer during snapshot creation to avoid losing deltas.
 
 ### 2.7 Backpressure handling
 
@@ -318,7 +326,8 @@ Once authenticated, the userID is bound to the connection for its lifetime; clie
 ### 2.9 Per-user routing
 
 Internal services (order-router, ledger-svc) publish to per-user subjects:
-- `exec.user.u_42` — order events for user u_42
+- `exec.user.u_42` — sanitized order events for user u_42
+- `exec.fills.user.u_42` — sanitized fills for user u_42
 - `ledger.balance.user.u_42` — balance updates
 
 `gw-ws` subscribes to these on demand (when a user first asks for their feed) and routes to the matching connection. A user with multiple browser tabs has multiple connections; gw-ws maintains an `userID → []connections` map and fans out.
@@ -344,7 +353,7 @@ func (uf *UserFanout) onNATSMessage(subj string, data []byte) {
 
 - One pod. NATS subscription is direct (no multi-pod routing).
 - No gap recovery cache; client resyncs from snapshot on gap.
-- No persistent session ID — reconnect = new connection.
+- No persistent session ID — reconnect = new connection; client resubscribes and receives a fresh snapshot.
 
 ### 2.11 Production additions
 

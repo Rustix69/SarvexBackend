@@ -46,12 +46,13 @@ enum SelfTradePreventionType {
 
 enum OrderStatus {
   ORDER_STATUS_UNSPECIFIED = 0;
-  OPEN = 1;       // resting on book
-  PARTIAL = 2;    // partially filled, remainder resting
-  FILLED = 3;     // fully filled
-  CANCELLED = 4;
-  REJECTED = 5;
-  EXPIRED = 6;
+  PENDING = 1;    // durable order row exists; ME outcome not final yet
+  OPEN = 2;       // resting on book
+  PARTIAL = 3;    // partially filled, remainder resting
+  FILLED = 4;     // fully filled
+  CANCELLED = 5;
+  REJECTED = 6;
+  EXPIRED = 7;
 }
 
 enum ContractKind {
@@ -65,10 +66,11 @@ enum ContractState {
   DRAFT = 1;
   LISTED = 2;        // visible, not yet trading
   OPEN = 3;          // trading active
-  CLOSED = 4;        // trading halted, awaiting resolution
-  RESOLVING = 5;     // oracle in flight
+  CLOSED = 4;        // trading closed, awaiting resolution
+  RESOLVING = 5;     // oracle/settlement in flight
   SETTLED = 6;       // payouts complete
   CANCELLED_CONTRACT = 7;
+  HALTED = 8;         // admin/risk halt; may resume to OPEN or close/cancel
 }
 
 // All monetary values in protobuf are int64 micro_usdc (1 USDC = 1,000,000)
@@ -96,6 +98,7 @@ service OrderRouter {
   rpc AmendOrder(AmendOrderRequest) returns (AmendOrderResponse);
   rpc GetOrder(GetOrderRequest) returns (Order);
   rpc ListOrders(ListOrdersRequest) returns (ListOrdersResponse);
+  rpc ListFills(ListFillsRequest) returns (ListFillsResponse); // internal/recovery
 }
 
 message SubmitOrderRequest {
@@ -166,6 +169,19 @@ message ListOrdersResponse {
   string next_cursor = 2;
 }
 
+message ListFillsRequest {
+  string ticker = 1;              // optional; empty = all tickers
+  uint64 from_global_seq = 2;     // inclusive; 0 = beginning
+  uint64 to_global_seq = 3;       // inclusive; 0 = no upper bound
+  int32 limit = 4;
+  string cursor = 5;
+}
+
+message ListFillsResponse {
+  repeated FillRecord fills = 1;
+  string next_cursor = 2;
+}
+
 message Order {
   string order_id = 1;
   string client_order_id = 2;
@@ -200,6 +216,29 @@ message Fill {
   google.protobuf.Timestamp ts = 8;
   uint64 seq = 9;                 // per-ticker monotonic
 }
+
+message FillRecord {
+  string fill_id = 1;
+  string ticker = 2;
+  uint64 global_seq = 3;
+  uint64 contract_seq = 4;
+  string maker_order_id = 5;
+  string taker_order_id = 6;
+  string maker_user_id = 7;
+  string taker_user_id = 8;
+  string maker_hold_id = 9;
+  string taker_hold_id = 10;
+  Side maker_side = 11;
+  Action maker_action = 12;
+  Side taker_side = 13;
+  Action taker_action = 14;
+  int64 price_ticks = 15;
+  int64 count = 16;
+  Side aggressor_side = 17;
+  int64 maker_fee_micro_usdc = 18;
+  int64 taker_fee_micro_usdc = 19;
+  google.protobuf.Timestamp ts = 20;
+}
 ```
 
 ---
@@ -220,7 +259,7 @@ import "sarvaex/v1/common.proto";
 service MatchingEngine {
   // Lifecycle
   rpc AddBook(AddBookRequest) returns (google.protobuf.Empty);
-  rpc CloseBook(CloseBookRequest) returns (google.protobuf.Empty);
+  rpc CloseBook(CloseBookRequest) returns (CloseBookResponse);
 
   // Order entry (synchronous)
   rpc SubmitOrder(MeSubmitOrderRequest) returns (MeSubmitOrderResponse);
@@ -246,6 +285,12 @@ message CloseBookRequest {
   string ticker = 1;
 }
 
+message CloseBookResponse {
+  string ticker = 1;
+  uint64 close_global_seq = 2;     // high-water mark settlement must catch up to
+  uint64 close_contract_seq = 3;
+}
+
 message MeSubmitOrderRequest {
   string order_id = 1;           // assigned by router (Snowflake)
   string user_id = 2;
@@ -259,6 +304,14 @@ message MeSubmitOrderRequest {
   SelfTradePreventionType stp = 10;
 }
 
+// NATS subjects carrying ExecutionEvent:
+//   exec.events                 - all execution events, ordered by global_seq in a single demo ME
+//   exec.fills.<ticker>         - fill-only stream for internal consumers
+//   exec.user.<user_id>         - sanitized per-user order events published by order-router
+//   exec.fills.user.<user_id>   - sanitized per-user fills published by order-router
+//
+// In production, sharded ME instances publish exec.events.<shard> and
+// exec.fills.<ticker>. Consumers persist offsets and must detect sequence gaps.
 message MeSubmitOrderResponse {
   string order_id = 1;
   bool accepted = 2;
@@ -339,6 +392,7 @@ message OrderRejectedEvent {
 message OrderCancelledEvent {
   string order_id = 1;
   int64 cancelled_qty = 2;
+  string reason_code = 3;           // USER_CANCEL | BOOK_CLOSED | ADMIN_CANCEL | STP
 }
 message OrderAmendedEvent {
   string order_id = 1;
@@ -355,6 +409,18 @@ message MeFill {
   int64 price_ticks = 6;
   int64 count = 7;
   Side aggressor_side = 8;
+  string ticker = 9;
+  uint64 global_seq = 10;
+  uint64 contract_seq = 11;
+  google.protobuf.Timestamp ts = 12;
+  string maker_hold_id = 13;
+  string taker_hold_id = 14;
+  Side maker_side = 15;
+  Action maker_action = 16;
+  Side taker_side = 17;
+  Action taker_action = 18;
+  int64 maker_fee_micro_usdc = 19;
+  int64 taker_fee_micro_usdc = 20;
 }
 
 message BookDelta {
@@ -421,15 +487,20 @@ message PlaceHoldResponse {
 }
 
 message ReleaseHoldRequest {
-  string hold_id = 1;
-  int64 amount_micro_usdc = 2;   // partial release; 0 = full
+  string idempotency_key = 1;
+  string hold_id = 2;
+  int64 amount_micro_usdc = 3;   // partial release; 0 = remaining uncommitted
+  string reason_code = 4;
 }
 
 message CommitHoldRequest {
-  string hold_id = 1;
-  int64 commit_amount_micro_usdc = 2;  // moves from HOLDS to committed
-  string reason_code = 3;
-  repeated LedgerEntry additional_entries = 4;  // e.g. fees
+  string idempotency_key = 1;
+  string hold_id = 2;
+  int64 commit_amount_micro_usdc = 3;  // moves from HOLDS to destination_account_code
+  int64 release_amount_micro_usdc = 4; // refund to CASH; 0 = none
+  string destination_account_code = 5; // e.g. LIAB:HOUSE:UNSETTLED_TRADES:<ticker>
+  string reason_code = 6;
+  repeated LedgerEntry additional_entries = 7;  // e.g. fees
 }
 
 message GetBalanceRequest {
@@ -535,6 +606,7 @@ option go_package = "github.com/sarvaex/proto/gen/go/sarvaex/v1;sarvaexv1";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
 import "sarvaex/v1/common.proto";
 
 service RefData {
@@ -569,6 +641,8 @@ message Contract {
   google.protobuf.Timestamp expected_resolution_at = 19;
   string settlement_source = 20;     // URL or descriptor
   string oracle_policy = 21;         // SINGLE_SOURCE | MULTI_SOURCE_ATTEST | ADMIN
+  google.protobuf.Struct settlement_rule = 22; // contract-specific mapping from event outcome to payout
+  uint64 close_global_seq = 23;       // set when trading closes through me-core
 }
 
 message Event {
@@ -822,6 +896,7 @@ import "google/protobuf/timestamp.proto";
 service Position {
   rpc GetPosition(GetPositionRequest) returns (UserPosition);
   rpc ListPositions(ListPositionsRequest) returns (ListPositionsResponse);
+  rpc ListPositionsByContract(ListPositionsByContractRequest) returns (ListPositionsResponse);
   rpc GetOpenInterest(GetOpenInterestRequest) returns (OpenInterest);
 }
 
@@ -833,6 +908,7 @@ message UserPosition {
   int64 realized_pnl_micro_usdc = 5;
   int64 unrealized_pnl_micro_usdc = 6;
   google.protobuf.Timestamp updated_at = 7;
+  uint64 last_global_seq = 8;          // latest fill seq incorporated for this user/contract
 }
 
 message GetPositionRequest {
@@ -847,6 +923,15 @@ message ListPositionsRequest {
 
 message ListPositionsResponse {
   repeated UserPosition positions = 1;
+  string next_cursor = 2;
+}
+
+message ListPositionsByContractRequest {
+  string ticker = 1;
+  bool include_closed = 2;
+  int32 limit = 3;
+  string cursor = 4;
+  uint64 min_global_seq = 5;           // settlement waits until service has applied through close_global_seq
 }
 
 message GetOpenInterestRequest {
@@ -877,6 +962,8 @@ paths:
     post:
       operationId: submitOrder
       security: [{bearerAuth: []}]
+      parameters:
+        - {name: Idempotency-Key, in: header, required: true, schema: {type: string, maxLength: 64}}
       requestBody:
         required: true
         content:
@@ -884,6 +971,7 @@ paths:
             schema: {$ref: '#/components/schemas/SubmitOrderInput'}
       responses:
         '201': {description: Accepted, content: {application/json: {schema: {$ref: '#/components/schemas/OrderOutput'}}}}
+        '202': {description: ME outcome pending after enqueue timeout; poll order by id}
         '402': {description: Insufficient funds}
         '422': {description: Validation or risk reject}
         '429': {description: Rate limited}
@@ -893,7 +981,7 @@ paths:
       operationId: listOrders
       parameters:
         - {name: ticker, in: query, schema: {type: string}}
-        - {name: status, in: query, schema: {type: string, enum: [open, partial, filled, cancelled, rejected]}}
+        - {name: status, in: query, schema: {type: string, enum: [pending, open, partial, filled, cancelled, rejected, expired]}}
         - {name: limit, in: query, schema: {type: integer, default: 50, maximum: 500}}
         - {name: cursor, in: query, schema: {type: string}}
       responses:
@@ -1058,11 +1146,13 @@ JSON over WebSocket. Same protocol in demo and production.
   "msg": { "ticker": "...", "deltas": [...] } }
 ```
 
+**Snapshot/delta rule:** server subscribes and buffers `md.book.<ticker>` deltas before fetching the snapshot, sends the snapshot, then replays buffered deltas with `seq > snapshot.seq`. This prevents the snapshot race where a delta is published between the gRPC snapshot and the NATS subscription.
+
 **Gap recovery:** if client detects `seq` gap, sends:
 ```json
 { "id": 2, "cmd": "resync", "params": { "sid": 42 } }
 ```
-Server responds with a fresh snapshot. (Production also offers 1-second rolling delta cache.)
+Server repeats the buffer -> snapshot -> replay flow. Production also offers a 1-second rolling delta cache.
 
 **Heartbeats:** server sends WS Ping every 15s. Client must respond with Pong. After 2 missed Pongs, server closes connection.
 

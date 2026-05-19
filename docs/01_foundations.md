@@ -48,7 +48,7 @@ This means:
 4. **Idempotency at every external boundary.** `client_order_id`, deposit `tx_hash`, withdrawal request, settlement payouts — all keyed on idempotency tokens.
 5. **Double-entry for all money movement.** No balance changes except via a balanced ledger transaction.
 6. **Sequence numbers everywhere.** Market data, ledger entries, audit events — each carries a monotonic seq within its scope.
-7. **Service owns its data.** No service reads another service's tables directly. Cross-service data access is via gRPC or NATS.
+7. **Service owns its data.** No service reads another service's tables directly. Cross-service data access is via gRPC or NATS. Any demo-only exception (for example `me-core` boot restore from `orders.orders`) must be explicitly listed in the schema ownership map and removed in production.
 8. **Stateless services scale horizontally; stateful services own one database.**
 9. **All time is UTC, all monetary values are integers** (USDC: `micro_usdc` = 1e-6 USDC). No floats anywhere in the money path.
 
@@ -182,7 +182,7 @@ The demo is ~18% of the production codebase. The architecture is 100%.
    │           │           NATS (event spine)                │       │
    │           │   md.book.*    md.trade.*                   │       │
    │           │   ledger.events oracle.attestations         │       │
-   │           │   exec.* audit.events                       │       │
+   │           │   exec.events exec.fills.* audit.events                       │       │
    │           └─────────────────────────────────────────────┘       │
    │                     ▲                                            │
    │                     │                                            │
@@ -209,11 +209,26 @@ The demo is ~18% of the production codebase. The architecture is 100%.
 **Communication patterns:**
 
 - **gRPC (HTTP/2 + protobuf)** for synchronous service-to-service in the hot path.
-- **NATS** for the durable event spine (market data, ledger events, audit, oracle).
-  - Demo: NATS Core (in-memory, lossy under crash).
-  - Production: NATS JetStream (durable, replicated R3).
+- **NATS** for the event spine (market data, execution, ledger, audit, oracle).
+  - Demo: NATS Core (in-memory, lossy under crash). Demo durability comes from Postgres rows/outboxes and me-core in-memory state, not from NATS.
+  - Production: NATS JetStream (durable, replicated R3) plus me-core journal for replay/failover.
 - **WebSocket** for client streaming, JSON.
 - **REST/HTTPS** for client order entry, account, history.
+
+**Canonical event subjects:**
+
+| Subject | Payload | Producer | Consumers |
+|---|---|---|---|
+| `md.book.<ticker>` | `OrderBookDeltaEvent` | me-core | gw-ws |
+| `md.trade.<ticker>` | `TradeEvent` public tape | me-core | gw-ws, frontend |
+| `md.ticker.<ticker>` | `TickerEvent` | me-core | gw-ws |
+| `exec.events` | `ExecutionEvent` internal stream | me-core | order-router, risk-svc |
+| `exec.fills.<ticker>` | fill-only `ExecutionEvent` | me-core/order-router publisher | position-svc, fill-poster, risk-svc |
+| `exec.user.<user_id>` | sanitized user order event | order-router | gw-ws |
+| `exec.fills.user.<user_id>` | sanitized user fill event | order-router | gw-ws |
+| `ledger.events` / `ledger.balance.user.<user_id>` | ledger event / balance update | ledger-svc | audit-svc, gw-ws |
+| `oracle.resolutions.finalized.<event_ticker>` | finalized resolution | oracle-svc | settlement-svc |
+| `audit.events` | `AuditEvent` | all services | audit-svc |
 
 ---
 

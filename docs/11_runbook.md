@@ -143,7 +143,7 @@ make reset    # back to clean state for next demo
 
 ### 5.1 me-core
 
-**Restart behavior:** rebuilds book from `orders.orders` WHERE status IN (OPEN, PARTIAL). Takes 1-5 seconds for the demo.
+**Restart behavior:** rebuilds passive resting book state from `orders.orders` WHERE status IN (OPEN, PARTIAL). Restore emits no fills, ledger jobs, or market data. Takes 1-5 seconds for the demo.
 
 **Production:** restores from snapshot + journal. RTO target 30s cold, 5s failover.
 
@@ -183,7 +183,7 @@ psql -d sarvaex -c "SELECT * FROM ledger.holds WHERE hold_id='<id>'"
 
 **Failure modes:**
 - **Unbalanced transaction:** deferred trigger catches this at commit. Whoever called `PostTransaction` gets an error; investigate.
-- **Drift in production:** likely a missed publish to NATS (a fill posted to ledger but not to position-svc). Reconcile by replaying fills.
+- **Drift in production:** likely an outbox/consumer lag, missed replay, or manual ledger defect. Reconcile from committed ledger rows and `orders.fills` by `global_seq`; NATS publish success is not the durability point.
 
 ### 5.3 order-router
 
@@ -191,15 +191,17 @@ psql -d sarvaex -c "SELECT * FROM ledger.holds WHERE hold_id='<id>'"
 
 ```bash
 # Check pending orders
-psql -d sarvaex -c "SELECT order_id, status, ticker, count, filled_count FROM orders.orders WHERE status IN ('OPEN', 'PARTIAL') ORDER BY created_at DESC LIMIT 20"
+psql -d sarvaex -c "SELECT order_id, status, ticker, count, filled_count FROM orders.orders WHERE status IN ('PENDING', 'OPEN', 'PARTIAL') ORDER BY created_at DESC LIMIT 20"
 
 # Force-cancel a stuck order (manual escape hatch)
 grpcurl -plaintext -d '{"order_id":"<id>","user_id":"<id>"}' \
     localhost:50061 sarvaex.v1.OrderRouter/CancelOrder
+# Check fill ledger outbox backlog
+psql -d sarvaex -c "SELECT status, count(*) FROM orders.fill_posting_outbox GROUP BY status"
 ```
 
 **Failure modes:**
-- **ME timeout on submit:** ledger hold not released. `order-router` has retry logic; if it fails permanently, the hold lingers. Admin can release via `Ledger.ReleaseHold` directly with a manual idempotency key.
+- **ME timeout on submit:** order remains `PENDING` and the ledger hold is intentionally retained until reconciliation proves accept/reject/cancel. Do not manually release unless the ME/order-router reconciliation path confirms the command never applied.
 
 ### 5.4 risk-svc
 
@@ -234,7 +236,7 @@ psql -d sarvaex -c "SELECT * FROM settlement.settlement_payouts WHERE ticker='RB
 ```
 
 **Failure modes:**
-- **Settlement stuck IN_PROGRESS:** worker probably crashed. Restart settlement-svc; it picks up from where it left off (idempotency keys protect against double-paying).
+- **Settlement stuck IN_PROGRESS:** worker may be crashed or blocked waiting for fills/ledger/positions to catch up to `close_global_seq`. Check `orders.fills.ledger_post_status`, `orders.fill_posting_outbox`, and `position.consumer_offsets` before restarting.
 - **Settlement complete but UNSETTLED_TRADES balance non-zero:** drift. Investigate which positions were missed.
 
 ---
@@ -308,10 +310,10 @@ echo "→ Truncating volatile tables..."
 psql -d sarvaex <<SQL
 SET search_path TO public;
 
-TRUNCATE TABLE orders.fills, orders.orders CASCADE;
+TRUNCATE TABLE orders.fill_posting_outbox, orders.fills, orders.orders CASCADE;
 TRUNCATE TABLE position.positions, position.position_history, position.open_interest CASCADE;
 TRUNCATE TABLE risk.working_orders_summary CASCADE;
-TRUNCATE TABLE ledger.entries, ledger.transactions, ledger.holds CASCADE;
+TRUNCATE TABLE ledger.ledger_event_outbox, ledger.hold_operations, ledger.entries, ledger.transactions, ledger.holds CASCADE;
 -- Note: we keep ledger.accounts so account_codes are preserved
 TRUNCATE TABLE oracle.attestations, oracle.resolutions CASCADE;
 TRUNCATE TABLE settlement.settlement_payouts, settlement.settlements CASCADE;
@@ -448,6 +450,7 @@ SELECT ts, service, type, actor, subject FROM audit.events ORDER BY event_seq DE
 | Fireblocks reconciliation mismatch | Custody drift | P0. Pause deposits/withdrawals. Manual reconciliation. |
 | User submits 1000 orders in 1 second | Either a bug or attack | P1. Rate limit kicks in. Investigate user. |
 | Settlement completes but UNSETTLED_TRADES > $1 | Missed payouts | P0. Investigate. Manually credit missed positions. |
+| Order remains PENDING after reconciliation window | ME/router state ambiguous | P1 in demo, P0 in production if funds locked. Stop new orders on that contract and reconcile by order_id/global_seq. |
 | Oracle proposes resolution with no quorum | Bug in oracle workflow | P1. Block resolution from finalizing. Investigate. |
 
 Every one of these has a documented response in production runbooks. Demo runbook is lighter, but principle is same: **stop, investigate, fix, postmortem**.
