@@ -1,0 +1,10 @@
+{
+  "name": "sarvex-web",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "echo \"web scaffold only (Milestone 0)\"",
+    "build": "echo \"web scaffold only (Milestone 0)\"",
+    "test": "echo \"web scaffold only (Milestone 0)\""
+  }
+}

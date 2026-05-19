@@ -90,7 +90,7 @@ The matching engine is the highest-stakes service. Phase 2B turns it from "demo 
 - [ ] Snapshotter thread runs every 30 seconds
 - [ ] Atomically copy book state (use Liquibook's iterator + freeze for milliseconds)
 - [ ] Serialize via Cap'n Proto (fast and zero-copy on restore)
-- [ ] Write to local NVMe; async upload to S3 `s3://sarvaex-snapshots/me-core/<shard>/<seq>.capnp`
+- [ ] Write to local NVMe; async upload to S3 `s3://sarvex-snapshots/me-core/<shard>/<seq>.capnp`
 - [ ] Retention: keep last 24 hours of snapshots locally, 30 days in S3
 
 #### W3: Cold restore from snapshot + journal

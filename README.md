@@ -1,6 +1,6 @@
-# SarvaEX — Build Plan
+# Sarvex — Build Plan
 
-This is the complete engineering build plan for SarvaEX, a regulated event derivatives exchange offering binary options and scalar futures, USDC-settled.
+This is the complete engineering build plan for Sarvex, a regulated event derivatives exchange offering binary options and scalar futures, USDC-settled.
 
 **Strategy:** build a demo-grade exchange in **4 weeks** with **production-grade service boundaries**. Replace stub implementations with production ones post-funding without moving any boundary or breaking any interface.
 

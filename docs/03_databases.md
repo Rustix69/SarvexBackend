@@ -616,13 +616,13 @@ INSERT INTO refdata.contracts (
 ```sql
 -- Passwords hashed with bcrypt for demo (all "demo1234")
 INSERT INTO users.users (user_id, email, display_name, password_hash, kyc_tier, is_admin, is_mm) VALUES
-  ('u_retail_1', 'retail@demo.sarvaex.com', 'Demo Retail',
+  ('u_retail_1', 'retail@demo.sarvex.com', 'Demo Retail',
    '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', 1, false, false),
-  ('u_inst_1', 'inst@demo.sarvaex.com', 'Demo Institutional',
+  ('u_inst_1', 'inst@demo.sarvex.com', 'Demo Institutional',
    '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', 2, false, false),
-  ('u_mm_1', 'mm@demo.sarvaex.com', 'Demo MM Bot',
+  ('u_mm_1', 'mm@demo.sarvex.com', 'Demo MM Bot',
    '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', 2, false, true),
-  ('u_admin', 'admin@demo.sarvaex.com', 'Demo Admin',
+  ('u_admin', 'admin@demo.sarvex.com', 'Demo Admin',
    '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', 99, true, false);
 
 -- Seed risk limits

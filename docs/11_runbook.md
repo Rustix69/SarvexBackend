@@ -18,8 +18,8 @@ Operational guide for running the demo (Phase 0) and seed for production runbook
 ### Clone and bootstrap
 
 ```bash
-git clone --recurse-submodules git@github.com:sarvaex/sarvaex.git
-cd sarvaex
+git clone --recurse-submodules git@github.com:sarvex/sarvex.git
+cd sarvex
 cp .env.example .env
 
 # Generate proto bindings
@@ -41,10 +41,10 @@ open http://localhost:3000
 ### Demo credentials
 
 ```
-Retail:        retail@demo.sarvaex.com / demo1234
-Institutional: inst@demo.sarvaex.com / demo1234
-Market Maker:  mm@demo.sarvaex.com / demo1234
-Admin:         admin@demo.sarvaex.com / demo1234
+Retail:        retail@demo.sarvex.com / demo1234
+Institutional: inst@demo.sarvex.com / demo1234
+Market Maker:  mm@demo.sarvex.com / demo1234
+Admin:         admin@demo.sarvex.com / demo1234
 ```
 
 ---
@@ -151,7 +151,7 @@ make reset    # back to clean state for next demo
 ```bash
 # View resting orders count per contract
 docker-compose exec me-core grpcurl -plaintext localhost:50051 \
-    sarvaex.v1.MatchingEngine/GetBookSnapshot
+    sarvex.v1.MatchingEngine/GetBookSnapshot
 # (use the snapshot to inspect)
 
 # Force-cancel everything on a contract (admin path)
@@ -175,10 +175,10 @@ curl -X POST http://localhost:8080/v1/admin/deposits/credit \
     -d '{"user_id": "u_retail_1", "amount_micro_usdc": 1000000000, "note": "demo top-up"}'
 
 # Check user balance
-psql -d sarvaex -c "SELECT * FROM ledger.user_balances WHERE user_id='u_retail_1'"
+psql -d sarvex -c "SELECT * FROM ledger.user_balances WHERE user_id='u_retail_1'"
 
 # Audit a hold
-psql -d sarvaex -c "SELECT * FROM ledger.holds WHERE hold_id='<id>'"
+psql -d sarvex -c "SELECT * FROM ledger.holds WHERE hold_id='<id>'"
 ```
 
 **Failure modes:**
@@ -191,13 +191,13 @@ psql -d sarvaex -c "SELECT * FROM ledger.holds WHERE hold_id='<id>'"
 
 ```bash
 # Check pending orders
-psql -d sarvaex -c "SELECT order_id, status, ticker, count, filled_count FROM orders.orders WHERE status IN ('PENDING', 'OPEN', 'PARTIAL') ORDER BY created_at DESC LIMIT 20"
+psql -d sarvex -c "SELECT order_id, status, ticker, count, filled_count FROM orders.orders WHERE status IN ('PENDING', 'OPEN', 'PARTIAL') ORDER BY created_at DESC LIMIT 20"
 
 # Force-cancel a stuck order (manual escape hatch)
 grpcurl -plaintext -d '{"order_id":"<id>","user_id":"<id>"}' \
-    localhost:50061 sarvaex.v1.OrderRouter/CancelOrder
+    localhost:50061 sarvex.v1.OrderRouter/CancelOrder
 # Check fill ledger outbox backlog
-psql -d sarvaex -c "SELECT status, count(*) FROM orders.fill_posting_outbox GROUP BY status"
+psql -d sarvex -c "SELECT status, count(*) FROM orders.fill_posting_outbox GROUP BY status"
 ```
 
 **Failure modes:**
@@ -211,7 +211,7 @@ Mostly stateless. Reads user limits + working orders summary. Restart is safe.
 
 ```bash
 # Update a user's limits
-grpcurl -plaintext -d '{...}' localhost:50062 sarvaex.v1.Risk/UpdateUserLimits
+grpcurl -plaintext -d '{...}' localhost:50062 sarvex.v1.Risk/UpdateUserLimits
 
 # Rebuild working orders summary (if it drifts)
 ./scripts/rebuild-risk-summary.sh
@@ -229,10 +229,10 @@ curl -X POST http://localhost:8080/v1/admin/contracts/RBI-JUN26-CUT25/resolve \
     -d '{"categorical_value": "YES", "justification": "Demo resolution"}'
 
 # Check settlement status
-psql -d sarvaex -c "SELECT * FROM settlement.settlements WHERE ticker='RBI-JUN26-CUT25'"
+psql -d sarvex -c "SELECT * FROM settlement.settlements WHERE ticker='RBI-JUN26-CUT25'"
 
 # View payouts
-psql -d sarvaex -c "SELECT * FROM settlement.settlement_payouts WHERE ticker='RBI-JUN26-CUT25'"
+psql -d sarvex -c "SELECT * FROM settlement.settlement_payouts WHERE ticker='RBI-JUN26-CUT25'"
 ```
 
 **Failure modes:**
@@ -249,15 +249,15 @@ psql -d sarvaex -c "SELECT * FROM settlement.settlement_payouts WHERE ticker='RB
 # Full RDS snapshot (managed by AWS Backup, daily)
 # WAL archiving to S3 for PITR
 # Manual snapshot before major changes:
-aws rds create-db-snapshot --db-instance-identifier sarvaex-prod --db-snapshot-identifier pre-launch-2026-08-01
+aws rds create-db-snapshot --db-instance-identifier sarvex-prod --db-snapshot-identifier pre-launch-2026-08-01
 ```
 
 ### Restore from PITR
 
 ```bash
 aws rds restore-db-instance-to-point-in-time \
-    --source-db-instance-identifier sarvaex-prod \
-    --target-db-instance-identifier sarvaex-restore-test \
+    --source-db-instance-identifier sarvex-prod \
+    --target-db-instance-identifier sarvex-restore-test \
     --restore-time 2026-08-01T15:30:00Z
 ```
 
@@ -307,7 +307,7 @@ echo "→ Stopping services..."
 docker-compose stop me-core order-router risk-svc settlement-svc oracle-svc audit-svc admin-svc mm-bots gw-rest gw-ws
 
 echo "→ Truncating volatile tables..."
-psql -d sarvaex <<SQL
+psql -d sarvex <<SQL
 SET search_path TO public;
 
 TRUNCATE TABLE orders.fill_posting_outbox, orders.fills, orders.orders CASCADE;
@@ -351,7 +351,7 @@ echo "✓ Reset complete in $SECONDS seconds"
 set -euo pipefail
 
 ADMIN_TOKEN=$(curl -s -X POST http://localhost:8080/v1/auth/login \
-    -d '{"email":"admin@demo.sarvaex.com","password":"demo1234"}' | jq -r .token)
+    -d '{"email":"admin@demo.sarvex.com","password":"demo1234"}' | jq -r .token)
 
 for user in u_retail_1 u_inst_1 u_mm_1; do
     curl -s -X POST http://localhost:8080/v1/admin/deposits/credit \
@@ -378,7 +378,7 @@ The demo doesn't have full Prometheus + Grafana; instead:
 docker-compose logs -f audit-svc | grep AuditEvent
 
 # Order rate per second (last 60s)
-psql -d sarvaex -c "SELECT count(*) FROM orders.orders WHERE created_at > now() - interval '60 seconds'"
+psql -d sarvex -c "SELECT count(*) FROM orders.orders WHERE created_at > now() - interval '60 seconds'"
 ```
 
 Production adds full observability (see Phase 2C).
@@ -412,7 +412,7 @@ Before opening to real users:
 
 ```bash
 # How much real cash is sitting in the system?
-psql -d sarvaex -c "
+psql -d sarvex -c "
 SELECT
   account_code,
   SUM(CASE WHEN direction='CR' THEN amount_micro_usdc ELSE -amount_micro_usdc END) / 1e6 AS balance_usdc
@@ -421,20 +421,20 @@ WHERE account_code LIKE 'LIAB:USER:%:CASH'
 GROUP BY account_code ORDER BY balance_usdc DESC LIMIT 20"
 
 # Top 10 active markets by order count today
-psql -d sarvaex -c "
+psql -d sarvex -c "
 SELECT ticker, count(*) AS orders FROM orders.orders
 WHERE created_at::date = current_date GROUP BY ticker ORDER BY orders DESC LIMIT 10"
 
 # Recent fills
-psql -d sarvaex -c "
+psql -d sarvex -c "
 SELECT ticker, price_ticks, count, ts FROM orders.fills ORDER BY ts DESC LIMIT 20"
 
 # Open interest per market
-psql -d sarvaex -c "
+psql -d sarvex -c "
 SELECT ticker, total_open_long, total_open_short FROM position.open_interest ORDER BY total_open_long DESC LIMIT 10"
 
 # Recent audit events
-psql -d sarvaex -c "
+psql -d sarvex -c "
 SELECT ts, service, type, actor, subject FROM audit.events ORDER BY event_seq DESC LIMIT 20"
 ```
 

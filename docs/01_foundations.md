@@ -1,4 +1,4 @@
-# SarvaEX — Complete Design & Build Plan
+# Sarvex — Complete Design & Build Plan
 
 **Audience:** Engineering team
 **Status:** Authoritative build spec
@@ -28,7 +28,7 @@ Build in the order listed.
 
 ## 1. North Star
 
-SarvaEX is a regulated event derivatives exchange offering binary options and scalar event futures, denominated in USDC. The **demo build** proves the team can ship real exchange infrastructure. The **production build** is what we operate after raising seed capital.
+Sarvex is a regulated event derivatives exchange offering binary options and scalar event futures, denominated in USDC. The **demo build** proves the team can ship real exchange infrastructure. The **production build** is what we operate after raising seed capital.
 
 **The non-negotiable principle:** every service boundary, protobuf, and event subject in this design is **production-grade from day 1**. Stubs and simplifications live behind these boundaries; the boundaries themselves never move.
 
@@ -85,11 +85,11 @@ This means:
 ## 4. System Context
 
 ```
-                           SarvaEX Trust Boundary
+                           Sarvex Trust Boundary
                   ┌───────────────────────────────────────┐
                   │                                       │
   Retail trader ──┤                                       │
-                  │           SarvaEX services            ├──► [Demo] Mocked
+                  │           Sarvex services            ├──► [Demo] Mocked
   Institutional ──┤             (12 services)             ├──► [Prod] Fireblocks (USDC custody)
   trader / LP     │                                       │
                   │                                       ├──► [Demo] JSON file
@@ -237,7 +237,7 @@ The demo is ~18% of the production codebase. The architecture is 100%.
 Single monorepo. One developer can `git clone` and `./scripts/run-demo.sh` to bring up everything.
 
 ```
-sarvaex/
+sarvex/
 ├── README.md
 ├── ROADMAP.md                      # Living document, updated bi-weekly
 ├── docker-compose.yml              # Demo deployment
@@ -245,16 +245,16 @@ sarvaex/
 ├── Makefile                        # Common targets: build, test, run, reset
 │
 ├── proto/                          # FROZEN on Day 1 of Week 1
-│   ├── sarvaex/v1/common.proto
-│   ├── sarvaex/v1/order.proto
-│   ├── sarvaex/v1/match.proto
-│   ├── sarvaex/v1/ledger.proto
-│   ├── sarvaex/v1/risk.proto
-│   ├── sarvaex/v1/refdata.proto
-│   ├── sarvaex/v1/oracle.proto
-│   ├── sarvaex/v1/settlement.proto
-│   ├── sarvaex/v1/marketdata.proto
-│   └── sarvaex/v1/audit.proto
+│   ├── sarvex/v1/common.proto
+│   ├── sarvex/v1/order.proto
+│   ├── sarvex/v1/match.proto
+│   ├── sarvex/v1/ledger.proto
+│   ├── sarvex/v1/risk.proto
+│   ├── sarvex/v1/refdata.proto
+│   ├── sarvex/v1/oracle.proto
+│   ├── sarvex/v1/settlement.proto
+│   ├── sarvex/v1/marketdata.proto
+│   └── sarvex/v1/audit.proto
 │
 ├── services/
 │   ├── gw-rest/             # Go

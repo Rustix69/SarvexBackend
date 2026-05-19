@@ -1,0 +1,2 @@
+-- Milestone 0 placeholder.
+-- Real seed contract rows are added in Milestone 2.

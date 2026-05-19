@@ -1,0 +1,2 @@
+-- Milestone 0 placeholder.
+-- Real demo users are added in Milestone 2.

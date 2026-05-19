@@ -138,7 +138,7 @@ This is critical for the investor demo. Looking generic will lose 30% of the imp
   --color-text-muted: #64748b;
 
   /* Accent */
-  --color-accent: #7c5cff;     /* SarvaEX purple */
+  --color-accent: #7c5cff;     /* Sarvex purple */
   --color-accent-glow: rgba(124, 92, 255, 0.4);
 
   /* Type */

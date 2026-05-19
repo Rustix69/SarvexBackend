@@ -2,7 +2,7 @@
 
 **These are frozen on Day 1 of Week 1.** Once written, they don't change during the demo build. Any change requires explicit team review.
 
-All protos live in `proto/sarvaex/v1/`. Compile via `./scripts/proto-gen.sh` which generates Go (`services/*/gen/pb/`) and C++ (`services/me-core/gen/`) bindings.
+All protos live in `proto/sarvex/v1/`. Compile via `./scripts/proto-gen.sh` which generates Go (`services/*/gen/pb/`) and C++ (`services/me-core/gen/`) bindings.
 
 ---
 
@@ -12,8 +12,8 @@ Shared types used across all services.
 
 ```protobuf
 syntax = "proto3";
-package sarvaex.v1;
-option go_package = "github.com/sarvaex/proto/gen/go/sarvaex/v1;sarvaexv1";
+package sarvex.v1;
+option go_package = "github.com/sarvex/proto/gen/go/sarvex/v1;sarvexv1";
 
 import "google/protobuf/timestamp.proto";
 
@@ -86,11 +86,11 @@ Used by `gw-rest` → `order-router` and Frontend ↔ `gw-rest`.
 
 ```protobuf
 syntax = "proto3";
-package sarvaex.v1;
-option go_package = "github.com/sarvaex/proto/gen/go/sarvaex/v1;sarvaexv1";
+package sarvex.v1;
+option go_package = "github.com/sarvex/proto/gen/go/sarvex/v1;sarvexv1";
 
 import "google/protobuf/timestamp.proto";
-import "sarvaex/v1/common.proto";
+import "sarvex/v1/common.proto";
 
 service OrderRouter {
   rpc SubmitOrder(SubmitOrderRequest) returns (SubmitOrderResponse);
@@ -249,12 +249,12 @@ Internal interface: `order-router` ↔ `me-core`. Stays the same in demo and pro
 
 ```protobuf
 syntax = "proto3";
-package sarvaex.v1;
-option go_package = "github.com/sarvaex/proto/gen/go/sarvaex/v1;sarvaexv1";
+package sarvex.v1;
+option go_package = "github.com/sarvex/proto/gen/go/sarvex/v1;sarvexv1";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
-import "sarvaex/v1/common.proto";
+import "sarvex/v1/common.proto";
 
 service MatchingEngine {
   // Lifecycle
@@ -437,8 +437,8 @@ message BookDelta {
 
 ```protobuf
 syntax = "proto3";
-package sarvaex.v1;
-option go_package = "github.com/sarvaex/proto/gen/go/sarvaex/v1;sarvaexv1";
+package sarvex.v1;
+option go_package = "github.com/sarvex/proto/gen/go/sarvex/v1;sarvexv1";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
@@ -549,11 +549,11 @@ message AdminCreditDepositRequest {
 
 ```protobuf
 syntax = "proto3";
-package sarvaex.v1;
-option go_package = "github.com/sarvaex/proto/gen/go/sarvaex/v1;sarvaexv1";
+package sarvex.v1;
+option go_package = "github.com/sarvex/proto/gen/go/sarvex/v1;sarvexv1";
 
 import "google/protobuf/empty.proto";
-import "sarvaex/v1/common.proto";
+import "sarvex/v1/common.proto";
 
 service Risk {
   rpc PreTradeCheck(PreTradeCheckRequest) returns (PreTradeCheckResponse);
@@ -601,13 +601,13 @@ message UpdateUserLimitsRequest {
 
 ```protobuf
 syntax = "proto3";
-package sarvaex.v1;
-option go_package = "github.com/sarvaex/proto/gen/go/sarvaex/v1;sarvaexv1";
+package sarvex.v1;
+option go_package = "github.com/sarvex/proto/gen/go/sarvex/v1;sarvexv1";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
 import "google/protobuf/struct.proto";
-import "sarvaex/v1/common.proto";
+import "sarvex/v1/common.proto";
 
 service RefData {
   rpc GetContract(GetContractRequest) returns (Contract);
@@ -690,8 +690,8 @@ message GetEventRequest {
 
 ```protobuf
 syntax = "proto3";
-package sarvaex.v1;
-option go_package = "github.com/sarvaex/proto/gen/go/sarvaex/v1;sarvaexv1";
+package sarvex.v1;
+option go_package = "github.com/sarvex/proto/gen/go/sarvex/v1;sarvexv1";
 
 import "google/protobuf/timestamp.proto";
 
@@ -763,8 +763,8 @@ message AdminForceResolutionRequest {
 
 ```protobuf
 syntax = "proto3";
-package sarvaex.v1;
-option go_package = "github.com/sarvaex/proto/gen/go/sarvaex/v1;sarvaexv1";
+package sarvex.v1;
+option go_package = "github.com/sarvex/proto/gen/go/sarvex/v1;sarvexv1";
 
 import "google/protobuf/timestamp.proto";
 
@@ -799,11 +799,11 @@ Used over NATS subjects. Same proto for demo and production.
 
 ```protobuf
 syntax = "proto3";
-package sarvaex.v1;
-option go_package = "github.com/sarvaex/proto/gen/go/sarvaex/v1;sarvaexv1";
+package sarvex.v1;
+option go_package = "github.com/sarvex/proto/gen/go/sarvex/v1;sarvexv1";
 
 import "google/protobuf/timestamp.proto";
-import "sarvaex/v1/common.proto";
+import "sarvex/v1/common.proto";
 
 // Subjects:
 //   md.book.<ticker>          - OrderBookDeltaEvent
@@ -861,8 +861,8 @@ message ContractLifecycleEvent {
 
 ```protobuf
 syntax = "proto3";
-package sarvaex.v1;
-option go_package = "github.com/sarvaex/proto/gen/go/sarvaex/v1;sarvaexv1";
+package sarvex.v1;
+option go_package = "github.com/sarvex/proto/gen/go/sarvex/v1;sarvexv1";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/struct.proto";
@@ -888,8 +888,8 @@ message AuditEvent {
 
 ```protobuf
 syntax = "proto3";
-package sarvaex.v1;
-option go_package = "github.com/sarvaex/proto/gen/go/sarvaex/v1;sarvaexv1";
+package sarvex.v1;
+option go_package = "github.com/sarvex/proto/gen/go/sarvex/v1;sarvexv1";
 
 import "google/protobuf/timestamp.proto";
 
@@ -954,7 +954,7 @@ OpenAPI sketch. Same in demo and production (production adds auth headers, rate 
 ```yaml
 openapi: 3.0.3
 info:
-  title: SarvaEX REST API
+  title: Sarvex REST API
   version: v1
 
 paths:
@@ -1119,7 +1119,7 @@ components:
 
 JSON over WebSocket. Same protocol in demo and production.
 
-**Connect:** `wss://api.sarvaex.com/v1/stream` (production) / `ws://localhost:8081/v1/stream` (demo).
+**Connect:** `wss://api.sarvex.com/v1/stream` (production) / `ws://localhost:8081/v1/stream` (demo).
 
 **Subscribe:**
 ```json

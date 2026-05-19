@@ -263,7 +263,7 @@ Fix everything found in Day 20 dry run. Tag `week3-complete`.
 This is what you actually say during the live demo.
 
 ### Minute 0–1: Setup
-> "SarvaEX is a regulated event derivatives exchange. We're building an institutional-grade venue for binary and scalar futures on real-world events — central bank decisions, inflation prints, election outcomes — settled in USDC.
+> "Sarvex is a regulated event derivatives exchange. We're building an institutional-grade venue for binary and scalar futures on real-world events — central bank decisions, inflation prints, election outcomes — settled in USDC.
 > 
 > Today I'll show you a working version. This isn't a mockup; every transaction you see is going through a real matching engine, a real double-entry ledger, and producing a real audit trail.
 > 

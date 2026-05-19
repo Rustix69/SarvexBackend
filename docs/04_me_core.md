@@ -111,7 +111,7 @@ public:
   bool   immediate_or_cancel() const { return flags_ & 0x01; }
   liquibook::book::Price stop_price() const { return 0; }
 
-  // SarvaEX-specific accessors
+  // Sarvex-specific accessors
   const std::string& sarva_order_id() const { return order_id_; }
   const std::string& user_id() const { return user_id_; }
   const std::string& hold_id() const { return hold_id_; }
@@ -303,7 +303,7 @@ This logic is encapsulated in `sarva_listener.cpp` with clear unit tests. The ma
 
 ```cpp
 // services/me-core/src/grpc_server.cpp
-class MatchingEngineImpl final : public sarvaex::v1::MatchingEngine::Service {
+class MatchingEngineImpl final : public sarvex::v1::MatchingEngine::Service {
 public:
   grpc::Status SubmitOrder(grpc::ServerContext* ctx,
                             const MeSubmitOrderRequest* req,
@@ -472,9 +472,9 @@ find_package(Protobuf REQUIRED CONFIG)
 find_package(nats REQUIRED)
 
 # Generate proto sources
-set(PROTO_SRCS ../../proto/sarvaex/v1/match.proto
-               ../../proto/sarvaex/v1/common.proto
-               ../../proto/sarvaex/v1/marketdata.proto)
+set(PROTO_SRCS ../../proto/sarvex/v1/match.proto
+               ../../proto/sarvex/v1/common.proto
+               ../../proto/sarvex/v1/marketdata.proto)
 protobuf_generate(...)
 
 add_executable(me-core

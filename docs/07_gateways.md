@@ -453,7 +453,7 @@ Per-endpoint:
 - `gw-ws`: localhost:8081
 - frontend: localhost:3000
 
-Frontend's `lib/api.ts` and `lib/ws.ts` point to these. In production, both are behind CloudFront + ALB at `api.sarvaex.com`.
+Frontend's `lib/api.ts` and `lib/ws.ts` point to these. In production, both are behind CloudFront + ALB at `api.sarvex.com`.
 
 ---
 
