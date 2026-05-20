@@ -1,15 +1,15 @@
-version: v1
+version: v2
 
 plugins:
-  - plugin: go
+  - remote: buf.build/protocolbuffers/go
     out: gen/go
     opt:
       - paths=source_relative
-  - plugin: go-grpc
+  - remote: buf.build/grpc/go
     out: gen/go
     opt:
       - paths=source_relative
-  - plugin: cpp
-    out: gen/cpp
-  - plugin: grpc
-    out: gen/cpp
+  - remote: buf.build/protocolbuffers/cpp
+    out: services/me-core/gen
+  - remote: buf.build/grpc/cpp
+    out: services/me-core/gen

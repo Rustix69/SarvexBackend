@@ -1,0 +1,157 @@
+syntax = "proto3";
+
+package sarvex.v1;
+
+option go_package = "github.com/sarvex/proto/gen/go/sarvex/v1;sarvexv1";
+
+import "google/protobuf/timestamp.proto";
+import "sarvex/v1/common.proto";
+
+service OrderRouter {
+  rpc SubmitOrder(SubmitOrderRequest) returns (SubmitOrderResponse);
+  rpc CancelOrder(CancelOrderRequest) returns (CancelOrderResponse);
+  rpc AmendOrder(AmendOrderRequest) returns (AmendOrderResponse);
+  rpc GetOrder(GetOrderRequest) returns (Order);
+  rpc ListOrders(ListOrdersRequest) returns (ListOrdersResponse);
+  rpc ListFills(ListFillsRequest) returns (ListFillsResponse);
+}
+
+message SubmitOrderRequest {
+  string user_id = 1;
+  string client_order_id = 2;
+  string ticker = 3;
+  Side side = 4;
+  Action action = 5;
+  int64 price_ticks = 6;
+  int64 count = 7;
+  TimeInForce tif = 8;
+  bool post_only = 9;
+  bool reduce_only = 10;
+  SelfTradePreventionType stp = 11;
+  google.protobuf.Timestamp expires_at = 12;
+  string idempotency_key = 13;
+}
+
+message SubmitOrderResponse {
+  Order order = 1;
+  repeated Fill fills = 2;
+  string reject_code = 3;
+  string reject_reason = 4;
+}
+
+message CancelOrderRequest {
+  string user_id = 1;
+  string order_id = 2;
+  string client_order_id = 3;
+}
+
+message CancelOrderResponse {
+  Order order = 1;
+  string reject_code = 2;
+  string reject_reason = 3;
+}
+
+message AmendOrderRequest {
+  string user_id = 1;
+  string order_id = 2;
+  int64 new_price_ticks = 3;
+  int64 new_count = 4;
+}
+
+message AmendOrderResponse {
+  Order order = 1;
+  string reject_code = 2;
+}
+
+message GetOrderRequest {
+  string user_id = 1;
+
+  oneof key {
+    string order_id = 2;
+    string client_order_id = 3;
+  }
+}
+
+message ListOrdersRequest {
+  string user_id = 1;
+  string ticker = 2;
+  OrderStatus status = 3;
+  int32 limit = 4;
+  string cursor = 5;
+}
+
+message ListOrdersResponse {
+  repeated Order orders = 1;
+  string next_cursor = 2;
+}
+
+message ListFillsRequest {
+  string ticker = 1;
+  uint64 from_global_seq = 2;
+  uint64 to_global_seq = 3;
+  int32 limit = 4;
+  string cursor = 5;
+}
+
+message ListFillsResponse {
+  repeated FillRecord fills = 1;
+  string next_cursor = 2;
+}
+
+message Order {
+  string order_id = 1;
+  string client_order_id = 2;
+  string user_id = 3;
+  string ticker = 4;
+  Side side = 5;
+  Action action = 6;
+  int64 price_ticks = 7;
+  int64 count = 8;
+  int64 filled_count = 9;
+  int64 remaining_count = 10;
+  TimeInForce tif = 11;
+  bool post_only = 12;
+  bool reduce_only = 13;
+  SelfTradePreventionType stp = 14;
+  OrderStatus status = 15;
+  google.protobuf.Timestamp created_at = 16;
+  google.protobuf.Timestamp updated_at = 17;
+  google.protobuf.Timestamp expires_at = 18;
+  string hold_id = 19;
+  int64 avg_fill_price_ticks = 20;
+}
+
+message Fill {
+  string fill_id = 1;
+  string order_id = 2;
+  string ticker = 3;
+  int64 price_ticks = 4;
+  int64 count = 5;
+  Side aggressor_side = 6;
+  int64 fee_micro_usdc = 7;
+  google.protobuf.Timestamp ts = 8;
+  uint64 seq = 9;
+}
+
+message FillRecord {
+  string fill_id = 1;
+  string ticker = 2;
+  uint64 global_seq = 3;
+  uint64 contract_seq = 4;
+  string maker_order_id = 5;
+  string taker_order_id = 6;
+  string maker_user_id = 7;
+  string taker_user_id = 8;
+  string maker_hold_id = 9;
+  string taker_hold_id = 10;
+  Side maker_side = 11;
+  Action maker_action = 12;
+  Side taker_side = 13;
+  Action taker_action = 14;
+  int64 price_ticks = 15;
+  int64 count = 16;
+  Side aggressor_side = 17;
+  int64 maker_fee_micro_usdc = 18;
+  int64 taker_fee_micro_usdc = 19;
+  google.protobuf.Timestamp ts = 20;
+}

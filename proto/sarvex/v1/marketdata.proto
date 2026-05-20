@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package sarvex.v1;
+
+option go_package = "github.com/sarvex/proto/gen/go/sarvex/v1;sarvexv1";
+
+import "google/protobuf/timestamp.proto";
+import "sarvex/v1/common.proto";
+
+message OrderBookDeltaEvent {
+  string ticker = 1;
+  uint64 seq = 2;
+  google.protobuf.Timestamp ts = 3;
+  repeated DeltaLevel deltas = 4;
+}
+
+message DeltaLevel {
+  Side side = 1;
+  int64 price_ticks = 2;
+  int64 qty_delta = 3;
+  int64 new_total_qty = 4;
+}
+
+message TradeEvent {
+  string ticker = 1;
+  string trade_id = 2;
+  uint64 seq = 3;
+  int64 price_ticks = 4;
+  int64 count = 5;
+  Side aggressor_side = 6;
+  google.protobuf.Timestamp ts = 7;
+}
+
+message TickerEvent {
+  string ticker = 1;
+  uint64 seq = 2;
+  int64 best_bid_ticks = 3;
+  int64 best_bid_qty = 4;
+  int64 best_ask_ticks = 5;
+  int64 best_ask_qty = 6;
+  int64 last_trade_ticks = 7;
+  google.protobuf.Timestamp ts = 8;
+}
+
+message ContractLifecycleEvent {
+  string ticker = 1;
+  ContractState old_state = 2;
+  ContractState new_state = 3;
+  google.protobuf.Timestamp ts = 4;
+  string reason = 5;
+}

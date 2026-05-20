@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package sarvex.v1;
+
+option go_package = "github.com/sarvex/proto/gen/go/sarvex/v1;sarvexv1";
+
+import "google/protobuf/empty.proto";
+import "sarvex/v1/common.proto";
+
+service Risk {
+  rpc PreTradeCheck(PreTradeCheckRequest) returns (PreTradeCheckResponse);
+  rpc GetUserLimits(GetUserLimitsRequest) returns (UserLimits);
+  rpc UpdateUserLimits(UpdateUserLimitsRequest) returns (google.protobuf.Empty);
+}
+
+message PreTradeCheckRequest {
+  string user_id = 1;
+  string ticker = 2;
+  Side side = 3;
+  Action action = 4;
+  int64 price_ticks = 5;
+  int64 count = 6;
+}
+
+message PreTradeCheckResponse {
+  bool approved = 1;
+  string reject_code = 2;
+  string reject_reason = 3;
+  int64 required_hold_micro_usdc = 4;
+  int64 projected_position = 5;
+}
+
+message GetUserLimitsRequest {
+  string user_id = 1;
+}
+
+message UserLimits {
+  string user_id = 1;
+  int32 kyc_tier = 2;
+  int64 max_order_size_micro_usdc = 3;
+  int64 daily_loss_limit_micro_usdc = 4;
+  map<string, int64> per_contract_position_limit = 5;
+}
+
+message UpdateUserLimitsRequest {
+  UserLimits limits = 1;
+}

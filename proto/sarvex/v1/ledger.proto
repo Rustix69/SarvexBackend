@@ -1,0 +1,105 @@
+syntax = "proto3";
+
+package sarvex.v1;
+
+option go_package = "github.com/sarvex/proto/gen/go/sarvex/v1;sarvexv1";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+service Ledger {
+  rpc PostTransaction(PostTransactionRequest) returns (PostTransactionResponse);
+  rpc PlaceHold(PlaceHoldRequest) returns (PlaceHoldResponse);
+  rpc ReleaseHold(ReleaseHoldRequest) returns (google.protobuf.Empty);
+  rpc CommitHold(CommitHoldRequest) returns (google.protobuf.Empty);
+  rpc GetBalance(GetBalanceRequest) returns (Balance);
+  rpc GetAccountHistory(GetAccountHistoryRequest) returns (GetAccountHistoryResponse);
+  rpc AdminCreditDeposit(AdminCreditDepositRequest) returns (google.protobuf.Empty);
+}
+
+message PostTransactionRequest {
+  string idempotency_key = 1;
+  string reason_code = 2;
+  repeated LedgerEntry entries = 3;
+  google.protobuf.Struct metadata = 4;
+}
+
+message PostTransactionResponse {
+  string tx_id = 1;
+  google.protobuf.Timestamp posted_at = 2;
+}
+
+message LedgerEntry {
+  string account_code = 1;
+  string direction = 2;
+  int64 amount_micro_usdc = 3;
+  string memo = 4;
+}
+
+message PlaceHoldRequest {
+  string idempotency_key = 1;
+  string user_id = 2;
+  int64 amount_micro_usdc = 3;
+  string reason = 4;
+}
+
+message PlaceHoldResponse {
+  string hold_id = 1;
+}
+
+message ReleaseHoldRequest {
+  string idempotency_key = 1;
+  string hold_id = 2;
+  int64 amount_micro_usdc = 3;
+  string reason_code = 4;
+}
+
+message CommitHoldRequest {
+  string idempotency_key = 1;
+  string hold_id = 2;
+  int64 commit_amount_micro_usdc = 3;
+  int64 release_amount_micro_usdc = 4;
+  string destination_account_code = 5;
+  string reason_code = 6;
+  repeated LedgerEntry additional_entries = 7;
+}
+
+message GetBalanceRequest {
+  string user_id = 1;
+}
+
+message Balance {
+  string user_id = 1;
+  int64 cash_micro_usdc = 2;
+  int64 held_micro_usdc = 3;
+  int64 total_micro_usdc = 4;
+}
+
+message GetAccountHistoryRequest {
+  string user_id = 1;
+  int32 limit = 2;
+  string cursor = 3;
+}
+
+message GetAccountHistoryResponse {
+  repeated LedgerEntryRecord entries = 1;
+  string next_cursor = 2;
+}
+
+message LedgerEntryRecord {
+  string tx_id = 1;
+  string account_code = 2;
+  string direction = 3;
+  int64 amount_micro_usdc = 4;
+  int64 running_balance_micro_usdc = 5;
+  string reason_code = 6;
+  google.protobuf.Timestamp posted_at = 7;
+  string memo = 8;
+}
+
+message AdminCreditDepositRequest {
+  string user_id = 1;
+  int64 amount_micro_usdc = 2;
+  string note = 3;
+}

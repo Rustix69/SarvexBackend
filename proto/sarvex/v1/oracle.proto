@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package sarvex.v1;
+
+option go_package = "github.com/sarvex/proto/gen/go/sarvex/v1;sarvexv1";
+
+import "google/protobuf/timestamp.proto";
+
+service Oracle {
+  rpc ProposeResolution(ProposeResolutionRequest) returns (Resolution);
+  rpc FinalizeResolution(FinalizeResolutionRequest) returns (Resolution);
+  rpc GetResolution(GetResolutionRequest) returns (Resolution);
+  rpc AdminForceResolution(AdminForceResolutionRequest) returns (Resolution);
+}
+
+message ProposeResolutionRequest {
+  string event_ticker = 1;
+  int64 numeric_value = 2;
+  string categorical_value = 3;
+  string source = 4;
+  string attestor_id = 5;
+  bytes signature = 6;
+}
+
+message FinalizeResolutionRequest {
+  string event_ticker = 1;
+}
+
+message GetResolutionRequest {
+  string event_ticker = 1;
+}
+
+message Resolution {
+  string event_ticker = 1;
+  int64 numeric_value = 2;
+  string categorical_value = 3;
+  ResolutionStatus status = 4;
+  repeated Attestation attestations = 5;
+  google.protobuf.Timestamp proposed_at = 6;
+  google.protobuf.Timestamp finalized_at = 7;
+}
+
+message Attestation {
+  string attestor_id = 1;
+  string source = 2;
+  int64 numeric_value = 3;
+  string categorical_value = 4;
+  bytes signature = 5;
+  google.protobuf.Timestamp observed_at = 6;
+}
+
+enum ResolutionStatus {
+  RESOLUTION_STATUS_UNSPECIFIED = 0;
+  RESOLUTION_STATUS_PENDING = 1;
+  RESOLUTION_STATUS_PROPOSED = 2;
+  RESOLUTION_STATUS_FINALIZED = 3;
+  RESOLUTION_STATUS_DISPUTED = 4;
+}
+
+message AdminForceResolutionRequest {
+  string event_ticker = 1;
+  int64 numeric_value = 2;
+  string categorical_value = 3;
+  string admin_user_id = 4;
+  string justification = 5;
+}

@@ -1,0 +1,82 @@
+syntax = "proto3";
+
+package sarvex.v1;
+
+option go_package = "github.com/sarvex/proto/gen/go/sarvex/v1;sarvexv1";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "sarvex/v1/common.proto";
+
+service RefData {
+  rpc GetContract(GetContractRequest) returns (Contract);
+  rpc ListContracts(ListContractsRequest) returns (ListContractsResponse);
+  rpc TransitionState(TransitionStateRequest) returns (google.protobuf.Empty);
+  rpc UpsertContract(UpsertContractRequest) returns (Contract);
+  rpc GetEvent(GetEventRequest) returns (Event);
+}
+
+message Contract {
+  string ticker = 1;
+  string event_ticker = 2;
+  string series_ticker = 3;
+  ContractKind kind = 4;
+  string question = 5;
+  string underlying = 6;
+  int64 tick_size = 7;
+  int64 min_price_ticks = 8;
+  int64 max_price_ticks = 9;
+  int64 lower_bound_ticks = 10;
+  int64 upper_bound_ticks = 11;
+  int64 multiplier_micro_usdc = 12;
+  int64 max_order_size = 13;
+  int64 position_limit_per_user = 14;
+  ContractState state = 15;
+  google.protobuf.Timestamp listed_at = 16;
+  google.protobuf.Timestamp open_at = 17;
+  google.protobuf.Timestamp close_at = 18;
+  google.protobuf.Timestamp expected_resolution_at = 19;
+  string settlement_source = 20;
+  string oracle_policy = 21;
+  google.protobuf.Struct settlement_rule = 22;
+  uint64 close_global_seq = 23;
+}
+
+message Event {
+  string event_ticker = 1;
+  string series_ticker = 2;
+  string title = 3;
+  string description = 4;
+  google.protobuf.Timestamp expected_resolution_at = 5;
+}
+
+message GetContractRequest {
+  string ticker = 1;
+}
+
+message ListContractsRequest {
+  ContractState state = 1;
+  string series_ticker = 2;
+  int32 limit = 3;
+  string cursor = 4;
+}
+
+message ListContractsResponse {
+  repeated Contract contracts = 1;
+  string next_cursor = 2;
+}
+
+message TransitionStateRequest {
+  string ticker = 1;
+  ContractState new_state = 2;
+  string reason = 3;
+}
+
+message UpsertContractRequest {
+  Contract contract = 1;
+}
+
+message GetEventRequest {
+  string event_ticker = 1;
+}

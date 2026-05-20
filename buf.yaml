@@ -1,12 +1,16 @@
-version: v1
+version: v2
 
-build:
-  roots:
-    - proto
+modules:
+  - path: proto
 
 lint:
   use:
-    - DEFAULT
+    - STANDARD
+  except:
+    - SERVICE_SUFFIX
+    - RPC_REQUEST_STANDARD_NAME
+    - RPC_RESPONSE_STANDARD_NAME
+    - RPC_REQUEST_RESPONSE_UNIQUE
 
 breaking:
   use:

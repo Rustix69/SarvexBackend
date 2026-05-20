@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package sarvex.v1;
+
+option go_package = "github.com/sarvex/proto/gen/go/sarvex/v1;sarvexv1";
+
+import "google/protobuf/timestamp.proto";
+
+service Position {
+  rpc GetPosition(GetPositionRequest) returns (UserPosition);
+  rpc ListPositions(ListPositionsRequest) returns (ListPositionsResponse);
+  rpc ListPositionsByContract(ListPositionsByContractRequest) returns (ListPositionsResponse);
+  rpc GetOpenInterest(GetOpenInterestRequest) returns (OpenInterest);
+}
+
+message UserPosition {
+  string user_id = 1;
+  string ticker = 2;
+  int64 net_qty = 3;
+  int64 avg_cost_micro_usdc = 4;
+  int64 realized_pnl_micro_usdc = 5;
+  int64 unrealized_pnl_micro_usdc = 6;
+  google.protobuf.Timestamp updated_at = 7;
+  uint64 last_global_seq = 8;
+}
+
+message GetPositionRequest {
+  string user_id = 1;
+  string ticker = 2;
+}
+
+message ListPositionsRequest {
+  string user_id = 1;
+  bool include_closed = 2;
+}
+
+message ListPositionsResponse {
+  repeated UserPosition positions = 1;
+  string next_cursor = 2;
+}
+
+message ListPositionsByContractRequest {
+  string ticker = 1;
+  bool include_closed = 2;
+  int32 limit = 3;
+  string cursor = 4;
+  uint64 min_global_seq = 5;
+}
+
+message GetOpenInterestRequest {
+  string ticker = 1;
+}
+
+message OpenInterest {
+  string ticker = 1;
+  int64 total_open_long = 2;
+  int64 total_open_short = 3;
+}

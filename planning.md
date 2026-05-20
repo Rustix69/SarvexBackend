@@ -11,6 +11,12 @@ The plan preserves the finalized architecture:
 - Sarvex-owned sequencing, durability, ledger, holds, replay, settlement, and orchestration
 - Demo-grade implementation behind production-grade boundaries
 
+## Current Execution Status
+
+- Milestone 0: Completed.
+- Milestone 1: Completed.
+- Next active milestone: Milestone 2 (Database Migrations and Seeds).
+
 ## Implementation North Star
 
 Sarvex is not a generic application backend. It is an exchange backend where correctness depends on deterministic sequencing, durable fill facts, idempotent ledger operations, replayability, and settlement ordering.
@@ -199,6 +205,15 @@ Milestone 0.
 
 - Stub services start with generated bindings.
 - Each RPC can be invoked and returns a typed unimplemented response.
+
+### Completion Evidence (2026-05-20)
+
+- Protobuf contracts are present under `proto/sarvex/v1/*.proto`.
+- `make proto` completes and generates:
+  - Go bindings in `gen/go/sarvex/v1/`
+  - C++ bindings in `services/me-core/gen/sarvex/v1/`
+- A consolidated stub registration server exists at `cmd/proto-stub-server/main.go` and compiles via `go build ./cmd/proto-stub-server`.
+- Required contract fields for replay/settlement/holds were verified in proto definitions.
 
 ### Can Stay Stubbed
 

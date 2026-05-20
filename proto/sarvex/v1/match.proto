@@ -1,0 +1,172 @@
+syntax = "proto3";
+
+package sarvex.v1;
+
+option go_package = "github.com/sarvex/proto/gen/go/sarvex/v1;sarvexv1";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+import "sarvex/v1/common.proto";
+
+service MatchingEngine {
+  rpc AddBook(AddBookRequest) returns (google.protobuf.Empty);
+  rpc CloseBook(CloseBookRequest) returns (CloseBookResponse);
+  rpc SubmitOrder(MeSubmitOrderRequest) returns (MeSubmitOrderResponse);
+  rpc CancelOrder(MeCancelOrderRequest) returns (MeCancelOrderResponse);
+  rpc AmendOrder(MeAmendOrderRequest) returns (MeAmendOrderResponse);
+  rpc GetBookSnapshot(GetBookSnapshotRequest) returns (BookSnapshot);
+  rpc StreamExecutions(StreamExecutionsRequest) returns (stream ExecutionEvent);
+}
+
+message AddBookRequest {
+  string ticker = 1;
+  ContractKind kind = 2;
+  int64 tick_size = 3;
+  int64 min_price_ticks = 4;
+  int64 max_price_ticks = 5;
+}
+
+message CloseBookRequest {
+  string ticker = 1;
+}
+
+message CloseBookResponse {
+  string ticker = 1;
+  uint64 close_global_seq = 2;
+  uint64 close_contract_seq = 3;
+}
+
+message MeSubmitOrderRequest {
+  string order_id = 1;
+  string user_id = 2;
+  string hold_id = 3;
+  string ticker = 4;
+  Side side = 5;
+  Action action = 6;
+  int64 price_ticks = 7;
+  int64 count = 8;
+  uint32 flags = 9;
+  SelfTradePreventionType stp = 10;
+}
+
+message MeSubmitOrderResponse {
+  string order_id = 1;
+  bool accepted = 2;
+  string reject_code = 3;
+  repeated MeFill fills = 4;
+  uint64 contract_seq = 5;
+  uint64 global_seq = 6;
+}
+
+message MeCancelOrderRequest {
+  string order_id = 1;
+}
+
+message MeCancelOrderResponse {
+  string order_id = 1;
+  bool cancelled = 2;
+  string reject_code = 3;
+  int64 cancelled_qty = 4;
+}
+
+message MeAmendOrderRequest {
+  string order_id = 1;
+  int64 new_price_ticks = 2;
+  int64 new_count = 3;
+}
+
+message MeAmendOrderResponse {
+  string order_id = 1;
+  bool amended = 2;
+  string reject_code = 3;
+}
+
+message GetBookSnapshotRequest {
+  string ticker = 1;
+  int32 depth = 2;
+}
+
+message BookSnapshot {
+  string ticker = 1;
+  uint64 seq = 2;
+  google.protobuf.Timestamp ts = 3;
+  repeated PriceLevel bids = 4;
+  repeated PriceLevel asks = 5;
+}
+
+message PriceLevel {
+  int64 price_ticks = 1;
+  int64 total_qty = 2;
+  int32 order_count = 3;
+}
+
+message StreamExecutionsRequest {
+  uint64 from_global_seq = 1;
+}
+
+message ExecutionEvent {
+  uint64 global_seq = 1;
+  uint64 contract_seq = 2;
+  string ticker = 3;
+  google.protobuf.Timestamp ts = 4;
+
+  oneof event {
+    OrderAcceptedEvent accepted = 5;
+    OrderRejectedEvent rejected = 6;
+    MeFill fill = 7;
+    OrderCancelledEvent cancelled = 8;
+    OrderAmendedEvent amended = 9;
+    BookDelta book_delta = 10;
+  }
+}
+
+message OrderAcceptedEvent {
+  string order_id = 1;
+}
+
+message OrderRejectedEvent {
+  string order_id = 1;
+  string reject_code = 2;
+}
+
+message OrderCancelledEvent {
+  string order_id = 1;
+  int64 cancelled_qty = 2;
+  string reason_code = 3;
+}
+
+message OrderAmendedEvent {
+  string order_id = 1;
+  int64 new_price_ticks = 2;
+  int64 new_count = 3;
+}
+
+message MeFill {
+  string fill_id = 1;
+  string maker_order_id = 2;
+  string taker_order_id = 3;
+  string maker_user_id = 4;
+  string taker_user_id = 5;
+  int64 price_ticks = 6;
+  int64 count = 7;
+  Side aggressor_side = 8;
+  string ticker = 9;
+  uint64 global_seq = 10;
+  uint64 contract_seq = 11;
+  google.protobuf.Timestamp ts = 12;
+  string maker_hold_id = 13;
+  string taker_hold_id = 14;
+  Side maker_side = 15;
+  Action maker_action = 16;
+  Side taker_side = 17;
+  Action taker_action = 18;
+  int64 maker_fee_micro_usdc = 19;
+  int64 taker_fee_micro_usdc = 20;
+}
+
+message BookDelta {
+  Side side = 1;
+  int64 price_ticks = 2;
+  int64 qty_delta = 3;
+  int64 new_total_qty = 4;
+}

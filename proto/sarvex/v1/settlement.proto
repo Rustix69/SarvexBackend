@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package sarvex.v1;
+
+option go_package = "github.com/sarvex/proto/gen/go/sarvex/v1;sarvexv1";
+
+import "google/protobuf/timestamp.proto";
+
+service Settlement {
+  rpc SettleContract(SettleContractRequest) returns (SettlementResult);
+  rpc GetSettlement(GetSettlementRequest) returns (SettlementResult);
+}
+
+message SettleContractRequest {
+  string ticker = 1;
+  string event_ticker = 2;
+}
+
+message GetSettlementRequest {
+  string ticker = 1;
+}
+
+message SettlementResult {
+  string ticker = 1;
+  google.protobuf.Timestamp settled_at = 2;
+  int64 winner_payout_per_contract_micro_usdc = 3;
+  int64 total_payout_micro_usdc = 4;
+  int32 positions_settled = 5;
+}

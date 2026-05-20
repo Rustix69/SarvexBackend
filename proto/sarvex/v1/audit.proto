@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package sarvex.v1;
+
+option go_package = "github.com/sarvex/proto/gen/go/sarvex/v1;sarvexv1";
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+message AuditEvent {
+  uint64 event_seq = 1;
+  string service = 2;
+  string type = 3;
+  string actor = 4;
+  string subject = 5;
+  google.protobuf.Struct payload = 6;
+  bytes prev_hash = 7;
+  bytes hash = 8;
+  google.protobuf.Timestamp ts = 9;
+  string trace_id = 10;
+}
