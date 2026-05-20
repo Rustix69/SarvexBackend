@@ -7,26 +7,28 @@ COMPOSE := docker compose --env-file $(ENV_FILE)
 
 help:
 	@echo "Targets:"
-	@echo "  make build         - Milestone 0 scaffold build placeholder"
-	@echo "  make test          - Milestone 0 scaffold test placeholder"
-	@echo "  make run           - Start Milestone 0 infrastructure (postgres, nats, redis)"
-	@echo "  make stop          - Stop Milestone 0 infrastructure"
-	@echo "  make reset         - Recreate Milestone 0 infrastructure volumes"
-	@echo "  make logs          - Tail infrastructure logs"
+	@echo "  make build         - Build all Milestone 3 Go service skeletons"
+	@echo "  make test          - Run Milestone 3 Go tests"
+	@echo "  make run           - Start full Milestone 3 compose stack"
+	@echo "  make stop          - Stop compose stack"
+	@echo "  make reset         - Recreate compose stack volumes"
+	@echo "  make logs          - Tail compose logs"
 	@echo "  make proto         - Run proto generation script"
 	@echo "  make migrate       - Placeholder migration entrypoint"
 	@echo "  make migrate-down  - Placeholder migration rollback entrypoint"
 	@echo "  make seed          - Placeholder seed entrypoint"
 
 build:
-	@echo "[build] Milestone 0 scaffold ready; service builds start in next milestone."
+	@go build ./...
+	@echo "[build] Milestone 3 skeleton binaries compile."
 
 test:
-	@echo "[test] Milestone 0 scaffold ready; service tests start in next milestone."
+	@go test ./...
+	@echo "[test] Milestone 3 skeleton tests passed."
 
 run:
-	@$(COMPOSE) up -d postgres nats redis
-	@echo "[run] Milestone 0 infrastructure is up."
+	@$(COMPOSE) up -d --build
+	@echo "[run] Milestone 3 stack is up."
 
 stop:
 	@$(COMPOSE) down

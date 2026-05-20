@@ -16,7 +16,8 @@ The plan preserves the finalized architecture:
 - Milestone 0: Completed.
 - Milestone 1: Completed.
 - Milestone 2: Completed.
-- Next active milestone: Milestone 3 (Service Skeleton And Compose Bring-Up).
+- Milestone 3: Completed.
+- Next active milestone: Milestone 4 (Ledger And Hold Lifecycle).
 
 ## Implementation North Star
 
@@ -370,6 +371,20 @@ postgres
 - `make run` starts all services.
 - All health endpoints pass.
 - A stubbed request can traverse `gw-rest -> order-router -> me-core`.
+
+### Completion Evidence (2026-05-21)
+
+- Added generic gRPC service skeleton runtime with config loading, structured logs, DB/NATS dependency checks, and `/healthz` + `/readyz` endpoints.
+- Added gateway skeletons:
+  - `gw-rest`: HTTP service with milestone endpoints returning typed `NOT_IMPLEMENTED` responses.
+  - `gw-ws`: WebSocket handshake skeleton with welcome event.
+- Added Dockerfiles for all backend services and `me-core`.
+- Updated compose to full bring-up order with explicit dependencies:
+  `postgres -> nats -> redis -> migrations -> refdata-svc -> ledger-svc -> risk-svc -> me-core -> order-router -> position-svc -> oracle-svc -> settlement-svc -> audit-svc -> admin-svc -> gw-rest -> gw-ws`.
+- Validated:
+  - `go build ./...` and `go test ./...` pass.
+  - compose config validates.
+  - full stack boots successfully (with local port overrides) and services report healthy.
 
 ### Can Stay Stubbed
 

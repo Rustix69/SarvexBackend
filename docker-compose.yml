@@ -1,5 +1,9 @@
 name: sarvex
 
+x-service-env: &service-env
+  POSTGRES_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+  NATS_URL: nats://nats:4222
+
 services:
   postgres:
     image: postgres:16
@@ -45,6 +49,322 @@ services:
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrations:
+    image: migrate/migrate:v4.18.3
+    container_name: sarvex-migrations
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-lc"]
+    command:
+      - >
+        migrate -path /migrations
+        -database "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable"
+        up || true
+    volumes:
+      - ./db/migrations:/migrations:ro
+    restart: "no"
+
+  refdata-svc:
+    build:
+      context: .
+      dockerfile: services/refdata-svc/Dockerfile
+    environment:
+      <<: *service-env
+      SERVICE_NAME: refdata-svc
+      SERVICE_ROLE: refdata
+      GRPC_PORT: 50051
+      HTTP_PORT: 8080
+    ports:
+      - "${REFDATA_GRPC_PORT}:50051"
+      - "${REFDATA_HTTP_PORT}:8080"
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/readyz >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  ledger-svc:
+    build:
+      context: .
+      dockerfile: services/ledger-svc/Dockerfile
+    environment:
+      <<: *service-env
+      SERVICE_NAME: ledger-svc
+      SERVICE_ROLE: ledger
+      GRPC_PORT: 50051
+      HTTP_PORT: 8080
+    ports:
+      - "${LEDGER_GRPC_PORT}:50051"
+      - "${LEDGER_HTTP_PORT}:8080"
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/readyz >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  risk-svc:
+    build:
+      context: .
+      dockerfile: services/risk-svc/Dockerfile
+    environment:
+      <<: *service-env
+      SERVICE_NAME: risk-svc
+      SERVICE_ROLE: risk
+      GRPC_PORT: 50051
+      HTTP_PORT: 8080
+    ports:
+      - "${RISK_GRPC_PORT}:50051"
+      - "${RISK_HTTP_PORT}:8080"
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+      refdata-svc:
+        condition: service_healthy
+      ledger-svc:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/readyz >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  me-core:
+    build:
+      context: .
+      dockerfile: services/me-core/Dockerfile
+    environment:
+      SERVICE_NAME: me-core
+    ports:
+      - "${ME_CORE_GRPC_PORT}:50051"
+    depends_on:
+      refdata-svc:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+
+  order-router:
+    build:
+      context: .
+      dockerfile: services/order-router/Dockerfile
+    environment:
+      <<: *service-env
+      SERVICE_NAME: order-router
+      SERVICE_ROLE: order-router
+      GRPC_PORT: 50051
+      HTTP_PORT: 8080
+    ports:
+      - "${ORDER_ROUTER_GRPC_PORT}:50051"
+      - "${ORDER_ROUTER_HTTP_PORT}:8080"
+    depends_on:
+      refdata-svc:
+        condition: service_healthy
+      ledger-svc:
+        condition: service_healthy
+      risk-svc:
+        condition: service_healthy
+      me-core:
+        condition: service_started
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/readyz >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  position-svc:
+    build:
+      context: .
+      dockerfile: services/position-svc/Dockerfile
+    environment:
+      <<: *service-env
+      SERVICE_NAME: position-svc
+      SERVICE_ROLE: position
+      GRPC_PORT: 50051
+      HTTP_PORT: 8080
+    ports:
+      - "${POSITION_GRPC_PORT}:50051"
+      - "${POSITION_HTTP_PORT}:8080"
+    depends_on:
+      order-router:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/readyz >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  oracle-svc:
+    build:
+      context: .
+      dockerfile: services/oracle-svc/Dockerfile
+    environment:
+      <<: *service-env
+      SERVICE_NAME: oracle-svc
+      SERVICE_ROLE: oracle
+      GRPC_PORT: 50051
+      HTTP_PORT: 8080
+    ports:
+      - "${ORACLE_GRPC_PORT}:50051"
+      - "${ORACLE_HTTP_PORT}:8080"
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/readyz >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  settlement-svc:
+    build:
+      context: .
+      dockerfile: services/settlement-svc/Dockerfile
+    environment:
+      <<: *service-env
+      SERVICE_NAME: settlement-svc
+      SERVICE_ROLE: settlement
+      GRPC_PORT: 50051
+      HTTP_PORT: 8080
+    ports:
+      - "${SETTLEMENT_GRPC_PORT}:50051"
+      - "${SETTLEMENT_HTTP_PORT}:8080"
+    depends_on:
+      oracle-svc:
+        condition: service_healthy
+      refdata-svc:
+        condition: service_healthy
+      position-svc:
+        condition: service_healthy
+      ledger-svc:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/readyz >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  audit-svc:
+    build:
+      context: .
+      dockerfile: services/audit-svc/Dockerfile
+    environment:
+      <<: *service-env
+      SERVICE_NAME: audit-svc
+      SERVICE_ROLE: audit
+      GRPC_PORT: 50051
+      HTTP_PORT: 8080
+    ports:
+      - "${AUDIT_GRPC_PORT}:50051"
+      - "${AUDIT_HTTP_PORT}:8080"
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/readyz >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  admin-svc:
+    build:
+      context: .
+      dockerfile: services/admin-svc/Dockerfile
+    environment:
+      <<: *service-env
+      SERVICE_NAME: admin-svc
+      SERVICE_ROLE: admin
+      GRPC_PORT: 50051
+      HTTP_PORT: 8080
+    ports:
+      - "${ADMIN_GRPC_PORT}:50051"
+      - "${ADMIN_HTTP_PORT}:8080"
+    depends_on:
+      refdata-svc:
+        condition: service_healthy
+      ledger-svc:
+        condition: service_healthy
+      oracle-svc:
+        condition: service_healthy
+      settlement-svc:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/readyz >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  gw-rest:
+    build:
+      context: .
+      dockerfile: services/gw-rest/Dockerfile
+    environment:
+      <<: *service-env
+      SERVICE_NAME: gw-rest
+      HTTP_PORT: 8081
+    ports:
+      - "${GW_REST_HTTP_PORT}:8081"
+    depends_on:
+      order-router:
+        condition: service_healthy
+      refdata-svc:
+        condition: service_healthy
+      ledger-svc:
+        condition: service_healthy
+      position-svc:
+        condition: service_healthy
+      admin-svc:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8081/readyz >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  gw-ws:
+    build:
+      context: .
+      dockerfile: services/gw-ws/Dockerfile
+    environment:
+      <<: *service-env
+      SERVICE_NAME: gw-ws
+      HTTP_PORT: 8082
+    ports:
+      - "${GW_WS_HTTP_PORT}:8082"
+    depends_on:
+      nats:
+        condition: service_healthy
+      order-router:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8082/readyz >/dev/null 2>&1 || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 20

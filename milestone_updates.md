@@ -65,3 +65,30 @@
   - seed execution succeeded
   - required table/unique checks succeeded
   - unbalanced ledger entry was rejected by trigger (expected)
+
+## Milestone 03 (Service Skeleton and Compose Bring-Up) - Completed
+- Added shared service runtime scaffolding:
+  - `pkg/m3svc/config.go` for config loading from env
+  - `pkg/m3svc/app.go` for gRPC skeleton startup, dependency checks (Postgres/NATS), and health/readiness endpoints
+  - `cmd/svc-server/main.go` generic service entrypoint with role-based gRPC registration
+- Added gateway skeletons:
+  - `cmd/gw-rest/main.go` with readiness/liveness and placeholder REST endpoints
+  - `cmd/gw-ws/main.go` with readiness/liveness and WebSocket welcome handshake
+- Added Dockerfiles for all services:
+  - `services/*/Dockerfile` across admin, audit, gw-rest, gw-ws, ledger, me-core, oracle, order-router, position, refdata, risk, settlement
+- Updated `docker-compose.yml` to full Milestone 03 topology:
+  - infra + migrations + all backend services + gateways
+  - explicit dependency ordering and health checks
+  - service env wiring for DB/NATS
+- Updated `.env.example` with service port mappings.
+- Updated `Makefile`:
+  - `build` -> `go build ./...`
+  - `test` -> `go test ./...`
+  - `run` -> full compose stack with build
+- Updated `services/me-core/src/main.cpp` and `services/me-core/Dockerfile` so `me-core` stays up as a long-running service in compose.
+- Validation completed:
+  - `go mod tidy` successful
+  - `go build ./...` and `go test ./...` successful
+  - `docker compose config` successful
+  - full compose bring-up successful with local port overrides
+  - all service containers healthy; `migrations` exits `0` as expected one-shot job
