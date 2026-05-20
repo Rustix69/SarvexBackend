@@ -149,3 +149,25 @@
 - Validation completed:
   - `go test ./pkg/m3svc -v` passed against local Postgres
   - `go test ./...` passed
+
+## Milestone 06 (`me-core` Liquibook Scaffold) - Completed
+- Implemented `me-core` scaffold layer under `services/me-core/src/mecore/`:
+  - `sarva_order.h` (`SarvaOrder` with Liquibook order interface)
+  - `book_state.h` (`BookState` with one `DepthOrderBook` per ticker)
+  - `shard_state.h` (`ShardState` ownership maps + sequencer counters scaffold)
+  - `listener_bridge.h/.cpp` (Order/Trade/Depth callback bridge shell)
+  - `me_core_engine.h/.cpp` (`add_book` + `get_book_snapshot` placeholder)
+- Updated executable startup (`services/me-core/src/main.cpp`) to instantiate engine, create a demo book, and keep service process alive.
+- Updated CMake to Milestone 06 layering:
+  - `liquibook_headers` interface target
+  - `me_core_proto_headers` include target
+  - `me_core_lib` static library for core engine/listener code
+  - `me-core` executable linked to `me_core_lib`
+- Added protobuf compatibility shim:
+  - `services/me-core/src/mecore/proto_compat.h`
+  - Uses generated proto enums when compatible headers are available; falls back to local contract-kind enum to keep build green when proto runtime/header versions are mismatched.
+- Updated `services/me-core/Dockerfile` build deps for C++ scaffold compilation.
+- Validation completed:
+  - `docker compose ... up -d --build me-core` succeeds
+  - `me-core` container status: `Up`
+  - migrations job exits `0` in compose lifecycle

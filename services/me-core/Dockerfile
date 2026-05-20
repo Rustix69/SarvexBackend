@@ -1,5 +1,5 @@
 FROM alpine:3.20 AS builder
-RUN apk add --no-cache build-base cmake
+RUN apk add --no-cache build-base cmake protobuf-dev
 WORKDIR /app
 COPY liquibook ./liquibook
 COPY services/me-core ./services/me-core

@@ -19,7 +19,8 @@ The plan preserves the finalized architecture:
 - Milestone 3: Completed.
 - Milestone 4: Completed.
 - Milestone 5: Completed.
-- Next active milestone: Milestone 6 (`me-core` Liquibook Scaffold).
+- Milestone 6: Completed.
+- Next active milestone: Milestone 7 (Sequencer, Matching, Events, Snapshots).
 
 ## Implementation North Star
 
@@ -680,6 +681,29 @@ Do not build Liquibook examples, tests, web assets, or QuickFAST-related code in
 - YES/NO normalization.
 - LONG/SHORT normalization.
 - Reject unsupported Liquibook features.
+
+### Completion Evidence (2026-05-21)
+
+- Added `me-core` scaffold domain layer:
+  - `SarvaOrder` model (`services/me-core/src/mecore/sarva_order.h`)
+  - `BookState` + `ShardState` ownership/state boundaries
+  - `ListenerBridge` shell implementing order/trade/depth callbacks
+  - `MeCoreEngine` with `add_book` and `get_book_snapshot` placeholder behavior
+- Added stable ownership maps in `ShardState`:
+  - `books_by_ticker` for one-book-per-contract
+  - `orders_by_id` for durable order object ownership boundary
+- Added Liquibook-to-Sarvex boundary hooks:
+  - `DepthOrderBook<OrderPtr>` usage
+  - listener attachment for order/trade/depth callback capture
+- Updated CMake shape:
+  - `liquibook_headers` interface target
+  - `me_core_proto_headers` integration include target
+  - `me_core_lib` for core layer
+  - `me-core` executable linked to `me_core_lib`
+- Added runtime proto compatibility shim (`proto_compat.h`) to allow build when generated proto toolchain version and system protobuf headers differ.
+- Validation:
+  - `me-core` Docker build succeeds in compose.
+  - `me-core` container is running in stack (`Up`), migrations job exits `0`.
 
 ### Can Stay Stubbed
 
