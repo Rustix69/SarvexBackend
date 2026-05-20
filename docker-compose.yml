@@ -148,11 +148,17 @@ services:
   me-core:
     build:
       context: .
-      dockerfile: services/me-core/Dockerfile
+      dockerfile: services/order-router/Dockerfile
     environment:
       SERVICE_NAME: me-core
+      SERVICE_ROLE: matching
+      GRPC_PORT: 50051
+      HTTP_PORT: 8080
+      REQUIRE_DB: "false"
+      REQUIRE_NATS: "false"
     ports:
       - "${ME_CORE_GRPC_PORT}:50051"
+      - "18064:8080"
     depends_on:
       refdata-svc:
         condition: service_healthy

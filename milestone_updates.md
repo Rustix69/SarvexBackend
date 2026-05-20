@@ -357,3 +357,32 @@
 
 - Validation completed:
   - `go test ./...` passed
+
+## MVP Backend E2E Validation - Completed
+- Added repeatable live E2E test:
+  - `pkg/e2e/mvp_e2e_test.go`
+  - Run with: `go test -tags=e2e ./pkg/e2e -v`
+- Verified full MVP lifecycle against Docker Compose services:
+  - admin deposits
+  - REST login
+  - REST maker/taker order submission
+  - matching fill creation
+  - fill persistence
+  - fill ledger posting
+  - contract close
+  - admin oracle force-resolution
+  - settlement payout
+  - final contract state `SETTLED`
+- Fixed E2E blockers found during validation:
+  - Added concrete MVP `MatchingEngine` gRPC server for compose/runtime testing.
+  - Wired `me-core` compose service to expose the MVP matching role on gRPC.
+  - Fixed refdata scanner handling for nullable contract text fields.
+  - Fixed refdata scanner handling for nullable `close_global_seq`.
+  - Increased order-router matching RPC timeout for compose/gRPC connection startup.
+  - Fixed fill posting escrow account from demo placeholder to `UNSETTLED_TRADES:<ticker>`.
+  - Fixed maker order fill update enum assignment and stopped ignoring its SQL error.
+  - Fixed settlement catch-up prerequisite to require position catch-up through last fill at or before close.
+- Validation completed:
+  - `go test ./...` passed
+  - `go test -tags=e2e ./pkg/e2e -v` passed
+  - Docker Compose stack healthy on alternate host ports

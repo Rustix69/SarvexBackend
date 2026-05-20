@@ -277,19 +277,32 @@ FROM refdata.contracts WHERE ticker=$1`,
 func scanContract(row interface{ Scan(dest ...any) error }) (*sarvexv1.Contract, error) {
 	var c sarvexv1.Contract
 	var kind, state string
+	var question, underlying, settlementSource, oraclePolicy pgtype.Text
 	var listed, openAt, closeAt, expected pgtype.Timestamptz
+	var closeSeq pgtype.Int8
 	var settlementRule map[string]any
-	var closeSeq uint64
 	var lower, upper, mult *int64
 
 	err := row.Scan(
-		&c.Ticker, &c.EventTicker, &c.SeriesTicker, &kind, &c.Question, &c.Underlying,
+		&c.Ticker, &c.EventTicker, &c.SeriesTicker, &kind, &question, &underlying,
 		&c.TickSize, &c.MinPriceTicks, &c.MaxPriceTicks, &lower, &upper, &mult, &c.MaxOrderSize,
 		&c.PositionLimitPerUser, &state, &listed, &openAt, &closeAt, &expected,
-		&c.SettlementSource, &c.OraclePolicy, &settlementRule, &closeSeq,
+		&settlementSource, &oraclePolicy, &settlementRule, &closeSeq,
 	)
 	if err != nil {
 		return nil, err
+	}
+	if question.Valid {
+		c.Question = question.String
+	}
+	if underlying.Valid {
+		c.Underlying = underlying.String
+	}
+	if settlementSource.Valid {
+		c.SettlementSource = settlementSource.String
+	}
+	if oraclePolicy.Valid {
+		c.OraclePolicy = oraclePolicy.String
 	}
 	c.Kind = contractKindProto(kind)
 	c.State = contractStateProto(state)
@@ -318,7 +331,9 @@ func scanContract(row interface{ Scan(dest ...any) error }) (*sarvexv1.Contract,
 		s, _ := structpb.NewStruct(settlementRule)
 		c.SettlementRule = s
 	}
-	c.CloseGlobalSeq = closeSeq
+	if closeSeq.Valid && closeSeq.Int64 > 0 {
+		c.CloseGlobalSeq = uint64(closeSeq.Int64)
+	}
 	return &c, nil
 }
 

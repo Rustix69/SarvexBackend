@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -32,6 +33,9 @@ type ledgerServer struct {
 }
 type matchingEngineServer struct {
 	sarvexv1.UnimplementedMatchingEngineServer
+	mu     sync.Mutex
+	books  map[string]*demoBook
+	global uint64
 }
 type oracleServer struct {
 	sarvexv1.UnimplementedOracleServer
@@ -133,7 +137,7 @@ func registerByRole(server *grpc.Server, role string, app *App) {
 	case "ledger":
 		sarvexv1.RegisterLedgerServer(server, &ledgerServer{pg: app.pg, nc: app.nc})
 	case "matching":
-		sarvexv1.RegisterMatchingEngineServer(server, &matchingEngineServer{})
+		sarvexv1.RegisterMatchingEngineServer(server, newMatchingEngineServer())
 	case "oracle":
 		sarvexv1.RegisterOracleServer(server, &oracleServer{pg: app.pg, nc: app.nc})
 	case "order-router":

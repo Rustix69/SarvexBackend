@@ -295,7 +295,7 @@ func (s *orderRouterServer) submitToME(ctx context.Context, req *sarvexv1.Submit
 	}
 	defer conn.Close()
 	client := sarvexv1.NewMatchingEngineClient(conn)
-	cctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	cctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	return client.SubmitOrder(cctx, &sarvexv1.MeSubmitOrderRequest{
 		OrderId: orderID, UserId: req.GetUserId(), HoldId: holdID, Ticker: req.GetTicker(), Side: req.GetSide(), Action: req.GetAction(), PriceTicks: req.GetPriceTicks(), Count: req.GetCount(), Stp: req.GetStp(),
@@ -362,9 +362,20 @@ WHERE order_id=$6`, newStatus, newFilled, newRemaining, avg, holdID, orderID)
 		return mapPgErr(err)
 	}
 	for _, f := range fills {
-		_, _ = tx.Exec(ctx, `UPDATE orders.orders SET filled_count=filled_count+$1, remaining_count=GREATEST(remaining_count-$1,0), status=CASE WHEN remaining_count-$1<=0 THEN 'FILLED' ELSE 'PARTIAL' END, updated_at=now() WHERE order_id=$2`, f.GetCount(), f.GetMakerOrderId())
+		_, err = tx.Exec(ctx, `UPDATE orders.orders
+SET filled_count=filled_count+$1,
+remaining_count=GREATEST(remaining_count-$1,0),
+status=(CASE WHEN remaining_count-$1<=0 THEN 'FILLED' ELSE 'PARTIAL' END)::orders.order_status,
+updated_at=now()
+WHERE order_id=$2`, f.GetCount(), f.GetMakerOrderId())
+		if err != nil {
+			return mapPgErr(err)
+		}
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return mapPgErr(err)
+	}
+	return nil
 }
 
 func markRejected(ctx context.Context, pool *pgxpool.Pool, orderID, code, reason string) error {
@@ -444,7 +455,7 @@ func mapFillsForResponse(orderID string, in []*sarvexv1.MeFill) []*sarvexv1.Fill
 }
 
 func (s *orderRouterServer) runFillPosterOnce(ctx context.Context) error {
-	rows, err := s.pg.Query(ctx, `SELECT f.fill_id, f.maker_hold_id, f.taker_hold_id, f.price_ticks, f.count, f.maker_side::text, f.taker_side::text
+	rows, err := s.pg.Query(ctx, `SELECT f.fill_id, f.ticker, f.maker_hold_id, f.taker_hold_id, f.price_ticks, f.count, f.maker_side::text, f.taker_side::text
 FROM orders.fill_posting_outbox o
 JOIN orders.fills f ON f.fill_id=o.fill_id
 WHERE o.status='PENDING' AND o.next_attempt_at <= now()
@@ -456,20 +467,21 @@ LIMIT 100`)
 	defer rows.Close()
 	ledger := &ledgerServer{pg: s.pg}
 	for rows.Next() {
-		var fillID, makerHold, takerHold, makerSide, takerSide string
+		var fillID, ticker, makerHold, takerHold, makerSide, takerSide string
 		var price, count int64
-		if err := rows.Scan(&fillID, &makerHold, &takerHold, &price, &count, &makerSide, &takerSide); err != nil {
+		if err := rows.Scan(&fillID, &ticker, &makerHold, &takerHold, &price, &count, &makerSide, &takerSide); err != nil {
 			return mapPgErr(err)
 		}
 		amt := price * count * 10000
 		if amt < 0 {
 			amt = 0
 		}
+		dest := "LIAB:HOUSE:UNSETTLED_TRADES:" + ticker
 		if makerHold != "" {
-			_, _ = ledger.CommitHold(ctx, &sarvexv1.CommitHoldRequest{IdempotencyKey: "fill:" + fillID + ":maker", HoldId: makerHold, CommitAmountMicroUsdc: amt, ReleaseAmountMicroUsdc: 0, DestinationAccountCode: "LIAB:HOUSE:UNSETTLED_TRADES:DEMO", ReasonCode: "FILL"})
+			_, _ = ledger.CommitHold(ctx, &sarvexv1.CommitHoldRequest{IdempotencyKey: "fill:" + fillID + ":maker", HoldId: makerHold, CommitAmountMicroUsdc: amt, ReleaseAmountMicroUsdc: 0, DestinationAccountCode: dest, ReasonCode: "FILL"})
 		}
 		if takerHold != "" {
-			_, _ = ledger.CommitHold(ctx, &sarvexv1.CommitHoldRequest{IdempotencyKey: "fill:" + fillID + ":taker", HoldId: takerHold, CommitAmountMicroUsdc: amt, ReleaseAmountMicroUsdc: 0, DestinationAccountCode: "LIAB:HOUSE:UNSETTLED_TRADES:DEMO", ReasonCode: "FILL"})
+			_, _ = ledger.CommitHold(ctx, &sarvexv1.CommitHoldRequest{IdempotencyKey: "fill:" + fillID + ":taker", HoldId: takerHold, CommitAmountMicroUsdc: amt, ReleaseAmountMicroUsdc: 0, DestinationAccountCode: dest, ReasonCode: "FILL"})
 		}
 		_, _ = s.pg.Exec(ctx, `UPDATE orders.fills SET ledger_post_status='POSTED' WHERE fill_id=$1`, fillID)
 		_, _ = s.pg.Exec(ctx, `UPDATE orders.fill_posting_outbox SET status='POSTED', attempts=attempts+1, updated_at=now() WHERE fill_id=$1`, fillID)

@@ -49,7 +49,9 @@ FROM refdata.contracts WHERE ticker=$1`, req.GetTicker()).Scan(&c.kind, &c.state
 	}
 	var posAppliedSeq int64
 	_ = s.pg.QueryRow(ctx, `SELECT COALESCE(last_global_seq,0) FROM position.consumer_offsets WHERE stream_name='exec.fills'`).Scan(&posAppliedSeq)
-	if posAppliedSeq < c.closeSeq {
+	var requiredPositionSeq int64
+	_ = s.pg.QueryRow(ctx, `SELECT COALESCE(MAX(global_seq),0) FROM orders.fills WHERE ticker=$1 AND global_seq <= $2`, req.GetTicker(), c.closeSeq).Scan(&requiredPositionSeq)
+	if posAppliedSeq < requiredPositionSeq {
 		return nil, status.Error(codes.FailedPrecondition, "position consumer has not caught up through close_global_seq")
 	}
 
