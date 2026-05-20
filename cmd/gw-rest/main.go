@@ -29,6 +29,7 @@ type errResp struct {
 type gateway struct {
 	orderClient    sarvexv1.OrderRouterClient
 	ledgerClient   sarvexv1.LedgerClient
+	matchClient    sarvexv1.MatchingEngineClient
 	positionClient sarvexv1.PositionClient
 	refClient      sarvexv1.RefDataClient
 	mu             sync.Mutex
@@ -56,6 +57,8 @@ func main() {
 	defer orderConn.Close()
 	ledgerConn := mustDial(getenv("LEDGER_ADDR", "ledger-svc:50051"))
 	defer ledgerConn.Close()
+	matchConn := mustDial(getenv("MATCHING_ADDR", "me-core:50051"))
+	defer matchConn.Close()
 	positionConn := mustDial(getenv("POSITION_ADDR", "position-svc:50051"))
 	defer positionConn.Close()
 	refConn := mustDial(getenv("REFDATA_ADDR", "refdata-svc:50051"))
@@ -64,17 +67,25 @@ func main() {
 	gw := &gateway{
 		orderClient:    sarvexv1.NewOrderRouterClient(orderConn),
 		ledgerClient:   sarvexv1.NewLedgerClient(ledgerConn),
+		matchClient:    sarvexv1.NewMatchingEngineClient(matchConn),
 		positionClient: sarvexv1.NewPositionClient(positionConn),
 		refClient:      sarvexv1.NewRefDataClient(refConn),
 		idem:           map[string]cachedResp{},
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK); _, _ = w.Write([]byte("ok")) })
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK); _, _ = w.Write([]byte("ready")) })
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ready"))
+	})
 	mux.HandleFunc("/v1/auth/login", gw.login)
 	mux.HandleFunc("/v1/orders", gw.withAuth(gw.orders))
 	mux.HandleFunc("/v1/orders/", gw.withAuth(gw.orderByID))
+	mux.HandleFunc("/v1/markets", gw.marketsRoot)
 	mux.HandleFunc("/v1/markets/", gw.markets)
 	mux.HandleFunc("/v1/account/balance", gw.withAuth(gw.balance))
 	mux.HandleFunc("/v1/account/history", gw.withAuth(gw.history))
@@ -99,7 +110,9 @@ func (g *gateway) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var in struct{ UserID string `json:"user_id"` }
+	var in struct {
+		UserID string `json:"user_id"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.UserID) == "" {
 		writeErr(w, http.StatusBadRequest, "INVALID_ARGUMENT", "user_id is required")
 		return
@@ -219,6 +232,31 @@ func (g *gateway) orderByID(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "not found", http.StatusNotFound)
 }
 
+func (g *gateway) marketsRoot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	resp, err := g.refClient.ListContracts(ctx, &sarvexv1.ListContractsRequest{
+		State:        contractStateFromString(r.URL.Query().Get("state")),
+		SeriesTicker: r.URL.Query().Get("series_ticker"),
+		Limit:        int32(limit),
+		Cursor:       r.URL.Query().Get("cursor"),
+	})
+	if err != nil {
+		writeGrpcErr(w, err)
+		return
+	}
+	if r.URL.Query().Get("include_test") != "true" {
+		resp.Contracts = publicContracts(resp.GetContracts())
+		resp.NextCursor = ""
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 func (g *gateway) markets(w http.ResponseWriter, r *http.Request) {
 	p := strings.TrimPrefix(r.URL.Path, "/v1/markets/")
 	parts := strings.Split(p, "/")
@@ -231,6 +269,16 @@ func (g *gateway) markets(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	if len(parts) == 1 {
 		resp, err := g.refClient.GetContract(ctx, &sarvexv1.GetContractRequest{Ticker: ticker})
+		if err != nil {
+			writeGrpcErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "orderbook" {
+		depth, _ := strconv.Atoi(r.URL.Query().Get("depth"))
+		resp, err := g.matchClient.GetBookSnapshot(ctx, &sarvexv1.GetBookSnapshotRequest{Ticker: ticker, Depth: int32(depth)})
 		if err != nil {
 			writeGrpcErr(w, err)
 			return
@@ -421,6 +469,34 @@ func tifFromString(v string) sarvexv1.TimeInForce {
 	default:
 		return sarvexv1.TimeInForce_TIME_IN_FORCE_GTC
 	}
+}
+
+func contractStateFromString(v string) sarvexv1.ContractState {
+	switch strings.ToUpper(strings.TrimSpace(v)) {
+	case "OPEN":
+		return sarvexv1.ContractState_CONTRACT_STATE_OPEN
+	case "CLOSED":
+		return sarvexv1.ContractState_CONTRACT_STATE_CLOSED
+	case "SETTLED":
+		return sarvexv1.ContractState_CONTRACT_STATE_SETTLED
+	case "HALTED":
+		return sarvexv1.ContractState_CONTRACT_STATE_HALTED
+	case "CANCELLED":
+		return sarvexv1.ContractState_CONTRACT_STATE_CANCELLED
+	default:
+		return sarvexv1.ContractState_CONTRACT_STATE_UNSPECIFIED
+	}
+}
+
+func publicContracts(in []*sarvexv1.Contract) []*sarvexv1.Contract {
+	out := make([]*sarvexv1.Contract, 0, len(in))
+	for _, c := range in {
+		if strings.HasPrefix(c.GetTicker(), "TEST-") || strings.HasPrefix(c.GetEventTicker(), "TEST-") || strings.HasPrefix(c.GetSeriesTicker(), "TEST-") {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 func getenv(k, def string) string {

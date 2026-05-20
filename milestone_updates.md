@@ -386,3 +386,36 @@
   - `go test ./...` passed
   - `go test -tags=e2e ./pkg/e2e -v` passed
   - Docker Compose stack healthy on alternate host ports
+
+## MVP Demo Liquidity Simulation - Completed
+- Added frontend/demo liquidity support so markets do not look empty during investor walkthroughs.
+- Added simulator command in `cmd/demo-sim/main.go`:
+  - creates `u_sim_001...u_sim_N` demo users and risk limits
+  - funds simulated users through `ledger-svc.AdminCreditDeposit`
+  - logs in through `POST /v1/auth/login`
+  - submits maker/taker orders through real `POST /v1/orders`
+  - generates visible order book depth and recent fills without direct fill insertion
+  - can reopen the matching book with `-reset-book` after close/settlement demos
+  - supports one-shot and continuous modes
+- Added runner script:
+  - `scripts/run-demo-sim.sh`
+  - default REST: `http://localhost:19080`
+  - default ledger gRPC: `localhost:15062`
+  - default matching gRPC: `localhost:15064`
+  - default Postgres DSN: `postgres://sarvaex:sarvaex@localhost:15432/sarvaex?sslmode=disable`
+- Added REST frontend reads in `cmd/gw-rest/main.go`:
+  - `GET /v1/markets?state=OPEN&limit=10`
+  - `GET /v1/markets/{ticker}/orderbook?depth=10`
+  - test fixture markets are hidden by default unless `include_test=true`
+- Completed MVP order book snapshot support in `pkg/m3svc/matching_server.go`:
+  - aggregates resting BUY orders into bid levels
+  - aggregates resting SELL orders into ask levels
+  - sorts bids descending and asks ascending
+  - honors snapshot depth
+- Live verification completed:
+  - `go run ./cmd/demo-sim -users 12 -rounds 2 -fund-usdc 0 -interval 100ms -reset-book` populated the book
+  - `GET /v1/markets/RBI-JUN26-CUT25/orderbook?depth=5` returned bid/ask depth
+  - `GET /v1/markets/RBI-JUN26-CUT25/fills?limit=5` returned simulator-generated fills
+- Validation completed:
+  - `go test ./...` passed
+  - `go test -count=1 -tags=e2e ./pkg/e2e -v` passed after simulator/orderbook changes

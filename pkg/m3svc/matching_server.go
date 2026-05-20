@@ -109,24 +109,24 @@ func (s *matchingEngineServer) SubmitOrder(ctx context.Context, req *sarvexv1.Me
 		incoming.openQty -= qty
 		fillID := req.GetTicker() + ":" + utoa(b.contractSeq) + ":0"
 		resp.Fills = append(resp.Fills, &sarvexv1.MeFill{
-			FillId:         fillID,
-			MakerOrderId:   maker.orderID,
-			TakerOrderId:   incoming.orderID,
-			MakerUserId:    maker.userID,
-			TakerUserId:    incoming.userID,
-			PriceTicks:     maker.priceTicks,
-			Count:          qty,
-			AggressorSide:  incoming.side,
-			Ticker:         req.GetTicker(),
-			GlobalSeq:      s.global,
-			ContractSeq:    b.contractSeq,
-			Ts:             timestamppb.Now(),
-			MakerHoldId:    maker.holdID,
-			TakerHoldId:    incoming.holdID,
-			MakerSide:      maker.side,
-			MakerAction:    maker.action,
-			TakerSide:      incoming.side,
-			TakerAction:    incoming.action,
+			FillId:        fillID,
+			MakerOrderId:  maker.orderID,
+			TakerOrderId:  incoming.orderID,
+			MakerUserId:   maker.userID,
+			TakerUserId:   incoming.userID,
+			PriceTicks:    maker.priceTicks,
+			Count:         qty,
+			AggressorSide: incoming.side,
+			Ticker:        req.GetTicker(),
+			GlobalSeq:     s.global,
+			ContractSeq:   b.contractSeq,
+			Ts:            timestamppb.Now(),
+			MakerHoldId:   maker.holdID,
+			TakerHoldId:   incoming.holdID,
+			MakerSide:     maker.side,
+			MakerAction:   maker.action,
+			TakerSide:     incoming.side,
+			TakerAction:   incoming.action,
 		})
 		if maker.openQty == 0 {
 			delete(b.orders, maker.orderID)
@@ -166,7 +166,29 @@ func (s *matchingEngineServer) GetBookSnapshot(ctx context.Context, req *sarvexv
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	b := s.ensureBook(req.GetTicker())
-	return &sarvexv1.BookSnapshot{Ticker: req.GetTicker(), Seq: b.contractSeq, Ts: timestamppb.Now()}, nil
+	depth := int(req.GetDepth())
+	if depth <= 0 {
+		depth = 25
+	}
+	bids := map[int64]*sarvexv1.PriceLevel{}
+	asks := map[int64]*sarvexv1.PriceLevel{}
+	for _, o := range b.orders {
+		levels := bids
+		if o.action == sarvexv1.Action_ACTION_SELL {
+			levels = asks
+		}
+		lvl := levels[o.priceTicks]
+		if lvl == nil {
+			lvl = &sarvexv1.PriceLevel{PriceTicks: o.priceTicks}
+			levels[o.priceTicks] = lvl
+		}
+		lvl.TotalQty += o.openQty
+		lvl.OrderCount++
+	}
+	resp := &sarvexv1.BookSnapshot{Ticker: req.GetTicker(), Seq: b.contractSeq, Ts: timestamppb.Now()}
+	resp.Bids = priceLevels(bids, depth, true)
+	resp.Asks = priceLevels(asks, depth, false)
+	return resp, nil
 }
 
 func (s *matchingEngineServer) StreamExecutions(req *sarvexv1.StreamExecutionsRequest, stream sarvexv1.MatchingEngine_StreamExecutionsServer) error {
@@ -190,6 +212,27 @@ func crosses(taker, maker *demoMEOrder) bool {
 		return taker.priceTicks >= maker.priceTicks
 	}
 	return taker.priceTicks <= maker.priceTicks
+}
+
+func priceLevels(src map[int64]*sarvexv1.PriceLevel, depth int, desc bool) []*sarvexv1.PriceLevel {
+	prices := make([]int64, 0, len(src))
+	for p := range src {
+		prices = append(prices, p)
+	}
+	sort.Slice(prices, func(i, j int) bool {
+		if desc {
+			return prices[i] > prices[j]
+		}
+		return prices[i] < prices[j]
+	})
+	if len(prices) > depth {
+		prices = prices[:depth]
+	}
+	out := make([]*sarvexv1.PriceLevel, 0, len(prices))
+	for _, p := range prices {
+		out = append(out, src[p])
+	}
+	return out
 }
 
 func utoa(v uint64) string {
