@@ -38,3 +38,30 @@
   `Position.ListPositionsByContract` includes `min_global_seq`,
   `OrderRouter.ListFills` supports replay fields,
   Ledger hold APIs include idempotency keys on place/release/commit.
+
+## Milestone 02 (Database Migrations and Seeds) - Completed
+- Added full schema migration set:
+  - `db/migrations/000001_milestone2_init.up.sql`
+  - `db/migrations/000001_milestone2_init.down.sql`
+- Implemented all required service schemas:
+  `refdata`, `users`, `ledger`, `orders`, `risk`, `position`, `oracle`, `settlement`, `audit`.
+- Implemented required persistence invariants:
+  - ledger balanced transaction constraint trigger (`ledger.assert_tx_balanced`)
+  - append-only protection on `ledger.entries` (update/delete blocked)
+  - `orders.orders` unique `(user_id, client_order_id)`
+  - `orders.fills.global_seq` unique and `(ticker, ticker_seq)` unique
+  - `orders.fill_posting_outbox` table
+  - `ledger.hold_operations` table
+  - `position.consumer_offsets` and `position.applied_fills` tables
+  - `settlement.settlement_payouts.idempotency_key` unique
+- Replaced seed placeholders with real seed data:
+  - `db/seed/contracts.sql`
+  - `db/seed/demo_users.sql`
+  - `db/seed/house_accounts.sql`
+- Wired executable seed script (`scripts/seed-demo-data.sh`) to apply all seed SQL via `psql`.
+- End-to-end validation performed against local Postgres (compose on alternate ports):
+  - migration `up` succeeded
+  - migration `down` then `up` succeeded
+  - seed execution succeeded
+  - required table/unique checks succeeded
+  - unbalanced ledger entry was rejected by trigger (expected)

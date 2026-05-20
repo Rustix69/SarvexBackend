@@ -15,7 +15,8 @@ The plan preserves the finalized architecture:
 
 - Milestone 0: Completed.
 - Milestone 1: Completed.
-- Next active milestone: Milestone 2 (Database Migrations and Seeds).
+- Milestone 2: Completed.
+- Next active milestone: Milestone 3 (Service Skeleton And Compose Bring-Up).
 
 ## Implementation North Star
 
