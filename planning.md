@@ -1141,6 +1141,40 @@ Milestones 5, 8, and 9.
 
 ## Milestone 11: Close, Oracle, Settlement
 
+### Status
+
+Completed in current codebase scope with:
+- Oracle implementation in `pkg/m3svc/oracle_server.go`
+- Settlement implementation in `pkg/m3svc/settlement_server.go`
+- Close/hold-release integration in `pkg/m3svc/refdata_server.go`
+- Settlement finalized-resolution worker in `pkg/m3svc/milestone9_spine.go`
+- Role wiring in `pkg/m3svc/app.go`
+- Passing validation: `go test ./...`
+
+### Delivered In This Milestone
+
+- Coordinated contract close flow:
+  - `OPEN -> CLOSED` transition path calls `me-core.CloseBook` (best effort)
+  - persists `close_global_seq`
+  - releases remaining holds for active orders
+  - marks active ticker orders terminal (`EXPIRED`)
+- Admin oracle resolution support:
+  - propose/finalize/get/force-resolution gRPC methods
+  - emits `oracle.resolutions.finalized.<event_ticker>` on finalize
+- Settlement worker:
+  - subscribes to finalized oracle subject
+  - settles matching closed/resolving contracts
+- Payout logic:
+  - binary payout formulas
+  - scalar payout formulas using integer arithmetic with bounds/multiplier
+- Payout intents and postings:
+  - persists `settlement.settlement_payouts`
+  - posts idempotent ledger payouts keyed as `settlement:<ticker>:<user_id>`
+  - runs rounding sweep posting path
+- Lifecycle completion:
+  - settlement enforces prerequisites then moves `CLOSED -> RESOLVING -> SETTLED`
+  - `GetSettlement` returns settlement summary from persisted state
+
 ### Objective
 
 Complete the contract lifecycle safely.

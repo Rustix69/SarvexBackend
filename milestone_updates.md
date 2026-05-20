@@ -309,3 +309,51 @@
 
 - Validation completed:
   - `go test ./...` passed
+
+## Milestone 11 (Close, Oracle, Settlement) - Completed
+- Implemented Oracle service in `pkg/m3svc/oracle_server.go`:
+  - `ProposeResolution`
+  - `FinalizeResolution`
+  - `GetResolution`
+  - `AdminForceResolution`
+- Oracle behavior implemented:
+  - persists attestations + resolution state in `oracle.*` tables
+  - finalized resolutions are idempotent
+  - publishes `oracle.resolutions.finalized.<event_ticker>` on finalize
+
+- Implemented Settlement service in `pkg/m3svc/settlement_server.go`:
+  - `SettleContract`
+  - `GetSettlement`
+- Settlement behavior implemented:
+  - enforces prerequisites:
+    - `close_global_seq` must exist
+    - all fills through close seq must be ledger-posted
+    - no active (`PENDING`/`OPEN`/`PARTIAL`) orders remain
+    - position consumer offset must be caught up through close seq
+    - finalized oracle resolution required
+  - transitions contract lifecycle:
+    - `CLOSED -> RESOLVING -> SETTLED`
+  - computes payouts using integer math:
+    - binary YES/NO winner payout
+    - scalar payout via bounds + multiplier
+  - writes payout intents in `settlement.settlement_payouts`
+  - posts idempotent ledger payouts with key `settlement:<ticker>:<user_id>`
+  - executes rounding sweep posting path
+
+- Implemented close coordination in `pkg/m3svc/refdata_server.go`:
+  - enhanced `TransitionState` for `CONTRACT_STATE_CLOSED`:
+    - calls `me-core.CloseBook` (best-effort) to fetch `close_global_seq`
+    - persists `close_global_seq` and `close_at`
+    - releases remaining holds for active orders on ticker with deterministic idempotency keys
+    - marks active ticker orders terminal (`EXPIRED`)
+
+- Worker wiring completed:
+  - `pkg/m3svc/milestone9_spine.go` adds `runSettlementWorker`:
+    - subscribes to `oracle.resolutions.finalized.*`
+    - finds affected closed/resolving contracts
+    - runs settlement automatically
+  - `pkg/m3svc/app.go` starts settlement worker for `SERVICE_ROLE=settlement`
+  - `pkg/m3svc/app.go` now wires concrete Oracle/Settlement servers with DB/NATS deps
+
+- Validation completed:
+  - `go test ./...` passed

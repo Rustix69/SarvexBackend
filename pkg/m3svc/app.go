@@ -35,6 +35,8 @@ type matchingEngineServer struct {
 }
 type oracleServer struct {
 	sarvexv1.UnimplementedOracleServer
+	pg *pgxpool.Pool
+	nc *nats.Conn
 }
 type orderRouterServer struct {
 	sarvexv1.UnimplementedOrderRouterServer
@@ -56,6 +58,9 @@ type riskServer struct {
 }
 type settlementServer struct {
 	sarvexv1.UnimplementedSettlementServer
+	pg *pgxpool.Pool
+	nc *nats.Conn
+	cfg Config
 }
 
 func RunGRPC(ctx context.Context, cfg Config, role string) error {
@@ -130,7 +135,7 @@ func registerByRole(server *grpc.Server, role string, app *App) {
 	case "matching":
 		sarvexv1.RegisterMatchingEngineServer(server, &matchingEngineServer{})
 	case "oracle":
-		sarvexv1.RegisterOracleServer(server, &oracleServer{})
+		sarvexv1.RegisterOracleServer(server, &oracleServer{pg: app.pg, nc: app.nc})
 	case "order-router":
 		sarvexv1.RegisterOrderRouterServer(server, &orderRouterServer{pg: app.pg, cfg: app.cfg, nc: app.nc})
 	case "position":
@@ -140,7 +145,7 @@ func registerByRole(server *grpc.Server, role string, app *App) {
 	case "risk":
 		sarvexv1.RegisterRiskServer(server, &riskServer{pg: app.pg})
 	case "settlement":
-		sarvexv1.RegisterSettlementServer(server, &settlementServer{})
+		sarvexv1.RegisterSettlementServer(server, &settlementServer{pg: app.pg, nc: app.nc, cfg: app.cfg})
 	}
 }
 
@@ -190,6 +195,10 @@ func startRoleWorkers(ctx context.Context, role string, app *App) {
 	case "audit":
 		if app.pg != nil && app.nc != nil {
 			go runAuditConsumer(ctx, app.pg, app.nc)
+		}
+	case "settlement":
+		if app.pg != nil && app.nc != nil {
+			go runSettlementWorker(ctx, app.pg, app.nc)
 		}
 	}
 }

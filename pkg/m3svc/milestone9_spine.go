@@ -159,3 +159,25 @@ func runAuditConsumer(ctx context.Context, pg *pgxpool.Pool, nc *nats.Conn) {
 	_, _ = nc.Subscribe("ledger.events", func(msg *nats.Msg) { write("ledger.events", msg.Data) })
 	<-ctx.Done()
 }
+
+func runSettlementWorker(ctx context.Context, pg *pgxpool.Pool, nc *nats.Conn) {
+	_, _ = nc.Subscribe("oracle.resolutions.finalized.*", func(msg *nats.Msg) {
+		eventTicker := strings.TrimPrefix(msg.Subject, "oracle.resolutions.finalized.")
+		if eventTicker == "" {
+			return
+		}
+		rows, err := pg.Query(ctx, `SELECT ticker FROM refdata.contracts WHERE event_ticker=$1 AND state IN ('CLOSED','RESOLVING')`, eventTicker)
+		if err != nil {
+			return
+		}
+		defer rows.Close()
+		s := &settlementServer{pg: pg, nc: nc}
+		for rows.Next() {
+			var ticker string
+			if err := rows.Scan(&ticker); err == nil {
+				_, _ = s.SettleContract(ctx, &sarvexv1.SettleContractRequest{Ticker: ticker, EventTicker: eventTicker})
+			}
+		}
+	})
+	<-ctx.Done()
+}

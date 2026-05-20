@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	sarvexv1 "github.com/sarvex/proto/gen/go/sarvex/v1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -101,9 +103,23 @@ func (s *refDataServer) TransitionState(ctx context.Context, req *sarvexv1.Trans
 	}
 
 	newState := contractStateDB(req.GetNewState())
+	var closeSeq int64
+	if req.GetNewState() == sarvexv1.ContractState_CONTRACT_STATE_CLOSED {
+		var err error
+		closeSeq, err = s.closeBookAndReleaseHolds(ctx, req.GetTicker())
+		if err != nil {
+			return nil, err
+		}
+	}
 	_, err = tx.Exec(ctx, `UPDATE refdata.contracts SET state=$1::refdata.contract_state, updated_at=now() WHERE ticker=$2`, newState, req.GetTicker())
 	if err != nil {
 		return nil, mapPgErr(err)
+	}
+	if req.GetNewState() == sarvexv1.ContractState_CONTRACT_STATE_CLOSED {
+		_, err = tx.Exec(ctx, `UPDATE refdata.contracts SET close_global_seq=$1, close_at=COALESCE(close_at,now()) WHERE ticker=$2`, closeSeq, req.GetTicker())
+		if err != nil {
+			return nil, mapPgErr(err)
+		}
 	}
 
 	_, err = tx.Exec(ctx,
@@ -118,6 +134,39 @@ VALUES ($1,$2::refdata.contract_state,$3::refdata.contract_state,$4,$5)`,
 		return nil, mapPgErr(err)
 	}
 	return &emptypb.Empty{}, nil
+}
+
+func (s *refDataServer) closeBookAndReleaseHolds(ctx context.Context, ticker string) (int64, error) {
+	closeSeq := time.Now().UnixNano()
+	conn, err := grpc.NewClient(getenv("MATCHING_ENGINE_ADDR", "me-core:50051"), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err == nil {
+		defer conn.Close()
+		me := sarvexv1.NewMatchingEngineClient(conn)
+		cctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		if resp, err := me.CloseBook(cctx, &sarvexv1.CloseBookRequest{Ticker: ticker}); err == nil && resp.GetCloseGlobalSeq() > 0 {
+			closeSeq = int64(resp.GetCloseGlobalSeq())
+		}
+	}
+	rows, err := s.pg.Query(ctx, `SELECT order_id, hold_id FROM orders.orders WHERE ticker=$1 AND status IN ('PENDING','OPEN','PARTIAL')`, ticker)
+	if err != nil {
+		return 0, mapPgErr(err)
+	}
+	defer rows.Close()
+	ledger := &ledgerServer{pg: s.pg}
+	for rows.Next() {
+		var orderID, holdID string
+		if err := rows.Scan(&orderID, &holdID); err != nil {
+			continue
+		}
+		var remain int64
+		_ = s.pg.QueryRow(ctx, `SELECT GREATEST(amount_micro_usdc-committed_micro_usdc-released_micro_usdc,0) FROM ledger.holds WHERE hold_id=$1`, holdID).Scan(&remain)
+		if holdID != "" && remain > 0 {
+			_, _ = ledger.ReleaseHold(ctx, &sarvexv1.ReleaseHoldRequest{IdempotencyKey: "release:" + orderID + ":BOOK_CLOSED", HoldId: holdID, AmountMicroUsdc: remain, ReasonCode: "BOOK_CLOSED"})
+		}
+		_, _ = s.pg.Exec(ctx, `UPDATE orders.orders SET status='EXPIRED', updated_at=now() WHERE order_id=$1 AND status IN ('PENDING','OPEN','PARTIAL')`, orderID)
+	}
+	return closeSeq, nil
 }
 
 func (s *refDataServer) UpsertContract(ctx context.Context, req *sarvexv1.UpsertContractRequest) (*sarvexv1.Contract, error) {
