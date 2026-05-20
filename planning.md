@@ -20,7 +20,8 @@ The plan preserves the finalized architecture:
 - Milestone 4: Completed.
 - Milestone 5: Completed.
 - Milestone 6: Completed.
-- Next active milestone: Milestone 7 (Sequencer, Matching, Events, Snapshots).
+- Milestone 7: Completed.
+- Next active milestone: Milestone 8 (Order Router And Fill Durability).
 
 ## Implementation North Star
 
@@ -783,6 +784,28 @@ Milestone 6.
 - FOK either fully fills or does not mutate.
 - Snapshot plus deltas reconstructs book.
 - Same command list replay produces same fills.
+
+### Completion Evidence (2026-05-21)
+
+- Added sequencer-based command architecture in `me-core`:
+  - inbound command queue (`std::deque` + mutex/cv)
+  - dedicated sequencer thread (`sequencer_loop`)
+  - command processing for `AddBook`, `SubmitOrder`, `CancelOrder`, `CloseBook`, `GetBookSnapshot`
+- Implemented sequence assignment semantics:
+  - `global_seq` increments before Liquibook mutation
+  - `contract_seq` increments per-ticker before mutation
+- Implemented core submit/cancel/close behavior in `MeCoreEngine`:
+  - post-only pre-check (`POST_ONLY_WOULD_MATCH`)
+  - IOC/FOK scaffold behavior
+  - deterministic fill-id construction from `(ticker, contract_seq, fill_index)`
+  - close-book returns `close_global_seq` + `close_contract_seq`
+- Implemented snapshot path from current book state with sequencer-owned `contract_seq`.
+- Callback boundary preserved:
+  - Liquibook callbacks only append listener events; no DB/NATS/gRPC side effects in listener methods.
+- Build/runtime validation:
+  - `me-core` compiles in Docker via compose
+  - container starts and stays `Up`
+  - startup log confirms submit path + sequence assignment (`submit.accepted=true seq=1/1`)
 
 ### Can Stay Stubbed
 

@@ -19,12 +19,24 @@ int main() {
   }
 
   auto snap = engine.get_book_snapshot("RBI-JUN26-CUT25", 10);
-  std::cout << "Sarvex me-core Milestone 6 scaffold running";
+  auto submit = engine.submit_order(sarvex::me::SubmitOrderRequestView{
+      .order_id = "demo-order-1",
+      .user_id = "u_demo",
+      .hold_id = "hold_demo",
+      .ticker = "RBI-JUN26-CUT25",
+      .price_ticks = 50,
+      .qty = 10,
+      .is_buy = true,
+  });
+
+  std::cout << "Sarvex me-core Milestone 7 sequencer running";
   if (snap.has_value()) {
     std::cout << " | ticker=" << snap->ticker
               << " bids=" << snap->bids.size()
               << " asks=" << snap->asks.size();
   }
+  std::cout << " | submit.accepted=" << (submit.accepted ? "true" : "false")
+            << " seq=" << submit.global_seq << "/" << submit.contract_seq;
   std::cout << std::endl;
 
   while (true) {

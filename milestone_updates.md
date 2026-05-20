@@ -171,3 +171,28 @@
   - `docker compose ... up -d --build me-core` succeeds
   - `me-core` container status: `Up`
   - migrations job exits `0` in compose lifecycle
+
+## Milestone 07 (Sequencer, Matching, Events, Snapshots) - Completed
+- Upgraded `services/me-core/src/mecore/me_core_engine.h/.cpp` from static scaffold to sequencer-driven engine:
+  - command queue and worker thread
+  - serialized single-writer command processing
+  - typed command handlers for:
+    - `AddBook`
+    - `SubmitOrder`
+    - `CancelOrder`
+    - `CloseBook`
+    - `GetBookSnapshot`
+- Implemented sequence assignment before Liquibook mutation:
+  - `global_seq` and `contract_seq` are assigned in sequencer path before `book.add()` / `book.cancel()`.
+- Implemented matching command behavior:
+  - post-only crossing pre-check and reject code
+  - IOC/FOK scaffold integration
+  - deterministic fill id generation (`ticker:contract_seq:fill_idx`)
+  - close-book response fields (`close_global_seq`, `close_contract_seq`)
+- Kept callback boundary clean:
+  - listener bridge (`listener_bridge.*`) only appends in-memory events and does not perform network/DB I/O.
+- Extended `main.cpp` startup flow to exercise sequencer submit path and print sequence evidence.
+- Validation completed:
+  - `docker compose --env-file .env.example up -d --build me-core` successful
+  - me-core container status `Up`
+  - startup log confirms sequence assignment on submit (`seq=1/1`)
