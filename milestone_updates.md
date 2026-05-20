@@ -265,3 +265,47 @@
   - `GetOpenInterest`
 - Validation completed:
   - `go test ./...` passed
+
+## Milestone 10 (Gateways) - Completed
+- Replaced `gw-rest` skeleton with Milestone 10 REST gateway implementation in `cmd/gw-rest/main.go`:
+  - Demo auth/login endpoint:
+    - `POST /v1/auth/login` returns bearer token (`demo.<base64(user_id)>`)
+  - Auth middleware for private endpoints using bearer token parsing.
+  - Idempotency middleware behavior for mutating endpoints:
+    - requires `Idempotency-Key`
+    - captures and replays cached response for duplicate key per `(user_id, path, key)`
+  - Order endpoints backed by `order-router` gRPC:
+    - `POST /v1/orders`
+    - `GET /v1/orders`
+    - `GET /v1/orders/{order_id}`
+    - `POST /v1/orders/{order_id}/cancel`
+  - Market endpoints:
+    - `GET /v1/markets/{ticker}` (refdata contract)
+    - `GET /v1/markets/{ticker}/fills` (replay/list fills)
+  - Account endpoints:
+    - `GET /v1/account/balance`
+    - `GET /v1/account/history`
+  - Position endpoint:
+    - `GET /v1/positions`
+  - Added gRPC error-to-HTTP mapping and request timeout boundaries.
+
+- Replaced `gw-ws` skeleton with Milestone 10 WebSocket gateway implementation in `cmd/gw-ws/main.go`:
+  - WS command protocol:
+    - `{\"op\":\"auth\",\"token\":\"...\"}`
+    - `{\"op\":\"subscribe\",\"channel\":\"market\",\"ticker\":\"...\"}`
+    - `{\"op\":\"subscribe\",\"channel\":\"private\"}`
+  - Private channel auth enforcement.
+  - NATS bridges:
+    - market: `md.trade.<ticker>`
+    - private: `exec.user.<user_id>`, `exec.fills.user.<user_id>`, `ledger.balance.user.<user_id>`
+  - Snapshot-buffer-replay flow for market subscription:
+    - subscribes to deltas first
+    - reads snapshot sequence (`MAX(global_seq)` per ticker from durable fills)
+    - sends snapshot message
+    - replays buffered deltas with `seq > snapshot.seq`
+  - Backpressure handling:
+    - bounded outbound queue per connection
+    - closes connection with policy violation when queue overflows
+
+- Validation completed:
+  - `go test ./...` passed

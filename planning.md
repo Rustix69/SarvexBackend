@@ -1034,6 +1034,42 @@ Milestone 8.
 
 ## Milestone 10: Gateways
 
+### Status
+
+Completed in current codebase scope with:
+- REST gateway implementation in `cmd/gw-rest/main.go`
+- WebSocket gateway implementation in `cmd/gw-ws/main.go`
+- Passing validation: `go test ./...`
+
+### Delivered In This Milestone
+
+- REST auth/login endpoint:
+  - `POST /v1/auth/login` (demo bearer token flow)
+- REST idempotency enforcement on mutating endpoints:
+  - `Idempotency-Key` required for order submit/cancel
+  - duplicate key replays captured response
+- REST order endpoints delegating to `order-router`:
+  - create/list/get/cancel
+- REST market endpoints:
+  - contract query
+  - fills query/replay view
+- REST balance/history endpoints delegating to `ledger-svc`.
+- REST position endpoint delegating to `position-svc`.
+- WebSocket connect/auth protocol.
+- WebSocket subscribe protocol:
+  - market channel
+  - private channel (auth required)
+- Market-data NATS bridge from `md.trade.<ticker>`.
+- Private user NATS bridge from:
+  - `exec.user.<user_id>`
+  - `exec.fills.user.<user_id>`
+  - `ledger.balance.user.<user_id>`
+- Snapshot-buffer-replay flow for market stream:
+  - subscribe to deltas before snapshot
+  - snapshot seq from durable fills
+  - replay buffered deltas where `seq > snapshot.seq`
+- Backpressure handling via bounded WS send queue and policy-close on overflow.
+
 ### Objective
 
 Expose stable client APIs only after the core trading path is correct.
