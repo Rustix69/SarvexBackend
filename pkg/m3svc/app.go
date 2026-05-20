@@ -28,6 +28,7 @@ type App struct {
 type ledgerServer struct {
 	sarvexv1.UnimplementedLedgerServer
 	pg *pgxpool.Pool
+	nc *nats.Conn
 }
 type matchingEngineServer struct {
 	sarvexv1.UnimplementedMatchingEngineServer
@@ -39,9 +40,11 @@ type orderRouterServer struct {
 	sarvexv1.UnimplementedOrderRouterServer
 	pg  *pgxpool.Pool
 	cfg Config
+	nc  *nats.Conn
 }
 type positionServer struct {
 	sarvexv1.UnimplementedPositionServer
+	pg *pgxpool.Pool
 }
 type refDataServer struct {
 	sarvexv1.UnimplementedRefDataServer
@@ -91,6 +94,7 @@ func RunGRPC(ctx context.Context, cfg Config, role string) error {
 
 	app.grpcSrv = grpc.NewServer()
 	registerByRole(app.grpcSrv, role, app)
+	startRoleWorkers(ctx, role, app)
 	app.ready.Store(true)
 	log.Printf("service=%s component=grpc msg=starting addr=:%d role=%s", cfg.ServiceName, cfg.GRPCPort, role)
 
@@ -122,15 +126,15 @@ func RunGRPC(ctx context.Context, cfg Config, role string) error {
 func registerByRole(server *grpc.Server, role string, app *App) {
 	switch role {
 	case "ledger":
-		sarvexv1.RegisterLedgerServer(server, &ledgerServer{pg: app.pg})
+		sarvexv1.RegisterLedgerServer(server, &ledgerServer{pg: app.pg, nc: app.nc})
 	case "matching":
 		sarvexv1.RegisterMatchingEngineServer(server, &matchingEngineServer{})
 	case "oracle":
 		sarvexv1.RegisterOracleServer(server, &oracleServer{})
 	case "order-router":
-		sarvexv1.RegisterOrderRouterServer(server, &orderRouterServer{pg: app.pg, cfg: app.cfg})
+		sarvexv1.RegisterOrderRouterServer(server, &orderRouterServer{pg: app.pg, cfg: app.cfg, nc: app.nc})
 	case "position":
-		sarvexv1.RegisterPositionServer(server, &positionServer{})
+		sarvexv1.RegisterPositionServer(server, &positionServer{pg: app.pg})
 	case "refdata":
 		sarvexv1.RegisterRefDataServer(server, &refDataServer{pg: app.pg})
 	case "risk":
@@ -167,4 +171,25 @@ func (a *App) connectDependencies(ctx context.Context) error {
 		a.nc = nc
 	}
 	return nil
+}
+
+func startRoleWorkers(ctx context.Context, role string, app *App) {
+	switch role {
+	case "ledger":
+		if app.pg != nil && app.nc != nil {
+			go runLedgerOutboxPublisher(ctx, app.pg, app.nc)
+		}
+	case "position":
+		if app.pg != nil && app.nc != nil {
+			go runPositionFillConsumer(ctx, app.pg, app.nc)
+		}
+	case "risk":
+		if app.pg != nil && app.nc != nil {
+			go runRiskFillConsumer(ctx, app.pg, app.nc)
+		}
+	case "audit":
+		if app.pg != nil && app.nc != nil {
+			go runAuditConsumer(ctx, app.pg, app.nc)
+		}
+	}
 }

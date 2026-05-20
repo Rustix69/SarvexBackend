@@ -227,3 +227,41 @@
   - transitions order to `CANCELLED`
 - Validation completed:
   - `go test ./...` passed after implementation
+
+## Milestone 09 (NATS Event Spine and Consumers) - Completed
+- Added event spine + consumers in `pkg/m3svc/milestone9_spine.go`:
+  - `runLedgerOutboxPublisher`:
+    - publishes `ledger.events` from durable `ledger.ledger_event_outbox`
+    - publishes `ledger.balance.user.<user_id>` for users touched by each ledger tx
+    - marks outbox rows `POSTED` only after publish attempt
+  - `runPositionFillConsumer` + `applyPositionFill`:
+    - subscribes to `exec.fills.*`
+    - persists offset in `position.consumer_offsets`
+    - detects sequence gaps (`global_seq > last+1`)
+    - replays gaps through `OrderRouter.ListFills`
+    - enforces idempotency via `position.applied_fills(fill_id)`
+    - applies maker/taker position deltas + history writes transactionally
+  - `runRiskFillConsumer`:
+    - consumes `exec.fills.*`
+    - decrements `risk.working_orders_summary` quantities on fills
+  - `runAuditConsumer`:
+    - consumes `exec.events` and `ledger.events`
+    - persists into `audit.events` using `audit.event_seq_gen`
+- Wired role worker startup in `pkg/m3svc/app.go`:
+  - `ledger` starts ledger outbox publisher
+  - `position` starts position fill consumer
+  - `risk` starts risk fill consumer
+  - `audit` starts audit consumer
+- Extended order-router event publishing in `pkg/m3svc/order_router_server.go`:
+  - order lifecycle -> `exec.events`
+  - sanitized order user feed -> `exec.user.<user_id>`
+  - fills -> `exec.fills.<ticker>`
+  - per-user fill feed -> `exec.fills.user.<user_id>`
+  - market trade/ticker feed -> `md.trade.<ticker>`, `md.ticker.<ticker>`
+- Added concrete `position-svc` RPC implementation in `pkg/m3svc/position_server.go`:
+  - `GetPosition`
+  - `ListPositions`
+  - `ListPositionsByContract` (supports `min_global_seq` filtering)
+  - `GetOpenInterest`
+- Validation completed:
+  - `go test ./...` passed

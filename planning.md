@@ -933,6 +933,37 @@ Milestones 4, 5, 7.
 
 ## Milestone 9: NATS Event Spine And Consumers
 
+### Status
+
+Completed in current codebase scope with:
+- Event producer/consumer workers in `pkg/m3svc/milestone9_spine.go`
+- Order/fill event publishing in `pkg/m3svc/order_router_server.go`
+- Position RPC server implementation in `pkg/m3svc/position_server.go`
+- Role-based worker startup in `pkg/m3svc/app.go`
+- Passing validation: `go test ./...`
+
+### Delivered In This Milestone
+
+- Published execution and market subjects from order-router:
+  - `exec.events`
+  - `exec.fills.<ticker>`
+  - `exec.user.<user_id>` (sanitized private order stream)
+  - `exec.fills.user.<user_id>`
+  - `md.trade.<ticker>`
+  - `md.ticker.<ticker>`
+- Published ledger subjects from durable outbox:
+  - `ledger.events`
+  - `ledger.balance.user.<user_id>`
+- Implemented position consumer with durability checks:
+  - offsets in `position.consumer_offsets`
+  - idempotency in `position.applied_fills`
+  - gap detection (`global_seq > last + 1`)
+  - replay via `OrderRouter.ListFills`
+- Implemented risk working-order summary consumer on fill events.
+- Implemented audit consumer persisting consumed execution/ledger events to `audit.events`.
+- Implemented concrete `position-svc` read APIs:
+  - `GetPosition`, `ListPositions`, `ListPositionsByContract`, `GetOpenInterest`
+
 ### Objective
 
 Distribute events without making NATS the source of truth.

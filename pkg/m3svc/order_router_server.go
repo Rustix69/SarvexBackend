@@ -2,6 +2,7 @@ package m3svc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -79,10 +80,12 @@ $1,$2,$3,$4,$5::orders.order_side,$6::orders.order_action,$7,$8,0,$8,$9::orders.
 	contract, err := refSrv.fetchContract(ctx, req.GetTicker())
 	if err != nil {
 		_ = markRejected(ctx, s.pg, orderID, "CONTRACT_NOT_FOUND", "contract not found")
+		s.publishExecEvents(orderID, req.GetUserId(), req.GetTicker(), "ORDER_REJECTED", "CONTRACT_NOT_FOUND")
 		return &sarvexv1.SubmitOrderResponse{RejectCode: "CONTRACT_NOT_FOUND", RejectReason: "contract not found"}, nil
 	}
 	if contract.GetState() != sarvexv1.ContractState_CONTRACT_STATE_OPEN {
 		_ = markRejected(ctx, s.pg, orderID, "CONTRACT_NOT_OPEN", "contract not open")
+		s.publishExecEvents(orderID, req.GetUserId(), req.GetTicker(), "ORDER_REJECTED", "CONTRACT_NOT_OPEN")
 		return &sarvexv1.SubmitOrderResponse{RejectCode: "CONTRACT_NOT_OPEN", RejectReason: "contract not open"}, nil
 	}
 
@@ -95,6 +98,7 @@ $1,$2,$3,$4,$5::orders.order_side,$6::orders.order_action,$7,$8,0,$8,$9::orders.
 	}
 	if !riskResp.GetApproved() {
 		_ = markRejected(ctx, s.pg, orderID, riskResp.GetRejectCode(), riskResp.GetRejectReason())
+		s.publishExecEvents(orderID, req.GetUserId(), req.GetTicker(), "ORDER_REJECTED", riskResp.GetRejectCode())
 		return &sarvexv1.SubmitOrderResponse{RejectCode: riskResp.GetRejectCode(), RejectReason: riskResp.GetRejectReason()}, nil
 	}
 
@@ -107,6 +111,7 @@ $1,$2,$3,$4,$5::orders.order_side,$6::orders.order_action,$7,$8,0,$8,$9::orders.
 	})
 	if err != nil {
 		_ = markRejected(ctx, s.pg, orderID, "INSUFFICIENT_FUNDS", "hold placement failed")
+		s.publishExecEvents(orderID, req.GetUserId(), req.GetTicker(), "ORDER_REJECTED", "INSUFFICIENT_FUNDS")
 		return &sarvexv1.SubmitOrderResponse{RejectCode: "INSUFFICIENT_FUNDS", RejectReason: "hold placement failed"}, nil
 	}
 	_, _ = s.pg.Exec(ctx, `UPDATE orders.orders SET hold_id=$1, updated_at=now() WHERE order_id=$2`, holdResp.GetHoldId(), orderID)
@@ -116,6 +121,7 @@ $1,$2,$3,$4,$5::orders.order_side,$6::orders.order_action,$7,$8,0,$8,$9::orders.
 		if status.Code(meErr) == codes.ResourceExhausted {
 			_, _ = ledger.ReleaseHold(ctx, &sarvexv1.ReleaseHoldRequest{IdempotencyKey: "release:" + orderID + ":QUEUE_FULL", HoldId: holdResp.GetHoldId(), AmountMicroUsdc: riskResp.GetRequiredHoldMicroUsdc(), ReasonCode: "ENGINE_QUEUE_FULL"})
 			_ = markRejected(ctx, s.pg, orderID, "ENGINE_QUEUE_FULL", "matching queue full")
+			s.publishExecEvents(orderID, req.GetUserId(), req.GetTicker(), "ORDER_REJECTED", "ENGINE_QUEUE_FULL")
 			return &sarvexv1.SubmitOrderResponse{RejectCode: "ENGINE_QUEUE_FULL", RejectReason: "matching queue full"}, nil
 		}
 		return &sarvexv1.SubmitOrderResponse{
@@ -127,11 +133,16 @@ $1,$2,$3,$4,$5::orders.order_side,$6::orders.order_action,$7,$8,0,$8,$9::orders.
 	if !meResp.GetAccepted() {
 		_, _ = ledger.ReleaseHold(ctx, &sarvexv1.ReleaseHoldRequest{IdempotencyKey: "release:" + orderID + ":ME_REJECT", HoldId: holdResp.GetHoldId(), AmountMicroUsdc: riskResp.GetRequiredHoldMicroUsdc(), ReasonCode: meResp.GetRejectCode()})
 		_ = markRejected(ctx, s.pg, orderID, meResp.GetRejectCode(), "matching rejected order")
+		s.publishExecEvents(orderID, req.GetUserId(), req.GetTicker(), "ORDER_REJECTED", meResp.GetRejectCode())
 		return &sarvexv1.SubmitOrderResponse{RejectCode: meResp.GetRejectCode(), RejectReason: "matching rejected order"}, nil
 	}
 
 	if err := persistFillsAndOrder(ctx, s.pg, req.GetUserId(), orderID, holdResp.GetHoldId(), req, meResp.GetFills()); err != nil {
 		return nil, err
+	}
+	s.publishExecEvents(orderID, req.GetUserId(), req.GetTicker(), "ORDER_ACCEPTED", "")
+	for _, f := range meResp.GetFills() {
+		s.publishFillEvents(f)
 	}
 	_ = s.runFillPosterOnce(ctx)
 	out := mustGetOrder(ctx, s.pg, req.GetUserId(), orderID)
@@ -166,6 +177,7 @@ func (s *orderRouterServer) CancelOrder(ctx context.Context, req *sarvexv1.Cance
 		return nil, mapPgErr(err)
 	}
 	updated, _ := s.lookupOrder(ctx, req.GetUserId(), o.GetOrderId(), "")
+	s.publishExecEvents(o.GetOrderId(), o.GetUserId(), o.GetTicker(), "ORDER_CANCELLED", "")
 	return &sarvexv1.CancelOrderResponse{Order: updated}, nil
 }
 
@@ -581,4 +593,34 @@ func statusProto(v string) sarvexv1.OrderStatus {
 }
 func terminalStatus(v sarvexv1.OrderStatus) bool {
 	return v == sarvexv1.OrderStatus_ORDER_STATUS_FILLED || v == sarvexv1.OrderStatus_ORDER_STATUS_CANCELLED || v == sarvexv1.OrderStatus_ORDER_STATUS_REJECTED || v == sarvexv1.OrderStatus_ORDER_STATUS_EXPIRED
+}
+
+func (s *orderRouterServer) publishExecEvents(orderID, userID, ticker, eventType, rejectCode string) {
+	if s.nc == nil {
+		return
+	}
+	msg := map[string]any{
+		"order_id": orderID, "user_id": userID, "ticker": ticker, "event_type": eventType, "reject_code": rejectCode, "ts": time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	b, _ := json.Marshal(msg)
+	_ = s.nc.Publish("exec.events", b)
+	userView := map[string]any{"order_id": orderID, "ticker": ticker, "event_type": eventType, "ts": msg["ts"]}
+	ub, _ := json.Marshal(userView)
+	_ = s.nc.Publish("exec.user."+userID, ub)
+}
+
+func (s *orderRouterServer) publishFillEvents(f *sarvexv1.MeFill) {
+	if s.nc == nil || f == nil {
+		return
+	}
+	b, _ := json.Marshal(f)
+	_ = s.nc.Publish("exec.fills."+f.GetTicker(), b)
+	_ = s.nc.Publish("md.trade."+f.GetTicker(), b)
+	_ = s.nc.Publish("md.ticker."+f.GetTicker(), b)
+	maker := map[string]any{"fill_id": f.GetFillId(), "ticker": f.GetTicker(), "price_ticks": f.GetPriceTicks(), "count": f.GetCount(), "role": "maker", "ts": time.Now().UTC().Format(time.RFC3339Nano)}
+	taker := map[string]any{"fill_id": f.GetFillId(), "ticker": f.GetTicker(), "price_ticks": f.GetPriceTicks(), "count": f.GetCount(), "role": "taker", "ts": time.Now().UTC().Format(time.RFC3339Nano)}
+	mb, _ := json.Marshal(maker)
+	tb, _ := json.Marshal(taker)
+	_ = s.nc.Publish("exec.fills.user."+f.GetMakerUserId(), mb)
+	_ = s.nc.Publish("exec.fills.user."+f.GetTakerUserId(), tb)
 }
