@@ -12,6 +12,7 @@ type Config struct {
 	HTTPPort    int
 	PostgresURL string
 	NATSURL     string
+	MatchingAddr string
 	RequireDB   bool
 	RequireNATS bool
 }
@@ -33,6 +34,7 @@ func LoadConfig(defaultGRPCPort, defaultHTTPPort int) (Config, error) {
 		HTTPPort:    httpPort,
 		PostgresURL: getenv("POSTGRES_URL", ""),
 		NATSURL:     getenv("NATS_URL", ""),
+		MatchingAddr: getenv("MATCHING_ENGINE_ADDR", "me-core:50051"),
 		RequireDB:   getenv("REQUIRE_DB", "true") == "true",
 		RequireNATS: getenv("REQUIRE_NATS", "true") == "true",
 	}

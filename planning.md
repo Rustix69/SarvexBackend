@@ -828,6 +828,30 @@ Milestone 6.
 
 ## Milestone 8: Order Router And Fill Durability
 
+### Status
+
+Completed in code (`pkg/m3svc/order_router_server.go`, `pkg/m3svc/app.go`, `pkg/m3svc/config.go`) with passing `go test ./...`.
+
+### Delivered In This Milestone
+
+- Implemented `OrderRouter` server methods:
+  - `SubmitOrder`, `CancelOrder`, `GetOrder`, `ListOrders`, `ListFills`
+  - `AmendOrder` intentionally left stubbed (`UNIMPLEMENTED`) per milestone scope.
+- Added Snowflake-style order ID generation.
+- Enforced `(user_id, client_order_id)` idempotency by returning existing order on duplicate key.
+- Inserted `PENDING` order row before downstream side effects.
+- Added refdata contract-open validation and risk pre-trade call.
+- Added ledger hold placement + deterministic idempotency keys.
+- Added matching submit call with timeout handling:
+  - queue-full (`RESOURCE_EXHAUSTED`) path releases hold and rejects.
+  - unknown outcome (`DEADLINE_EXCEEDED`/unavailable) keeps `PENDING` and returns `ACK_UNKNOWN`.
+- Added transactional fill persistence:
+  - inserts `orders.fills`
+  - updates order fill/status counters
+  - inserts `orders.fill_posting_outbox` rows in same transaction.
+- Added fill posting worker pass (`runFillPosterOnce`) that drains outbox idempotently and marks posted status.
+- Added cancel flow hold release of remaining amount and terminal `CANCELLED` transition.
+
 ### Objective
 
 Make the trading path durable around `me-core`.

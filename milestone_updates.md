@@ -196,3 +196,34 @@
   - `docker compose --env-file .env.example up -d --build me-core` successful
   - me-core container status `Up`
   - startup log confirms sequence assignment on submit (`seq=1/1`)
+
+## Milestone 08 (Order Router and Fill Durability) - Completed
+- Implemented real `order-router` gRPC server in `pkg/m3svc/order_router_server.go`:
+  - `SubmitOrder`
+  - `CancelOrder`
+  - `AmendOrder` (explicitly stubbed as `Unimplemented` per plan)
+  - `GetOrder`
+  - `ListOrders`
+  - `ListFills`
+- Wired role registration in `pkg/m3svc/app.go` so `SERVICE_ROLE=order-router` now uses DB/config-backed server instance.
+- Added matching endpoint config in `pkg/m3svc/config.go`:
+  - `MATCHING_ENGINE_ADDR` (default `me-core:50051`)
+- Implemented Milestone 08 durability path in `SubmitOrder`:
+  - inserts `orders.orders` row as `PENDING` before side effects
+  - handles `(user_id, client_order_id)` duplicate path by returning existing order
+  - runs refdata contract-state validation and risk pre-trade check
+  - places ledger hold with deterministic idempotency key
+  - submits to matching engine with bounded timeout
+  - preserves `PENDING` + returns `ACK_UNKNOWN` when matching outcome is unknown (timeout/unavailable)
+  - handles queue-full (`RESOURCE_EXHAUSTED`) with hold release + terminal reject
+  - on accepts, persists fills and outbox rows transactionally with order status/fill counters update
+- Implemented fill durability worker pass (`runFillPosterOnce`) using `orders.fill_posting_outbox` as source of truth:
+  - drains pending outbox rows
+  - posts hold commits idempotently via deterministic `fill:<fill_id>:<side>` keys
+  - marks fill/outbox status as posted
+- Implemented cancel path hold-release behavior:
+  - reads remaining hold amount from ledger
+  - releases remaining held funds idempotently
+  - transitions order to `CANCELLED`
+- Validation completed:
+  - `go test ./...` passed after implementation

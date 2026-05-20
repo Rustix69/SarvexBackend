@@ -37,6 +37,8 @@ type oracleServer struct {
 }
 type orderRouterServer struct {
 	sarvexv1.UnimplementedOrderRouterServer
+	pg  *pgxpool.Pool
+	cfg Config
 }
 type positionServer struct {
 	sarvexv1.UnimplementedPositionServer
@@ -126,7 +128,7 @@ func registerByRole(server *grpc.Server, role string, app *App) {
 	case "oracle":
 		sarvexv1.RegisterOracleServer(server, &oracleServer{})
 	case "order-router":
-		sarvexv1.RegisterOrderRouterServer(server, &orderRouterServer{})
+		sarvexv1.RegisterOrderRouterServer(server, &orderRouterServer{pg: app.pg, cfg: app.cfg})
 	case "position":
 		sarvexv1.RegisterPositionServer(server, &positionServer{})
 	case "refdata":
