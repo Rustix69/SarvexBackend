@@ -92,3 +92,30 @@
   - `docker compose config` successful
   - full compose bring-up successful with local port overrides
   - all service containers healthy; `migrations` exits `0` as expected one-shot job
+
+## Milestone 04 (Ledger and Hold Lifecycle) - Completed
+- Implemented real `ledger-svc` gRPC behavior in `pkg/m3svc/ledger_server.go`:
+  - `PostTransaction`
+  - `PlaceHold`
+  - `ReleaseHold`
+  - `CommitHold`
+  - `GetBalance`
+  - `GetAccountHistory`
+  - `AdminCreditDeposit`
+- Wired ledger role registration to use the concrete server with DB pool.
+- Implemented core ledger invariants in service logic:
+  - idempotent transaction creation (`ledger.transactions.idempotency_key`)
+  - lazy account creation for user and house codes
+  - deterministic account locking order
+  - running balance + account sequence writes
+  - non-negative enforcement for user `CASH` and `HOLDS`
+  - hold lifecycle accounting (`ACTIVE` -> `CLOSED`)
+  - idempotent hold operations via `ledger.hold_operations`
+  - outbox emit to `ledger.ledger_event_outbox`
+- Added Milestone 04 tests in `pkg/m3svc/ledger_server_test.go`:
+  - admin deposit/balance flow
+  - place-hold idempotency + release flow
+  - insufficient funds rejection on hold placement
+- Validation completed:
+  - `go test ./pkg/m3svc -v` passed against local Postgres
+  - `go test ./...` passed

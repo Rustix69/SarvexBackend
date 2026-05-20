@@ -27,6 +27,7 @@ type App struct {
 
 type ledgerServer struct {
 	sarvexv1.UnimplementedLedgerServer
+	pg *pgxpool.Pool
 }
 type matchingEngineServer struct {
 	sarvexv1.UnimplementedMatchingEngineServer
@@ -85,7 +86,7 @@ func RunGRPC(ctx context.Context, cfg Config, role string) error {
 	}
 
 	app.grpcSrv = grpc.NewServer()
-	registerByRole(app.grpcSrv, role)
+	registerByRole(app.grpcSrv, role, app)
 	app.ready.Store(true)
 	log.Printf("service=%s component=grpc msg=starting addr=:%d role=%s", cfg.ServiceName, cfg.GRPCPort, role)
 
@@ -114,10 +115,10 @@ func RunGRPC(ctx context.Context, cfg Config, role string) error {
 	return nil
 }
 
-func registerByRole(server *grpc.Server, role string) {
+func registerByRole(server *grpc.Server, role string, app *App) {
 	switch role {
 	case "ledger":
-		sarvexv1.RegisterLedgerServer(server, &ledgerServer{})
+		sarvexv1.RegisterLedgerServer(server, &ledgerServer{pg: app.pg})
 	case "matching":
 		sarvexv1.RegisterMatchingEngineServer(server, &matchingEngineServer{})
 	case "oracle":

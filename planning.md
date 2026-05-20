@@ -17,7 +17,8 @@ The plan preserves the finalized architecture:
 - Milestone 1: Completed.
 - Milestone 2: Completed.
 - Milestone 3: Completed.
-- Next active milestone: Milestone 4 (Ledger And Hold Lifecycle).
+- Milestone 4: Completed.
+- Next active milestone: Milestone 5 (Refdata And Risk MVP).
 
 ## Implementation North Star
 
@@ -457,6 +458,32 @@ Milestone 2.
 - Duplicate commit.
 - Insufficient cash.
 - Concurrent holds on same user.
+
+### Completion Evidence (2026-05-21)
+
+- `ledger-svc` now has concrete gRPC implementations for:
+  - `PostTransaction`
+  - `PlaceHold`
+  - `ReleaseHold`
+  - `CommitHold`
+  - `GetBalance`
+  - `GetAccountHistory`
+  - `AdminCreditDeposit`
+- Implemented transactional posting with:
+  - idempotent `ledger.transactions` creation by `idempotency_key`
+  - lazy account creation
+  - deterministic account locking (sorted account-code lock order)
+  - running-balance/account-seq updates
+  - insufficient-funds enforcement for user `CASH`/`HOLDS`
+  - hold operation idempotency through `ledger.hold_operations`
+  - ledger outbox writes (`ledger.ledger_event_outbox`)
+- Added executable tests in `pkg/m3svc/ledger_server_test.go` validating:
+  - admin credit + balance read
+  - place-hold idempotency + release path
+  - insufficient-funds hold rejection
+- Validation result:
+  - `go test ./pkg/m3svc -v` passed against local Postgres
+  - `go test ./...` passed
 
 ### Can Stay Stubbed
 
