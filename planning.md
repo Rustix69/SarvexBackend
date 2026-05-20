@@ -18,7 +18,8 @@ The plan preserves the finalized architecture:
 - Milestone 2: Completed.
 - Milestone 3: Completed.
 - Milestone 4: Completed.
-- Next active milestone: Milestone 5 (Refdata And Risk MVP).
+- Milestone 5: Completed.
+- Next active milestone: Milestone 6 (`me-core` Liquibook Scaffold).
 
 ## Implementation North Star
 
@@ -559,6 +560,36 @@ Milestone 2. Ledger is useful but not required for refdata.
 - Invalid quantity.
 - Closed contract reject.
 - Lifecycle transition table.
+
+### Completion Evidence (2026-05-21)
+
+- `refdata-svc` now has concrete gRPC implementations for:
+  - `GetContract`
+  - `ListContracts`
+  - `TransitionState`
+  - `UpsertContract`
+  - `GetEvent`
+- `risk-svc` now has concrete gRPC implementations for:
+  - `PreTradeCheck`
+  - `GetUserLimits`
+  - `UpdateUserLimits`
+- Refdata behavior implemented:
+  - contract upsert with enum/state mapping
+  - state transition history writes
+  - contract/event reads with typed protobuf responses
+  - contract list filtering by state/series with cursor-based pagination
+- Risk behavior implemented:
+  - binary and scalar required-hold calculations using integer arithmetic
+  - contract state/open checks
+  - tick alignment, price-range, and max-order-size checks
+  - projected position computation from `position.positions` and `risk.working_orders_summary`
+  - per-contract override limits from `risk.contract_position_limits`
+- Added tests in `pkg/m3svc/milestone5_test.go` covering:
+  - refdata upsert/get/transition/list flows
+  - risk pre-trade approval path and position-limit reject path
+- Validation result:
+  - `go test ./pkg/m3svc -v` passed against local Postgres
+  - `go test ./...` passed
 
 ### Can Stay Stubbed
 

@@ -119,3 +119,33 @@
 - Validation completed:
   - `go test ./pkg/m3svc -v` passed against local Postgres
   - `go test ./...` passed
+
+## Milestone 05 (Refdata and Risk MVP) - Completed
+- Implemented real `refdata-svc` handlers in `pkg/m3svc/refdata_server.go`:
+  - `GetContract`
+  - `ListContracts`
+  - `TransitionState`
+  - `UpsertContract`
+  - `GetEvent`
+- Implemented real `risk-svc` handlers in `pkg/m3svc/risk_server.go`:
+  - `PreTradeCheck`
+  - `GetUserLimits`
+  - `UpdateUserLimits`
+- Wired `refdata` and `risk` role registration to concrete servers with shared DB pool in `pkg/m3svc/app.go`.
+- Refdata implementation details:
+  - contract enum/state mapping between proto and DB enums
+  - contract state transitions persisted to `refdata.contract_state_history`
+  - list filtering (`state`, `series_ticker`) and cursor pagination
+  - typed conversion of `settlement_rule` JSON to protobuf struct
+- Risk implementation details:
+  - binary hold formulas (`BUY` and `SELL`) using integer math
+  - scalar LONG/SHORT hold formulas using bounds and multiplier
+  - sanity checks for contract state, price range, tick alignment, and quantity limits
+  - projected position check via `position.positions` + `risk.working_orders_summary`
+  - per-contract override from `risk.contract_position_limits`
+- Added Milestone 05 tests in `pkg/m3svc/milestone5_test.go`:
+  - refdata upsert/get/transition/list lifecycle
+  - risk pre-trade approve and reject flows (position limit)
+- Validation completed:
+  - `go test ./pkg/m3svc -v` passed against local Postgres
+  - `go test ./...` passed

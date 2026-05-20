@@ -43,9 +43,11 @@ type positionServer struct {
 }
 type refDataServer struct {
 	sarvexv1.UnimplementedRefDataServer
+	pg *pgxpool.Pool
 }
 type riskServer struct {
 	sarvexv1.UnimplementedRiskServer
+	pg *pgxpool.Pool
 }
 type settlementServer struct {
 	sarvexv1.UnimplementedSettlementServer
@@ -128,9 +130,9 @@ func registerByRole(server *grpc.Server, role string, app *App) {
 	case "position":
 		sarvexv1.RegisterPositionServer(server, &positionServer{})
 	case "refdata":
-		sarvexv1.RegisterRefDataServer(server, &refDataServer{})
+		sarvexv1.RegisterRefDataServer(server, &refDataServer{pg: app.pg})
 	case "risk":
-		sarvexv1.RegisterRiskServer(server, &riskServer{})
+		sarvexv1.RegisterRiskServer(server, &riskServer{pg: app.pg})
 	case "settlement":
 		sarvexv1.RegisterSettlementServer(server, &settlementServer{})
 	}
