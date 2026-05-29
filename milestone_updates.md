@@ -419,3 +419,37 @@
 - Validation completed:
   - `go test ./...` passed
   - `go test -count=1 -tags=e2e ./pkg/e2e -v` passed after simulator/orderbook changes
+
+## Frontend MVP Trading Shell - Started
+- Built the first investor-demo frontend in `frontend/src/App.jsx` and `frontend/src/App.css` using the light card-based market style from the provided references.
+- Implemented dashboard flow:
+  - top navigation with demo user selector
+  - category bar
+  - market cards from `GET /v1/markets?state=OPEN&limit=12`
+  - Polymarket-style card rows with Yes/No pricing
+- Implemented market detail flow:
+  - chart panel
+  - contract rows
+  - order ticket
+  - order book from `GET /v1/markets/{ticker}/orderbook?depth=12`
+  - recent trades from `GET /v1/markets/{ticker}/fills?limit=30`
+  - portfolio panel using balance, positions, and orders endpoints
+- Implemented frontend trading actions:
+  - demo login through `POST /v1/auth/login`
+  - demo self-funding through `POST /v1/demo/deposits/credit`
+  - order submission through `POST /v1/orders` with `Idempotency-Key`
+- Backend gateway additions for frontend support:
+  - CORS handling
+  - `POST /v1/demo/deposits/credit`
+  - `POST /v1/admin/deposits/credit`
+- Vite proxy added:
+  - frontend calls `/api/*`
+  - proxy forwards to `http://127.0.0.1:19080`
+- Validation completed:
+  - `npm run lint` passed
+  - `npm run build` passed
+  - `go test ./...` passed
+  - Vite dev server served `http://127.0.0.1:5173/`
+  - Vite `/api/v1/markets?state=OPEN&limit=2` returned live backend data
+  - demo deposit endpoint verified with bearer token
+  - simulator repopulated live orderbook with bid/ask depth

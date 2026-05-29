@@ -2,6 +2,7 @@ package m3svc
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -88,6 +89,17 @@ $1,$2,$3,$4,$5::orders.order_side,$6::orders.order_action,$7,$8,0,$8,$9::orders.
 		s.publishExecEvents(orderID, req.GetUserId(), req.GetTicker(), "ORDER_REJECTED", "CONTRACT_NOT_OPEN")
 		return &sarvexv1.SubmitOrderResponse{RejectCode: "CONTRACT_NOT_OPEN", RejectReason: "contract not open"}, nil
 	}
+	if req.GetReduceOnly() {
+		rejectCode, rejectReason, err := s.validateReduceOnly(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		if rejectCode != "" {
+			_ = markRejected(ctx, s.pg, orderID, rejectCode, rejectReason)
+			s.publishExecEvents(orderID, req.GetUserId(), req.GetTicker(), "ORDER_REJECTED", rejectCode)
+			return &sarvexv1.SubmitOrderResponse{RejectCode: rejectCode, RejectReason: rejectReason}, nil
+		}
+	}
 
 	risk := &riskServer{pg: s.pg}
 	riskResp, err := risk.PreTradeCheck(ctx, &sarvexv1.PreTradeCheckRequest{
@@ -104,10 +116,10 @@ $1,$2,$3,$4,$5::orders.order_side,$6::orders.order_action,$7,$8,0,$8,$9::orders.
 
 	ledger := &ledgerServer{pg: s.pg}
 	holdResp, err := ledger.PlaceHold(ctx, &sarvexv1.PlaceHoldRequest{
-		IdempotencyKey:   "place:" + orderID,
-		UserId:           req.GetUserId(),
-		AmountMicroUsdc:  riskResp.GetRequiredHoldMicroUsdc(),
-		Reason:           "ORDER_SUBMIT",
+		IdempotencyKey:  "place:" + orderID,
+		UserId:          req.GetUserId(),
+		AmountMicroUsdc: riskResp.GetRequiredHoldMicroUsdc(),
+		Reason:          "ORDER_SUBMIT",
 	})
 	if err != nil {
 		_ = markRejected(ctx, s.pg, orderID, "INSUFFICIENT_FUNDS", "hold placement failed")
@@ -266,10 +278,13 @@ FROM orders.fills WHERE ` + where + ` ORDER BY global_seq ASC LIMIT $` + strconv
 	for rows.Next() {
 		var fr sarvexv1.FillRecord
 		var makerSide, makerAction, takerSide, takerAction, aggSide string
+		var makerHoldID, takerHoldID sql.NullString
 		var ts time.Time
-		if err := rows.Scan(&fr.FillId, &fr.Ticker, &fr.GlobalSeq, &fr.ContractSeq, &fr.MakerOrderId, &fr.TakerOrderId, &fr.MakerUserId, &fr.TakerUserId, &fr.MakerHoldId, &fr.TakerHoldId, &makerSide, &makerAction, &takerSide, &takerAction, &fr.PriceTicks, &fr.Count, &aggSide, &fr.MakerFeeMicroUsdc, &fr.TakerFeeMicroUsdc, &ts); err != nil {
+		if err := rows.Scan(&fr.FillId, &fr.Ticker, &fr.GlobalSeq, &fr.ContractSeq, &fr.MakerOrderId, &fr.TakerOrderId, &fr.MakerUserId, &fr.TakerUserId, &makerHoldID, &takerHoldID, &makerSide, &makerAction, &takerSide, &takerAction, &fr.PriceTicks, &fr.Count, &aggSide, &fr.MakerFeeMicroUsdc, &fr.TakerFeeMicroUsdc, &ts); err != nil {
 			return nil, mapPgErr(err)
 		}
+		fr.MakerHoldId = nullStringValue(makerHoldID)
+		fr.TakerHoldId = nullStringValue(takerHoldID)
 		fr.MakerSide = sideProto(makerSide)
 		fr.MakerAction = actionProto(makerAction)
 		fr.TakerSide = sideProto(takerSide)
@@ -302,6 +317,36 @@ func (s *orderRouterServer) submitToME(ctx context.Context, req *sarvexv1.Submit
 	})
 }
 
+func (s *orderRouterServer) validateReduceOnly(ctx context.Context, req *sarvexv1.SubmitOrderRequest) (string, string, error) {
+	risk := &riskServer{pg: s.pg}
+	currentPos, err := risk.currentPosition(ctx, req.GetUserId(), req.GetTicker())
+	if err != nil {
+		return "", "", mapPgErr(err)
+	}
+	delta := signedPositionDelta(req.GetSide(), req.GetAction(), req.GetCount())
+	projected := currentPos + delta
+
+	if currentPos == 0 {
+		return "REDUCE_ONLY_NO_POSITION", "reduce-only order requires an open position", nil
+	}
+	if currentPos > 0 {
+		if delta >= 0 {
+			return "REDUCE_ONLY_WOULD_INCREASE", "reduce-only order would increase long exposure", nil
+		}
+		if projected < 0 {
+			return "REDUCE_ONLY_WOULD_FLIP", "reduce-only order exceeds current long position", nil
+		}
+		return "", "", nil
+	}
+	if delta <= 0 {
+		return "REDUCE_ONLY_WOULD_INCREASE", "reduce-only order would increase short exposure", nil
+	}
+	if projected > 0 {
+		return "REDUCE_ONLY_WOULD_FLIP", "reduce-only order exceeds current short position", nil
+	}
+	return "", "", nil
+}
+
 func persistFillsAndOrder(ctx context.Context, pool *pgxpool.Pool, takerUserID, orderID, holdID string, req *sarvexv1.SubmitOrderRequest, fills []*sarvexv1.MeFill) error {
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -309,18 +354,34 @@ func persistFillsAndOrder(ctx context.Context, pool *pgxpool.Pool, takerUserID, 
 	}
 	defer tx.Rollback(ctx)
 
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(9234001)`); err != nil {
+		return mapPgErr(err)
+	}
+	var nextGlobalSeq int64
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(MAX(global_seq),0) FROM orders.fills`).Scan(&nextGlobalSeq); err != nil {
+		return mapPgErr(err)
+	}
+	tickerSeqs := map[string]int64{}
+
 	var fillQty, fillNotional int64
 	for _, f := range fills {
 		fillQty += f.GetCount()
 		fillNotional += f.GetCount() * f.GetPriceTicks()
-		gseq := int64(f.GetGlobalSeq())
-		cseq := int64(f.GetContractSeq())
-		if gseq == 0 {
-			gseq = time.Now().UnixNano()
+
+		nextGlobalSeq++
+		gseq := nextGlobalSeq
+		cseq, ok := tickerSeqs[f.GetTicker()]
+		if !ok {
+			if err := tx.QueryRow(ctx, `SELECT COALESCE(MAX(ticker_seq),0) FROM orders.fills WHERE ticker=$1`, f.GetTicker()).Scan(&cseq); err != nil {
+				return mapPgErr(err)
+			}
 		}
-		if cseq == 0 {
-			cseq = gseq
-		}
+		cseq++
+		tickerSeqs[f.GetTicker()] = cseq
+		f.GlobalSeq = uint64(gseq)
+		f.ContractSeq = uint64(cseq)
+		f.FillId = fmt.Sprintf("%s:%d:0", f.GetTicker(), cseq)
+
 		_, err = tx.Exec(ctx, `INSERT INTO orders.fills (
 fill_id, maker_order_id, taker_order_id, maker_user_id, taker_user_id, maker_hold_id, taker_hold_id, ticker, maker_side, maker_action, taker_side, taker_action, price_ticks, count, aggressor_side, maker_fee_micro_usdc, taker_fee_micro_usdc, ticker_seq, global_seq, ts
 ) VALUES (
@@ -417,16 +478,19 @@ FROM orders.orders WHERE user_id=$1 AND `
 
 func scanOrder(row interface{ Scan(dest ...any) error }) (*sarvexv1.Order, error) {
 	var o sarvexv1.Order
-	var side, action, tif, stp, statusStr string
+	var side, action, tif, statusStr string
+	var clientOrderID, stp, holdID sql.NullString
 	var created, updated time.Time
 	var expires *time.Time
-	if err := row.Scan(&o.OrderId, &o.ClientOrderId, &o.UserId, &o.Ticker, &side, &action, &o.PriceTicks, &o.Count, &o.FilledCount, &o.RemainingCount, &tif, &o.PostOnly, &o.ReduceOnly, &stp, &statusStr, &created, &updated, &expires, &o.HoldId, &o.AvgFillPriceTicks); err != nil {
+	if err := row.Scan(&o.OrderId, &clientOrderID, &o.UserId, &o.Ticker, &side, &action, &o.PriceTicks, &o.Count, &o.FilledCount, &o.RemainingCount, &tif, &o.PostOnly, &o.ReduceOnly, &stp, &statusStr, &created, &updated, &expires, &holdID, &o.AvgFillPriceTicks); err != nil {
 		return nil, err
 	}
+	o.ClientOrderId = nullStringValue(clientOrderID)
+	o.HoldId = nullStringValue(holdID)
 	o.Side = sideProto(side)
 	o.Action = actionProto(action)
 	o.Tif = tifProto(tif)
-	o.Stp = stpProto(stp)
+	o.Stp = stpProto(nullStringValue(stp))
 	o.Status = statusProto(statusStr)
 	o.CreatedAt = timestamppb.New(created)
 	o.UpdatedAt = timestamppb.New(updated)
@@ -436,19 +500,26 @@ func scanOrder(row interface{ Scan(dest ...any) error }) (*sarvexv1.Order, error
 	return &o, nil
 }
 
+func nullStringValue(v sql.NullString) string {
+	if !v.Valid {
+		return ""
+	}
+	return v.String
+}
+
 func mapFillsForResponse(orderID string, in []*sarvexv1.MeFill) []*sarvexv1.Fill {
 	out := make([]*sarvexv1.Fill, 0, len(in))
 	for _, f := range in {
 		out = append(out, &sarvexv1.Fill{
-			FillId:          f.GetFillId(),
-			OrderId:         orderID,
-			Ticker:          f.GetTicker(),
-			PriceTicks:      f.GetPriceTicks(),
-			Count:           f.GetCount(),
-			AggressorSide:   f.GetAggressorSide(),
-			FeeMicroUsdc:    f.GetTakerFeeMicroUsdc(),
-			Ts:              f.GetTs(),
-			Seq:             f.GetGlobalSeq(),
+			FillId:        f.GetFillId(),
+			OrderId:       orderID,
+			Ticker:        f.GetTicker(),
+			PriceTicks:    f.GetPriceTicks(),
+			Count:         f.GetCount(),
+			AggressorSide: f.GetAggressorSide(),
+			FeeMicroUsdc:  f.GetTakerFeeMicroUsdc(),
+			Ts:            f.GetTs(),
+			Seq:           f.GetGlobalSeq(),
 		})
 	}
 	return out

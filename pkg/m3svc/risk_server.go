@@ -65,7 +65,7 @@ func (s *riskServer) PreTradeCheck(ctx context.Context, req *sarvexv1.PreTradeCh
 	if err != nil {
 		return nil, mapPgErr(err)
 	}
-	thisQty := signedQty(req.GetAction(), req.GetCount())
+	thisQty := signedPositionDelta(req.GetSide(), req.GetAction(), req.GetCount())
 	projected := currentPos + workingQty + thisQty
 
 	limit, err := s.positionLimit(ctx, req.GetUserId(), req.GetTicker(), contract.positionLimitPerUser)
@@ -237,20 +237,16 @@ func computeRequiredHold(req *sarvexv1.PreTradeCheckRequest, c *contractRow) (in
 	}
 
 	if c.kind == "SCALAR" {
-		switch req.GetSide() {
-		case sarvexv1.Side_SIDE_LONG:
+		if signedPositionDelta(req.GetSide(), req.GetAction(), count) >= 0 {
 			if price < c.lowerBound {
 				return 0, errors.New("price below scalar lower bound")
 			}
 			return (price - c.lowerBound) * count * c.multiplier, nil
-		case sarvexv1.Side_SIDE_SHORT:
-			if price > c.upperBound {
-				return 0, errors.New("price above scalar upper bound")
-			}
-			return (c.upperBound - price) * count * c.multiplier, nil
-		default:
-			return 0, errors.New("scalar side must be LONG or SHORT")
 		}
+		if price > c.upperBound {
+			return 0, errors.New("price above scalar upper bound")
+		}
+		return (c.upperBound - price) * count * c.multiplier, nil
 	}
 	return 0, errors.New("unknown contract kind")
 }
@@ -282,11 +278,15 @@ WHERE user_id=$1 AND ticker=$2`,
 	return buyQty - sellQty, nil
 }
 
-func signedQty(action sarvexv1.Action, qty int64) int64 {
-	if action == sarvexv1.Action_ACTION_SELL {
-		return -qty
+func signedPositionDelta(side sarvexv1.Side, action sarvexv1.Action, qty int64) int64 {
+	sign := int64(1)
+	if side == sarvexv1.Side_SIDE_NO || side == sarvexv1.Side_SIDE_SHORT {
+		sign = -1
 	}
-	return qty
+	if action == sarvexv1.Action_ACTION_SELL {
+		sign *= -1
+	}
+	return qty * sign
 }
 
 func (s *riskServer) positionLimit(ctx context.Context, userID, ticker string, fallback int64) (int64, error) {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -34,12 +35,18 @@ type gateway struct {
 	refClient      sarvexv1.RefDataClient
 	mu             sync.Mutex
 	idem           map[string]cachedResp
+	simSeqs        map[string]simSeqState
 }
 
 type cachedResp struct {
 	status int
 	body   []byte
 	ct     string
+}
+
+type simSeqState struct {
+	seq      uint64
+	advanced time.Time
 }
 
 type ctxKey string
@@ -71,6 +78,7 @@ func main() {
 		positionClient: sarvexv1.NewPositionClient(positionConn),
 		refClient:      sarvexv1.NewRefDataClient(refConn),
 		idem:           map[string]cachedResp{},
+		simSeqs:        map[string]simSeqState{},
 	}
 
 	mux := http.NewServeMux()
@@ -90,8 +98,11 @@ func main() {
 	mux.HandleFunc("/v1/account/balance", gw.withAuth(gw.balance))
 	mux.HandleFunc("/v1/account/history", gw.withAuth(gw.history))
 	mux.HandleFunc("/v1/positions", gw.withAuth(gw.positions))
+	mux.HandleFunc("/v1/health/overview", gw.healthOverview)
+	mux.HandleFunc("/v1/demo/deposits/credit", gw.withAuth(gw.demoDeposit))
+	mux.HandleFunc("/v1/admin/deposits/credit", gw.withAuth(gw.adminDeposit))
 
-	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 3 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: withCORS(mux), ReadHeaderTimeout: 3 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -123,6 +134,10 @@ func (g *gateway) login(w http.ResponseWriter, r *http.Request) {
 
 func (g *gateway) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		h := r.Header.Get("Authorization")
 		parts := strings.SplitN(h, " ", 2)
 		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
@@ -136,6 +151,23 @@ func (g *gateway) withAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r.WithContext(context.WithValue(r.Context(), ctxUserIDKey, userID)))
 	}
+}
+
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+		}
+		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization,Content-Type,Idempotency-Key")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (g *gateway) orders(w http.ResponseWriter, r *http.Request) {
@@ -350,6 +382,288 @@ func (g *gateway) positions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+type healthItem struct {
+	Name      string `json:"name"`
+	Kind      string `json:"kind"`
+	Status    string `json:"status"`
+	Message   string `json:"message"`
+	Target    string `json:"target,omitempty"`
+	LatencyMS int64  `json:"latency_ms"`
+	CheckedAt string `json:"checked_at"`
+}
+
+func (g *gateway) healthOverview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+
+	items := []healthItem{
+		{Name: "gw-rest", Kind: "backend", Status: "running", Message: "ready", Target: "self", CheckedAt: time.Now().UTC().Format(time.RFC3339Nano)},
+	}
+	for _, infra := range infrastructureHealthChecks() {
+		items = append(items, checkTCPReady(ctx, infra.name, infra.target))
+	}
+	for _, svc := range backendHealthChecks() {
+		items = append(items, checkHTTPReady(ctx, svc.name, svc.kind, svc.target))
+	}
+	items = append(items, g.checkSimulator(ctx, "Binary market simulator", []string{"DEMO-AI-DEC26-1T", "DEMO-BTC-JUN26-120K", "DEMO-ETH-JUN26-8K", "DEMO-FED-JUL26-CUT", "DEMO-INDIA-GDP-Q2-26-7PCT", "DEMO-NVIDIA-AUG26-5T", "DEMO-OIL-MAY26-95", "DEMO-TESLA-Q2-26-500K", "DEMO-US-HOUSE-2026-DEM", "DEMO-WC-2026-FRANCE", "RBI-JUN26-CUT25"}))
+	items = append(items, g.checkSimulator(ctx, "Futures simulator", []string{"INDIA-CPI-JUN26-SCALAR", "FUT-INDIA-GDP-FY26-SCALAR", "FUT-BTC-JUN26-LEVEL", "FUT-ETH-JUN26-LEVEL", "FUT-AI-MCAP-DEC26-SCALAR", "FUT-INDIA-UNEMP-DEC26-SCALAR", "FUT-USDINR-DEC26-SCALAR", "FUT-NIFTY-DEC26-LEVEL", "FUT-FEDRATE-DEC26-SCALAR"}))
+
+	running := 0
+	for _, item := range items {
+		if item.Status == "running" {
+			running++
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"generated_at": time.Now().UTC().Format(time.RFC3339Nano),
+		"summary":      map[string]any{"running": running, "total": len(items), "not_running": len(items) - running},
+		"items":        items,
+	})
+}
+
+func infrastructureHealthChecks() []struct {
+	name   string
+	target string
+} {
+	return []struct {
+		name   string
+		target string
+	}{
+		{"postgres", "postgres:5432"},
+		{"redis", "redis:6379"},
+		{"nats", "nats:4222"},
+	}
+}
+
+func backendHealthChecks() []struct {
+	name   string
+	kind   string
+	target string
+} {
+	return []struct {
+		name   string
+		kind   string
+		target string
+	}{
+		{"refdata-svc", "backend", "http://refdata-svc:8080/readyz"},
+		{"ledger-svc", "backend", "http://ledger-svc:8080/readyz"},
+		{"risk-svc", "backend", "http://risk-svc:8080/readyz"},
+		{"me-core", "backend", "http://me-core:8080/readyz"},
+		{"order-router", "backend", "http://order-router:8080/readyz"},
+		{"position-svc", "backend", "http://position-svc:8080/readyz"},
+		{"oracle-svc", "backend", "http://oracle-svc:8080/readyz"},
+		{"settlement-svc", "backend", "http://settlement-svc:8080/readyz"},
+		{"audit-svc", "backend", "http://audit-svc:8080/readyz"},
+		{"admin-svc", "backend", "http://admin-svc:8080/readyz"},
+		{"gw-ws", "backend", "http://gw-ws:8082/readyz"},
+	}
+}
+
+func checkTCPReady(ctx context.Context, name, target string) healthItem {
+	start := time.Now()
+	item := healthItem{Name: name, Kind: "infrastructure", Target: target, CheckedAt: start.UTC().Format(time.RFC3339Nano)}
+	dialer := net.Dialer{Timeout: 700 * time.Millisecond}
+	conn, err := dialer.DialContext(ctx, "tcp", target)
+	item.LatencyMS = time.Since(start).Milliseconds()
+	if err != nil {
+		item.Status = "not_running"
+		item.Message = err.Error()
+		return item
+	}
+	_ = conn.Close()
+	item.Status = "running"
+	item.Message = "tcp reachable"
+	return item
+}
+
+func checkHTTPReady(ctx context.Context, name, kind, target string) healthItem {
+	start := time.Now()
+	item := healthItem{Name: name, Kind: kind, Target: target, CheckedAt: start.UTC().Format(time.RFC3339Nano)}
+	reqCtx, cancel := context.WithTimeout(ctx, 800*time.Millisecond)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, target, nil)
+	if err != nil {
+		item.Status = "not_running"
+		item.Message = err.Error()
+		return item
+	}
+	resp, err := http.DefaultClient.Do(req)
+	item.LatencyMS = time.Since(start).Milliseconds()
+	if err != nil {
+		item.Status = "not_running"
+		item.Message = err.Error()
+		return item
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		item.Status = "running"
+		item.Message = "ready"
+		return item
+	}
+	item.Status = "not_running"
+	item.Message = resp.Status
+	return item
+}
+
+func (g *gateway) checkSimulator(ctx context.Context, name string, tickers []string) healthItem {
+	start := time.Now()
+	runningBooks := 0
+	freshBooks := 0
+	checked := 0
+	var failures []string
+	for _, ticker := range tickers {
+		reqCtx, cancel := context.WithTimeout(ctx, 600*time.Millisecond)
+		book, err := g.matchClient.GetBookSnapshot(reqCtx, &sarvexv1.GetBookSnapshotRequest{Ticker: ticker, Depth: 1})
+		cancel()
+		checked++
+		if err != nil {
+			failures = append(failures, ticker+": "+err.Error())
+			continue
+		}
+		if len(book.GetBids()) > 0 && len(book.GetAsks()) > 0 && book.GetSeq() > 0 {
+			runningBooks++
+			if g.noteSimulatorSeq(name, ticker, book.GetSeq(), start) {
+				freshBooks++
+			}
+			continue
+		}
+		failures = append(failures, ticker+": missing bid/ask")
+	}
+
+	item := healthItem{
+		Name:      name,
+		Kind:      "simulator",
+		Target:    strings.Join(tickers, ", "),
+		LatencyMS: time.Since(start).Milliseconds(),
+		CheckedAt: start.UTC().Format(time.RFC3339Nano),
+	}
+	if runningBooks >= minHealthyBooks(len(tickers)) && freshBooks > 0 {
+		item.Status = "running"
+		item.Message = "fresh live books " + strconv.Itoa(freshBooks) + "/" + strconv.Itoa(checked)
+		return item
+	}
+	item.Status = "not_running"
+	item.Message = "fresh live books " + strconv.Itoa(freshBooks) + "/" + strconv.Itoa(checked) + ", bid/ask books " + strconv.Itoa(runningBooks) + "/" + strconv.Itoa(checked)
+	if len(failures) > 0 {
+		item.Message += ": " + strings.Join(failures, "; ")
+	}
+	return item
+}
+
+func (g *gateway) noteSimulatorSeq(simName, ticker string, seq uint64, now time.Time) bool {
+	key := simName + "|" + ticker
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	state := g.simSeqs[key]
+	if state.seq == 0 || seq > state.seq {
+		state.seq = seq
+		state.advanced = now
+		g.simSeqs[key] = state
+		return true
+	}
+	if !state.advanced.IsZero() && now.Sub(state.advanced) <= 12*time.Second {
+		return true
+	}
+	return false
+}
+
+func minHealthyBooks(total int) int {
+	if total <= 2 {
+		return total
+	}
+	return 2
+}
+
+func (g *gateway) demoDeposit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	userID := r.Context().Value(ctxUserIDKey).(string)
+	var in struct {
+		AmountMicroUSDC int64  `json:"amount_micro_usdc"`
+		AmountUSDC      int64  `json:"amount_usdc"`
+		Note            string `json:"note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, "INVALID_ARGUMENT", "invalid json")
+		return
+	}
+	amount := in.AmountMicroUSDC
+	if amount == 0 && in.AmountUSDC > 0 {
+		amount = in.AmountUSDC * 1_000_000
+	}
+	if amount <= 0 {
+		writeErr(w, http.StatusBadRequest, "INVALID_ARGUMENT", "amount is required")
+		return
+	}
+	if amount > 1_000_000_000_000 {
+		writeErr(w, http.StatusBadRequest, "INVALID_ARGUMENT", "demo deposit limit exceeded")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if _, err := g.ledgerClient.AdminCreditDeposit(ctx, &sarvexv1.AdminCreditDepositRequest{
+		UserId:          userID,
+		AmountMicroUsdc: amount,
+		Note:            defaultString(in.Note, "frontend demo deposit"),
+	}); err != nil {
+		writeGrpcErr(w, err)
+		return
+	}
+	resp, err := g.ledgerClient.GetBalance(ctx, &sarvexv1.GetBalanceRequest{UserId: userID})
+	if err != nil {
+		writeGrpcErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "balance": resp})
+}
+
+func (g *gateway) adminDeposit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	adminID := r.Context().Value(ctxUserIDKey).(string)
+	if adminID != "u_admin" && adminID != "u_admin_1" {
+		writeErr(w, http.StatusForbidden, "PERMISSION_DENIED", "admin user required")
+		return
+	}
+	var in struct {
+		UserID          string `json:"user_id"`
+		AmountMicroUSDC int64  `json:"amount_micro_usdc"`
+		AmountUSDC      int64  `json:"amount_usdc"`
+		Note            string `json:"note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.UserID) == "" {
+		writeErr(w, http.StatusBadRequest, "INVALID_ARGUMENT", "user_id is required")
+		return
+	}
+	amount := in.AmountMicroUSDC
+	if amount == 0 && in.AmountUSDC > 0 {
+		amount = in.AmountUSDC * 1_000_000
+	}
+	if amount <= 0 {
+		writeErr(w, http.StatusBadRequest, "INVALID_ARGUMENT", "amount is required")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if _, err := g.ledgerClient.AdminCreditDeposit(ctx, &sarvexv1.AdminCreditDepositRequest{
+		UserId:          strings.TrimSpace(in.UserID),
+		AmountMicroUsdc: amount,
+		Note:            defaultString(in.Note, "frontend admin deposit"),
+	}); err != nil {
+		writeGrpcErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 func (g *gateway) requireIdem(w http.ResponseWriter, r *http.Request, userID string) bool {
 	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 	if key == "" {
@@ -382,6 +696,13 @@ func (g *gateway) writeIdemCapture(w http.ResponseWriter, r *http.Request, userI
 		g.idem[userID+"|"+r.URL.Path+"|"+key] = cachedResp{status: code, body: b, ct: "application/json"}
 		g.mu.Unlock()
 	}
+}
+
+func defaultString(v, def string) string {
+	if strings.TrimSpace(v) == "" {
+		return def
+	}
+	return strings.TrimSpace(v)
 }
 
 func mustDial(addr string) *grpc.ClientConn {

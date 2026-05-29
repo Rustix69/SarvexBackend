@@ -3,13 +3,17 @@ package m3svc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 	sarvexv1 "github.com/sarvex/proto/gen/go/sarvex/v1"
 )
+
+const maxInlinePositionReplayGap int64 = 1000
 
 func runLedgerOutboxPublisher(ctx context.Context, pg *pgxpool.Pool, nc *nats.Conn) {
 	t := time.NewTicker(500 * time.Millisecond)
@@ -64,6 +68,20 @@ func runPositionFillConsumer(ctx context.Context, pg *pgxpool.Pool, nc *nats.Con
 }
 
 func applyPositionFill(ctx context.Context, pg *pgxpool.Pool, f *sarvexv1.MeFill) {
+	applyPositionFillWithReplay(ctx, pg, f, true)
+}
+
+func applyPositionFillWithReplay(ctx context.Context, pg *pgxpool.Pool, f *sarvexv1.MeFill, allowReplay bool) {
+	if allowReplay {
+		var last int64
+		_ = pg.QueryRow(ctx, `INSERT INTO position.consumer_offsets(stream_name,last_global_seq,updated_at) VALUES ('exec.fills',0,now()) ON CONFLICT (stream_name) DO NOTHING RETURNING last_global_seq`).Scan(&last)
+		_ = pg.QueryRow(ctx, `SELECT last_global_seq FROM position.consumer_offsets WHERE stream_name='exec.fills'`).Scan(&last)
+		g := int64(f.GetGlobalSeq())
+		if g > last+1 && g-last <= maxInlinePositionReplayGap {
+			replayMissingRange(ctx, pg, uint64(last+1), uint64(g-1), f.GetTicker())
+		}
+	}
+
 	tx, err := pg.Begin(ctx)
 	if err != nil {
 		return
@@ -73,9 +91,6 @@ func applyPositionFill(ctx context.Context, pg *pgxpool.Pool, f *sarvexv1.MeFill
 	_ = tx.QueryRow(ctx, `INSERT INTO position.consumer_offsets(stream_name,last_global_seq,updated_at) VALUES ('exec.fills',0,now()) ON CONFLICT (stream_name) DO NOTHING RETURNING last_global_seq`).Scan(&last)
 	_ = tx.QueryRow(ctx, `SELECT last_global_seq FROM position.consumer_offsets WHERE stream_name='exec.fills' FOR UPDATE`).Scan(&last)
 	g := int64(f.GetGlobalSeq())
-	if g > last+1 {
-		replayMissingRange(ctx, pg, uint64(last+1), uint64(g-1), f.GetTicker())
-	}
 	var exists string
 	err = tx.QueryRow(ctx, `SELECT fill_id FROM position.applied_fills WHERE fill_id=$1`, f.GetFillId()).Scan(&exists)
 	if err == nil {
@@ -83,27 +98,62 @@ func applyPositionFill(ctx context.Context, pg *pgxpool.Pool, f *sarvexv1.MeFill
 		_ = tx.Commit(ctx)
 		return
 	}
-	applyLeg := func(userID, side string, qty int64) {
+	applyLeg := func(userID, side, action string, qty int64) {
 		sign := int64(1)
 		if side == "NO" || side == "SHORT" {
 			sign = -1
 		}
+		if action == "SELL" {
+			sign *= -1
+		}
 		delta := qty * sign
-		var before int64
-		_ = tx.QueryRow(ctx, `SELECT COALESCE(net_qty,0) FROM position.positions WHERE user_id=$1 AND ticker=$2`, userID, f.GetTicker()).Scan(&before)
+		fillCost := f.GetPriceTicks() * 10000
+		var before, beforeAvg, realized int64
+		err := tx.QueryRow(ctx, `SELECT net_qty, avg_cost_micro_usdc, realized_pnl_micro_usdc
+FROM position.positions WHERE user_id=$1 AND ticker=$2 FOR UPDATE`, userID, f.GetTicker()).Scan(&before, &beforeAvg, &realized)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return
+		}
+		after := before + delta
+		afterAvg := nextAvgCost(before, beforeAvg, delta, fillCost)
 		_, _ = tx.Exec(ctx, `INSERT INTO position.positions (user_id,ticker,net_qty,avg_cost_micro_usdc,realized_pnl_micro_usdc,last_global_seq,updated_at)
 VALUES ($1,$2,$3,$4,0,$5,now())
-ON CONFLICT (user_id,ticker) DO UPDATE SET net_qty=position.positions.net_qty+$3,last_global_seq=GREATEST(position.positions.last_global_seq,$5),updated_at=now()`,
-			userID, f.GetTicker(), delta, f.GetPriceTicks()*10000, g)
+ON CONFLICT (user_id,ticker) DO UPDATE SET net_qty=$3,avg_cost_micro_usdc=$4,realized_pnl_micro_usdc=$6,last_global_seq=GREATEST(position.positions.last_global_seq,$5),updated_at=now()`,
+			userID, f.GetTicker(), after, afterAvg, g, realized)
 		_, _ = tx.Exec(ctx, `INSERT INTO position.position_history (user_id,ticker,net_qty_before,net_qty_after,fill_id,global_seq,ts) VALUES ($1,$2,$3,$4,$5,$6,now())`,
-			userID, f.GetTicker(), before, before+delta, f.GetFillId(), g)
+			userID, f.GetTicker(), before, after, f.GetFillId(), g)
 	}
-	applyLeg(f.GetMakerUserId(), strings.TrimPrefix(f.GetMakerSide().String(), "SIDE_"), f.GetCount())
-	applyLeg(f.GetTakerUserId(), strings.TrimPrefix(f.GetTakerSide().String(), "SIDE_"), f.GetCount())
+	applyLeg(f.GetMakerUserId(), strings.TrimPrefix(f.GetMakerSide().String(), "SIDE_"), strings.TrimPrefix(f.GetMakerAction().String(), "ACTION_"), f.GetCount())
+	applyLeg(f.GetTakerUserId(), strings.TrimPrefix(f.GetTakerSide().String(), "SIDE_"), strings.TrimPrefix(f.GetTakerAction().String(), "ACTION_"), f.GetCount())
 	_, _ = tx.Exec(ctx, `INSERT INTO position.applied_fills (fill_id,ticker,global_seq,applied_at) VALUES ($1,$2,$3,now()) ON CONFLICT (fill_id) DO NOTHING`,
 		f.GetFillId(), f.GetTicker(), g)
 	_, _ = tx.Exec(ctx, `UPDATE position.consumer_offsets SET last_global_seq=GREATEST(last_global_seq,$1), updated_at=now() WHERE stream_name='exec.fills'`, g)
 	_ = tx.Commit(ctx)
+}
+
+func nextAvgCost(beforeQty, beforeAvg, delta, fillCost int64) int64 {
+	afterQty := beforeQty + delta
+	if afterQty == 0 {
+		return 0
+	}
+	if beforeQty == 0 || sameSign(beforeQty, delta) {
+		return ((abs64(beforeQty) * beforeAvg) + (abs64(delta) * fillCost)) / abs64(afterQty)
+	}
+	if abs64(delta) > abs64(beforeQty) {
+		return fillCost
+	}
+	return beforeAvg
+}
+
+func sameSign(a, b int64) bool {
+	return (a > 0 && b > 0) || (a < 0 && b < 0)
+}
+
+func abs64(v int64) int64 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 func replayMissingRange(ctx context.Context, pg *pgxpool.Pool, from, to uint64, ticker string) {
@@ -121,12 +171,14 @@ func replayMissingRange(ctx context.Context, pg *pgxpool.Pool, from, to uint64, 
 			PriceTicks:   fr.GetPriceTicks(),
 			Count:        fr.GetCount(),
 			MakerSide:    fr.GetMakerSide(),
+			MakerAction:  fr.GetMakerAction(),
 			TakerSide:    fr.GetTakerSide(),
+			TakerAction:  fr.GetTakerAction(),
 			GlobalSeq:    fr.GetGlobalSeq(),
 			MakerOrderId: fr.GetMakerOrderId(),
 			TakerOrderId: fr.GetTakerOrderId(),
 		}
-		applyPositionFill(ctx, pg, f)
+		applyPositionFillWithReplay(ctx, pg, f, false)
 	}
 }
 

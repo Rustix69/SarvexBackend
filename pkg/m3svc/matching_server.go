@@ -3,6 +3,7 @@ package m3svc
 import (
 	"context"
 	"sort"
+	"time"
 
 	sarvexv1 "github.com/sarvex/proto/gen/go/sarvex/v1"
 	"google.golang.org/grpc/codes"
@@ -30,7 +31,7 @@ type demoMEOrder struct {
 }
 
 func newMatchingEngineServer() *matchingEngineServer {
-	return &matchingEngineServer{books: map[string]*demoBook{}}
+	return &matchingEngineServer{books: map[string]*demoBook{}, global: uint64(time.Now().UnixNano())}
 }
 
 func (s *matchingEngineServer) AddBook(ctx context.Context, req *sarvexv1.AddBookRequest) (*emptypb.Empty, error) {

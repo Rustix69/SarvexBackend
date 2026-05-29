@@ -26,6 +26,7 @@ type config struct {
 	matchingAddr string
 	pgDSN        string
 	ticker       string
+	tickers      []string
 	users        int
 	rounds       int
 	interval     time.Duration
@@ -35,6 +36,23 @@ type config struct {
 	resetBook    bool
 	continuous   bool
 	initialBook  bool
+}
+
+type demoContract struct {
+	Ticker                  string `json:"ticker"`
+	Kind                    int    `json:"kind"`
+	TickSize                int64  `json:"tick_size"`
+	TickSizeCamel           int64  `json:"tickSize"`
+	MinPriceTicks           int64  `json:"min_price_ticks"`
+	MinPriceTicksCamel      int64  `json:"minPriceTicks"`
+	MaxPriceTicks           int64  `json:"max_price_ticks"`
+	MaxPriceTicksCamel      int64  `json:"maxPriceTicks"`
+	LowerBoundTicks         int64  `json:"lower_bound_ticks"`
+	LowerBoundTicksCamel    int64  `json:"lowerBoundTicks"`
+	UpperBoundTicks         int64  `json:"upper_bound_ticks"`
+	UpperBoundTicksCamel    int64  `json:"upperBoundTicks"`
+	MultiplierMicroUSD      int64  `json:"multiplier_micro_usdc"`
+	MultiplierMicroUSDCamel int64  `json:"multiplierMicroUsdc"`
 }
 
 type bot struct {
@@ -50,6 +68,8 @@ type errorResp struct {
 	Error map[string]any `json:"error"`
 }
 
+var httpClient = &http.Client{Timeout: 5 * time.Second}
+
 func main() {
 	cfg := parseFlags()
 	ctx := context.Background()
@@ -61,19 +81,27 @@ func main() {
 		}
 	}
 	if cfg.ensureOpen {
-		reopened, err := ensureContractOpen(ctx, cfg)
-		if err != nil {
-			log.Fatalf("ensure contract open: %v", err)
-		}
-		if reopened {
-			if err := reopenMatchingBook(ctx, cfg); err != nil {
-				log.Fatalf("reopen matching book: %v", err)
+		for _, ticker := range cfg.tickers {
+			runCfg := cfg
+			runCfg.ticker = ticker
+			reopened, err := ensureContractOpen(ctx, runCfg)
+			if err != nil {
+				log.Fatalf("ensure contract open %s: %v", ticker, err)
+			}
+			if reopened {
+				if err := reopenMatchingBook(ctx, runCfg); err != nil {
+					log.Fatalf("reopen matching book %s: %v", ticker, err)
+				}
 			}
 		}
 	}
 	if cfg.resetBook {
-		if err := reopenMatchingBook(ctx, cfg); err != nil {
-			log.Fatalf("reset matching book: %v", err)
+		for _, ticker := range cfg.tickers {
+			runCfg := cfg
+			runCfg.ticker = ticker
+			if err := reopenMatchingBook(ctx, runCfg); err != nil {
+				log.Fatalf("reset matching book %s: %v", ticker, err)
+			}
 		}
 	}
 
@@ -87,11 +115,13 @@ func main() {
 	for i := 1; i <= cfg.users; i++ {
 		userID := fmt.Sprintf("u_sim_%03d", i)
 		if cfg.fundUSDC > 0 {
-			_, err := ledger.AdminCreditDeposit(ctx, &sarvexv1.AdminCreditDepositRequest{
+			callCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+			_, err := ledger.AdminCreditDeposit(callCtx, &sarvexv1.AdminCreditDepositRequest{
 				UserId:          userID,
 				AmountMicroUsdc: cfg.fundUSDC * 1_000_000,
 				Note:            "demo simulator funding",
 			})
+			cancel()
 			if err != nil {
 				log.Fatalf("fund %s: %v", userID, err)
 			}
@@ -103,33 +133,57 @@ func main() {
 		bots = append(bots, bot{userID: userID, token: tok})
 	}
 
-	log.Printf("simulator ready ticker=%s bots=%d rounds=%d continuous=%v", cfg.ticker, len(bots), cfg.rounds, cfg.continuous)
+	contracts := map[string]demoContract{}
+	for _, ticker := range cfg.tickers {
+		runCfg := cfg
+		runCfg.ticker = ticker
+		contract, err := fetchDemoContract(ctx, runCfg)
+		if err != nil {
+			log.Printf("contract metadata fallback ticker=%s err=%v", ticker, err)
+			contract = defaultDemoContract(ticker)
+		}
+		contracts[ticker] = contract
+	}
+
+	log.Printf("simulator ready tickers=%s bots=%d rounds=%d continuous=%v", strings.Join(cfg.tickers, ","), len(bots), cfg.rounds, cfg.continuous)
 	if cfg.initialBook {
-		seedInitialBook(ctx, cfg, bots, rng)
+		for _, ticker := range cfg.tickers {
+			runCfg := cfg
+			runCfg.ticker = ticker
+			seedInitialBook(ctx, runCfg, contracts[ticker], bots, rng)
+		}
 	}
 
 	round := 0
 	for {
 		round++
-		runRound(ctx, cfg, bots, rng, round)
+		for _, ticker := range cfg.tickers {
+			runCfg := cfg
+			runCfg.ticker = ticker
+			runRound(ctx, runCfg, contracts[ticker], bots, rng, round)
+		}
 		if !cfg.continuous && round >= cfg.rounds {
 			break
 		}
 		time.Sleep(cfg.interval)
 	}
 	if !cfg.continuous && cfg.initialBook {
-		seedInitialBook(ctx, cfg, bots, rng)
+		for _, ticker := range cfg.tickers {
+			runCfg := cfg
+			runCfg.ticker = ticker
+			seedInitialBook(ctx, runCfg, contracts[ticker], bots, rng)
+		}
 	}
-	log.Printf("simulator complete ticker=%s rounds=%d", cfg.ticker, round)
+	log.Printf("simulator complete tickers=%s rounds=%d", strings.Join(cfg.tickers, ","), round)
 }
 
 func parseFlags() config {
 	var cfg config
-	flag.StringVar(&cfg.restURL, "rest-url", env("GW_REST_URL", "http://localhost:19080"), "REST gateway base URL")
-	flag.StringVar(&cfg.ledgerAddr, "ledger-addr", env("LEDGER_ADDR", "localhost:15062"), "ledger gRPC address")
-	flag.StringVar(&cfg.matchingAddr, "matching-addr", env("MATCHING_ADDR", "localhost:15064"), "matching engine gRPC address")
+	flag.StringVar(&cfg.restURL, "rest-url", env("GW_REST_URL", "http://localhost:18080"), "REST gateway base URL")
+	flag.StringVar(&cfg.ledgerAddr, "ledger-addr", env("LEDGER_ADDR", "localhost:50062"), "ledger gRPC address")
+	flag.StringVar(&cfg.matchingAddr, "matching-addr", env("MATCHING_ADDR", "localhost:50064"), "matching engine gRPC address")
 	flag.StringVar(&cfg.pgDSN, "pg-dsn", env("POSTGRES_DSN", env("TEST_POSTGRES_DSN", "postgres://sarvaex:sarvaex@localhost:15432/sarvaex?sslmode=disable")), "Postgres DSN for demo user/limit seeding")
-	flag.StringVar(&cfg.ticker, "ticker", env("DEMO_TICKER", "RBI-JUN26-CUT25"), "contract ticker to simulate")
+	flag.StringVar(&cfg.ticker, "ticker", env("DEMO_TICKER", "DEMO-AI-DEC26-1T"), "contract ticker to simulate")
 	flag.IntVar(&cfg.users, "users", 40, "number of simulated users")
 	flag.IntVar(&cfg.rounds, "rounds", 20, "number of simulation rounds when not continuous")
 	flag.DurationVar(&cfg.interval, "interval", 750*time.Millisecond, "delay between rounds")
@@ -147,6 +201,15 @@ func parseFlags() config {
 		cfg.rounds = 1
 	}
 	cfg.restURL = strings.TrimRight(cfg.restURL, "/")
+	for _, ticker := range strings.Split(cfg.ticker, ",") {
+		ticker = strings.TrimSpace(ticker)
+		if ticker != "" {
+			cfg.tickers = append(cfg.tickers, ticker)
+		}
+	}
+	if len(cfg.tickers) == 0 {
+		cfg.tickers = []string{"DEMO-AI-DEC26-1T"}
+	}
 	return cfg
 }
 
@@ -169,22 +232,113 @@ WHERE ticker=$1 AND state <> 'OPEN'`, cfg.ticker)
 }
 
 func reopenMatchingBook(ctx context.Context, cfg config) error {
+	contract, err := fetchDemoContract(ctx, cfg)
+	if err != nil {
+		contract = defaultDemoContract(cfg.ticker)
+	}
 	conn, err := grpc.NewClient(cfg.matchingAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-	_, err = sarvexv1.NewMatchingEngineClient(conn).AddBook(ctx, &sarvexv1.AddBookRequest{
+	kind := sarvexv1.ContractKind_CONTRACT_KIND_BINARY
+	if contract.Kind == int(sarvexv1.ContractKind_CONTRACT_KIND_SCALAR) {
+		kind = sarvexv1.ContractKind_CONTRACT_KIND_SCALAR
+	}
+	callCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	_, err = sarvexv1.NewMatchingEngineClient(conn).AddBook(callCtx, &sarvexv1.AddBookRequest{
 		Ticker:        cfg.ticker,
-		Kind:          sarvexv1.ContractKind_CONTRACT_KIND_BINARY,
-		TickSize:      1,
-		MinPriceTicks: 1,
-		MaxPriceTicks: 99,
+		Kind:          kind,
+		TickSize:      contract.tickSize(),
+		MinPriceTicks: contract.minPrice(),
+		MaxPriceTicks: contract.maxPrice(),
 	})
 	if err == nil {
 		log.Printf("reopened matching book ticker=%s", cfg.ticker)
 	}
 	return err
+}
+
+func fetchDemoContract(ctx context.Context, cfg config) (demoContract, error) {
+	reqCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, cfg.restURL+"/v1/markets/"+cfg.ticker, nil)
+	if err != nil {
+		return demoContract{}, err
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return demoContract{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return demoContract{}, fmt.Errorf("status=%d", resp.StatusCode)
+	}
+	var out demoContract
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return demoContract{}, err
+	}
+	if out.Ticker == "" {
+		out.Ticker = cfg.ticker
+	}
+	return out, nil
+}
+
+func defaultDemoContract(ticker string) demoContract {
+	return demoContract{
+		Ticker:        ticker,
+		Kind:          int(sarvexv1.ContractKind_CONTRACT_KIND_BINARY),
+		TickSize:      1,
+		MinPriceTicks: 1,
+		MaxPriceTicks: 99,
+	}
+}
+
+func (c demoContract) tickSize() int64 {
+	if c.TickSize > 0 {
+		return c.TickSize
+	}
+	if c.TickSizeCamel > 0 {
+		return c.TickSizeCamel
+	}
+	return 1
+}
+
+func (c demoContract) minPrice() int64 {
+	if c.MinPriceTicks > 0 {
+		return c.MinPriceTicks
+	}
+	if c.MinPriceTicksCamel > 0 {
+		return c.MinPriceTicksCamel
+	}
+	if c.LowerBoundTicks > 0 {
+		return c.LowerBoundTicks
+	}
+	if c.LowerBoundTicksCamel > 0 {
+		return c.LowerBoundTicksCamel
+	}
+	return 1
+}
+
+func (c demoContract) maxPrice() int64 {
+	if c.MaxPriceTicks > 0 {
+		return c.MaxPriceTicks
+	}
+	if c.MaxPriceTicksCamel > 0 {
+		return c.MaxPriceTicksCamel
+	}
+	if c.UpperBoundTicks > 0 {
+		return c.UpperBoundTicks
+	}
+	if c.UpperBoundTicksCamel > 0 {
+		return c.UpperBoundTicksCamel
+	}
+	return 99
+}
+
+func (c demoContract) isScalar() bool {
+	return c.Kind == int(sarvexv1.ContractKind_CONTRACT_KIND_SCALAR)
 }
 
 func seedDemoUsers(ctx context.Context, cfg config) error {
@@ -229,58 +383,80 @@ func newLedgerClient(addr string) (sarvexv1.LedgerClient, func(), error) {
 	return sarvexv1.NewLedgerClient(conn), func() { _ = conn.Close() }, nil
 }
 
-func seedInitialBook(ctx context.Context, cfg config, bots []bot, rng *rand.Rand) {
+func seedInitialBook(ctx context.Context, cfg config, contract demoContract, bots []bot, rng *rand.Rand) {
+	fair := fairTicks(contract, rng)
+	step := priceStep(contract)
+	side := orderSide(contract)
 	for level := int64(0); level < 7; level++ {
 		qty := int64(30 + rng.Intn(80))
-		buyPrice := 35 + level
-		sellPrice := 65 - level
-		_ = placeOrder(ctx, cfg, bots[int(level)%len(bots)], fmt.Sprintf("seed-bid-%d", level), "BUY", buyPrice, qty)
-		_ = placeOrder(ctx, cfg, bots[(int(level)+len(bots)/2)%len(bots)], fmt.Sprintf("seed-ask-%d", level), "SELL", sellPrice, qty)
+		buyPrice := clampTicks(fair-step*(level+1), contract)
+		sellPrice := clampTicks(fair+step*(level+1), contract)
+		_ = placeOrder(ctx, cfg, bots[int(level)%len(bots)], fmt.Sprintf("seed-bid-%d", level), side, "BUY", buyPrice, qty)
+		_ = placeOrder(ctx, cfg, bots[(int(level)+len(bots)/2)%len(bots)], fmt.Sprintf("seed-ask-%d", level), side, "SELL", sellPrice, qty)
 	}
 }
 
-func runRound(ctx context.Context, cfg config, bots []bot, rng *rand.Rand, round int) {
-	fair := int64(47 + rng.Intn(9))
+func runRound(ctx context.Context, cfg config, contract demoContract, bots []bot, rng *rand.Rand, round int) {
+	fair := fairTicks(contract, rng)
+	step := priceStep(contract)
+	side := orderSide(contract)
 	makerCount := 4 + rng.Intn(5)
+	tradeCount := 1 + rng.Intn(3)
+	if contract.isScalar() {
+		makerCount = 8 + rng.Intn(7)
+		tradeCount = 6 + rng.Intn(7)
+	}
 	for i := 0; i < makerCount; i++ {
 		user := bots[rng.Intn(len(bots))]
 		if rng.Intn(2) == 0 {
-			price := clampTicks(fair - int64(8+rng.Intn(8)))
+			price := clampTicks(fair-int64(2+rng.Intn(5))*step, contract)
 			qty := int64(5 + rng.Intn(45))
-			_ = placeOrder(ctx, cfg, user, fmt.Sprintf("r%d-bid-%d", round, i), "BUY", price, qty)
+			_ = placeOrder(ctx, cfg, user, fmt.Sprintf("r%d-bid-%d", round, i), side, "BUY", price, qty)
 		} else {
-			price := clampTicks(fair + int64(8+rng.Intn(8)))
+			price := clampTicks(fair+int64(2+rng.Intn(5))*step, contract)
 			qty := int64(5 + rng.Intn(45))
-			_ = placeOrder(ctx, cfg, user, fmt.Sprintf("r%d-ask-%d", round, i), "SELL", price, qty)
+			_ = placeOrder(ctx, cfg, user, fmt.Sprintf("r%d-ask-%d", round, i), side, "SELL", price, qty)
 		}
 	}
 
-	tradeCount := 1 + rng.Intn(3)
 	for i := 0; i < tradeCount; i++ {
 		user := bots[rng.Intn(len(bots))]
 		qty := int64(3 + rng.Intn(20))
+		if contract.isScalar() {
+			qty = int64(1 + rng.Intn(12))
+		}
 		if rng.Intn(2) == 0 {
-			_ = placeOrder(ctx, cfg, user, fmt.Sprintf("r%d-take-buy-%d", round, i), "BUY", clampTicks(fair+25), qty)
+			crossSteps := int64(12)
+			if contract.isScalar() {
+				crossSteps = int64(24 + rng.Intn(22))
+			}
+			_ = placeOrder(ctx, cfg, user, fmt.Sprintf("r%d-take-buy-%d", round, i), side, "BUY", clampTicks(fair+step*crossSteps, contract), qty)
 		} else {
-			_ = placeOrder(ctx, cfg, user, fmt.Sprintf("r%d-take-sell-%d", round, i), "SELL", clampTicks(fair-25), qty)
+			crossSteps := int64(12)
+			if contract.isScalar() {
+				crossSteps = int64(24 + rng.Intn(22))
+			}
+			_ = placeOrder(ctx, cfg, user, fmt.Sprintf("r%d-take-sell-%d", round, i), side, "SELL", clampTicks(fair-step*crossSteps, contract), qty)
 		}
 	}
 	log.Printf("round=%d fair=%d makers=%d takers=%d", round, fair, makerCount, tradeCount)
 }
 
-func placeOrder(ctx context.Context, cfg config, b bot, suffix, action string, price, qty int64) error {
+func placeOrder(ctx context.Context, cfg config, b bot, suffix, side, action string, price, qty int64) error {
 	clientOrderID := fmt.Sprintf("sim-%s-%d-%s", b.userID, time.Now().UnixNano(), suffix)
 	payload := map[string]any{
 		"client_order_id": clientOrderID,
 		"ticker":          cfg.ticker,
-		"side":            "YES",
+		"side":            side,
 		"action":          action,
 		"price_ticks":     price,
 		"count":           qty,
 		"tif":             "GTC",
 	}
 	var out map[string]any
-	if err := postJSON(ctx, cfg.restURL+"/v1/orders", b.token, clientOrderID, payload, &out); err != nil {
+	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := postJSON(callCtx, cfg.restURL+"/v1/orders", b.token, clientOrderID, payload, &out); err != nil {
 		log.Printf("order rejected user=%s action=%s price=%d qty=%d err=%v", b.userID, action, price, qty, err)
 		return err
 	}
@@ -289,7 +465,9 @@ func placeOrder(ctx context.Context, cfg config, b bot, suffix, action string, p
 
 func login(restURL, userID string) (string, error) {
 	var out loginResp
-	if err := postJSON(context.Background(), restURL+"/v1/auth/login", "", "", map[string]any{"user_id": userID}, &out); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	if err := postJSON(ctx, restURL+"/v1/auth/login", "", "", map[string]any{"user_id": userID}, &out); err != nil {
 		return "", err
 	}
 	if out.Token == "" {
@@ -314,7 +492,7 @@ func postJSON(ctx context.Context, url, token, idem string, payload any, out any
 	if idem != "" {
 		req.Header.Set("Idempotency-Key", idem)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -327,12 +505,50 @@ func postJSON(ctx context.Context, url, token, idem string, payload any, out any
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
-func clampTicks(v int64) int64 {
-	if v < 1 {
-		return 1
+func fairTicks(contract demoContract, rng *rand.Rand) int64 {
+	minPrice := contract.minPrice()
+	maxPrice := contract.maxPrice()
+	width := maxPrice - minPrice
+	if width <= 0 {
+		return minPrice
 	}
-	if v > 99 {
-		return 99
+	mid := minPrice + width/2
+	jitter := width / 20
+	if contract.isScalar() {
+		jitter = width / 8
+	}
+	if jitter < contract.tickSize() {
+		jitter = contract.tickSize()
+	}
+	return clampTicks(mid+int64(rng.Int63n(jitter*2+1))-jitter, contract)
+}
+
+func priceStep(contract demoContract) int64 {
+	step := (contract.maxPrice() - contract.minPrice()) / 80
+	if step < contract.tickSize() {
+		step = contract.tickSize()
+	}
+	return step
+}
+
+func orderSide(contract demoContract) string {
+	if contract.isScalar() {
+		return "LONG"
+	}
+	return "YES"
+}
+
+func clampTicks(v int64, contract demoContract) int64 {
+	tick := contract.tickSize()
+	if tick <= 0 {
+		tick = 1
+	}
+	v = (v / tick) * tick
+	if v < contract.minPrice() {
+		return contract.minPrice()
+	}
+	if v > contract.maxPrice() {
+		return contract.maxPrice()
 	}
 	return v
 }
