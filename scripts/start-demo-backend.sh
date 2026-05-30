@@ -5,7 +5,17 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
 ENV_FILE="${ENV_FILE:-.env.example}"
+if [[ -f "${ENV_FILE}" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "${ENV_FILE}"
+  set +a
+fi
+
 POSTGRES_PORT="${POSTGRES_PORT:-15432}"
+POSTGRES_USER="${POSTGRES_USER:-sarvaex}"
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-sarvaex}"
+POSTGRES_DB="${POSTGRES_DB:-sarvaex}"
 REDIS_PORT="${REDIS_PORT:-16379}"
 GW_REST_HTTP_PORT="${GW_REST_HTTP_PORT:-18080}"
 LEDGER_GRPC_PORT="${LEDGER_GRPC_PORT:-50062}"
@@ -89,7 +99,7 @@ start_simulator() {
     -rest-url "http://localhost:${GW_REST_HTTP_PORT}" \
     -ledger-addr "localhost:${LEDGER_GRPC_PORT}" \
     -matching-addr "localhost:${ME_CORE_GRPC_PORT}" \
-    -pg-dsn "postgres://sarvaex:sarvaex@localhost:${POSTGRES_PORT}/sarvaex?sslmode=disable" \
+    -pg-dsn "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_PORT}/${POSTGRES_DB}?sslmode=disable" \
     -ticker "${tickers}" \
     -users "${SIM_USERS}" \
     -interval "${SIM_INTERVAL}" \

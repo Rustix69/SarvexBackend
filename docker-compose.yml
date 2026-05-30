@@ -333,6 +333,7 @@ services:
       <<: *service-env
       SERVICE_NAME: gw-rest
       HTTP_PORT: 8081
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-*}
     ports:
       - "${GW_REST_HTTP_PORT}:8081"
     depends_on:

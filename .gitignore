@@ -1,3 +1,11 @@
 .cache/
+.env
+.env.*
+!.env.example
+!.env.ec2.example
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+!frontend/.env.production.example
 frontend/node_modules/
 frontend/dist/

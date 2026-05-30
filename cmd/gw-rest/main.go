@@ -154,9 +154,10 @@ func (g *gateway) withAuth(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func withCORS(next http.Handler) http.Handler {
+	allowedOrigins := parseAllowedOrigins(getenv("ALLOWED_ORIGINS", "*"))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if origin != "" {
+		if origin != "" && originAllowed(origin, allowedOrigins) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Vary", "Origin")
 		}
@@ -168,6 +169,24 @@ func withCORS(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func parseAllowedOrigins(raw string) map[string]bool {
+	out := map[string]bool{}
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out[part] = true
+		}
+	}
+	if len(out) == 0 {
+		out["*"] = true
+	}
+	return out
+}
+
+func originAllowed(origin string, allowed map[string]bool) bool {
+	return allowed["*"] || allowed[origin]
 }
 
 func (g *gateway) orders(w http.ResponseWriter, r *http.Request) {
