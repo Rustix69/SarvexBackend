@@ -428,7 +428,7 @@ func (g *gateway) healthOverview(w http.ResponseWriter, r *http.Request) {
 	for _, svc := range backendHealthChecks() {
 		items = append(items, checkHTTPReady(ctx, svc.name, svc.kind, svc.target))
 	}
-	items = append(items, g.checkSimulator(ctx, "Binary market simulator", []string{"DEMO-AI-DEC26-1T", "DEMO-BTC-JUN26-120K", "DEMO-ETH-JUN26-8K", "DEMO-FED-JUL26-CUT", "DEMO-INDIA-GDP-Q2-26-7PCT", "DEMO-NVIDIA-AUG26-5T", "DEMO-OIL-MAY26-95", "DEMO-TESLA-Q2-26-500K", "DEMO-US-HOUSE-2026-DEM", "DEMO-WC-2026-FRANCE", "RBI-JUN26-CUT25"}))
+	items = append(items, g.checkSimulator(ctx, "Binary market simulator", []string{"DEMO-AI-DEC26-1T", "DEMO-BTC-JUN26-120K", "DEMO-ETH-JUN26-8K", "DEMO-FED-JUL26-CUT", "DEMO-NVIDIA-AUG26-5T", "DEMO-OIL-MAY26-95", "DEMO-TESLA-Q2-26-500K", "DEMO-US-HOUSE-2026-DEM", "DEMO-WC-2026-FRANCE"}))
 	items = append(items, g.checkSimulator(ctx, "Futures simulator", []string{"INDIA-CPI-JUN26-SCALAR", "FUT-INDIA-GDP-FY26-SCALAR", "FUT-BTC-JUN26-LEVEL", "FUT-ETH-JUN26-LEVEL", "FUT-AI-MCAP-DEC26-SCALAR", "FUT-INDIA-UNEMP-DEC26-SCALAR", "FUT-USDINR-DEC26-SCALAR", "FUT-NIFTY-DEC26-LEVEL", "FUT-FEDRATE-DEC26-SCALAR"}))
 
 	running := 0

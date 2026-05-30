@@ -246,29 +246,50 @@ FROM orders.orders WHERE ` + where + ` ORDER BY order_id ASC LIMIT $` + strconv.
 
 func (s *orderRouterServer) ListFills(ctx context.Context, req *sarvexv1.ListFillsRequest) (*sarvexv1.ListFillsResponse, error) {
 	limit := int(req.GetLimit())
-	if limit <= 0 || limit > 500 {
-		limit = 200
+	if limit <= 0 || limit > 50 {
+		limit = 50
 	}
 	from := req.GetFromGlobalSeq()
+	latest := from == 0 && req.GetCursor() == "" && req.GetToGlobalSeq() == 0
 	if req.GetCursor() != "" {
 		if c, err := strconv.ParseUint(req.GetCursor(), 10, 64); err == nil && c > from {
 			from = c
 		}
 	}
-	args := []any{int64(from)}
-	where := "global_seq > $1"
+	args := []any{}
+	where := ""
+	if !latest {
+		args = append(args, int64(from))
+		where = "global_seq > $1"
+	}
 	if req.GetTicker() != "" {
 		args = append(args, req.GetTicker())
-		where += " AND ticker=$" + strconv.Itoa(len(args))
+		if where != "" {
+			where += " AND "
+		}
+		where += "ticker=$" + strconv.Itoa(len(args))
 	}
 	if req.GetToGlobalSeq() > 0 {
 		args = append(args, int64(req.GetToGlobalSeq()))
-		where += " AND global_seq <= $" + strconv.Itoa(len(args))
+		if where != "" {
+			where += " AND "
+		}
+		where += "global_seq <= $" + strconv.Itoa(len(args))
 	}
-	args = append(args, limit+1)
+	limitArg := limit + 1
+	orderBy := "ORDER BY global_seq ASC"
+	if latest {
+		limitArg = limit
+		orderBy = "ORDER BY global_seq DESC"
+	}
+	args = append(args, limitArg)
 	q := `SELECT fill_id, ticker, global_seq, ticker_seq, maker_order_id, taker_order_id, maker_user_id, taker_user_id, maker_hold_id, taker_hold_id,
 maker_side::text, maker_action::text, taker_side::text, taker_action::text, price_ticks, count, aggressor_side::text, maker_fee_micro_usdc, taker_fee_micro_usdc, ts
-FROM orders.fills WHERE ` + where + ` ORDER BY global_seq ASC LIMIT $` + strconv.Itoa(len(args))
+FROM orders.fills`
+	if where != "" {
+		q += ` WHERE ` + where
+	}
+	q += ` ` + orderBy + ` LIMIT $` + strconv.Itoa(len(args))
 	rows, err := s.pg.Query(ctx, q, args...)
 	if err != nil {
 		return nil, mapPgErr(err)
@@ -296,6 +317,11 @@ FROM orders.fills WHERE ` + where + ` ORDER BY global_seq ASC LIMIT $` + strconv
 	if len(resp.Fills) > limit {
 		resp.NextCursor = strconv.FormatUint(resp.Fills[limit-1].GetGlobalSeq(), 10)
 		resp.Fills = resp.Fills[:limit]
+	}
+	if latest {
+		for i, j := 0, len(resp.Fills)-1; i < j; i, j = i+1, j-1 {
+			resp.Fills[i], resp.Fills[j] = resp.Fills[j], resp.Fills[i]
+		}
 	}
 	return resp, nil
 }

@@ -9,3 +9,5 @@ frontend/.env.*
 !frontend/.env.production.example
 frontend/node_modules/
 frontend/dist/
+
+AWS/

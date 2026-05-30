@@ -19,9 +19,15 @@ import './App.css'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api'
 const DEMO_MAX_ORDER_CENTS = 10000
-const LIVE_TRADE_REFRESH_MS = 650
-const LIVE_PAGE_REFRESH_MS = 1200
+const LIVE_TRADE_REFRESH_MS = 1500
+const LIVE_PAGE_REFRESH_MS = 6000
+const MARKET_LIST_REFRESH_MS = 30000
+const FILL_PAGE_LIMIT = 40
 const SCALAR_KIND = 2
+const HIDDEN_DEMO_MARKET_TICKERS = new Set([
+  'DEMO-INDIA-GDP-Q2-26-7PCT',
+  'RBI-JUN26-CUT25',
+])
 const DEMO_USERS = [
   { id: 'u_retail_1', label: 'Demo Retail', badge: 'Retail' },
   { id: 'u_mm_1', label: 'Market Maker', badge: 'MM' },
@@ -67,6 +73,11 @@ function App() {
   const [error, setError] = useState('')
   const [activeView, setActiveView] = useState(() => viewFromPath(window.location.pathname))
   const fillCursorRef = useRef({})
+  const lastMarketListRefreshRef = useRef(0)
+  const marketsRef = useRef([])
+  const futuresRef = useRef([])
+  const selectedTickerRef = useRef('')
+  const activeViewRef = useRef(activeView)
 
   const selectedMarket = useMemo(
     () => [...markets, ...futures].find((market) => market.ticker === selectedTicker),
@@ -96,9 +107,13 @@ function App() {
 
   const api = useCallback(
     async (path, options = {}) => {
-      const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) }
-      if (token) headers.Authorization = `Bearer ${token}`
-      const response = await fetch(`${API_BASE}${path}`, { ...options, headers })
+      const { auth = true, headers: optionHeaders = {}, ...fetchOptions } = options
+      const headers = { ...optionHeaders }
+      if (fetchOptions.body && !Object.keys(headers).some((key) => key.toLowerCase() === 'content-type')) {
+        headers['Content-Type'] = 'application/json'
+      }
+      if (auth && token) headers.Authorization = `Bearer ${token}`
+      const response = await fetch(`${API_BASE}${path}`, { ...fetchOptions, headers })
       const text = await response.text()
       const body = text ? JSON.parse(text) : null
       if (!response.ok) {
@@ -138,42 +153,46 @@ function App() {
   )
 
   const fetchMarketFills = useCallback(async (ticker) => {
-    const incoming = []
     let cursor = fillCursorRef.current[ticker] || ''
-    const maxPages = cursor ? 2 : 20
-
-    for (let page = 0; page < maxPages; page += 1) {
-      const query = new URLSearchParams({ limit: '500' })
-      if (cursor) query.set('cursor', cursor)
-      const body = await api(`/v1/markets/${ticker}/fills?${query.toString()}`)
-      const pageFills = body?.fills || []
-      incoming.push(...pageFills)
-      const nextCursor = body?.next_cursor || body?.nextCursor || ''
-      if (!nextCursor) break
-      cursor = nextCursor
-    }
+    const query = new URLSearchParams({ limit: String(FILL_PAGE_LIMIT) })
+    if (cursor) query.set('cursor', cursor)
+    const body = await api(`/v1/markets/${ticker}/fills?${query.toString()}`, { auth: false })
+    const incoming = body?.fills || []
 
     const maxSeq = incoming.reduce((max, fill) => Math.max(max, fillSeq(fill)), Number(fillCursorRef.current[ticker] || 0))
     if (maxSeq > 0) fillCursorRef.current[ticker] = String(maxSeq)
     return incoming
   }, [api])
 
-  const refreshPublic = useCallback(async () => {
+  const refreshPublic = useCallback(async ({ refreshMarkets = false } = {}) => {
     setError('')
-    const marketBody = await api('/v1/markets?state=OPEN&limit=50')
-    const contracts = marketBody?.contracts || []
-    const nextMarkets = contracts.filter((market) => !isFutureMarket(market))
-    const nextFutures = contracts.filter((market) => isFutureMarket(market)).slice(0, 9)
-    setMarkets(nextMarkets)
-    setFutures(nextFutures)
+    let nextMarkets = marketsRef.current
+    let nextFutures = futuresRef.current
+    const shouldRefreshMarkets = refreshMarkets || !nextMarkets.length || !nextFutures.length || Date.now() - lastMarketListRefreshRef.current > MARKET_LIST_REFRESH_MS
+    if (shouldRefreshMarkets) {
+      const marketBody = await api('/v1/markets?state=OPEN&limit=50', { auth: false })
+      const contracts = marketBody?.contracts || []
+      nextMarkets = contracts
+        .filter((market) => !isFutureMarket(market) && !HIDDEN_DEMO_MARKET_TICKERS.has(market.ticker))
+        .slice(0, 9)
+      nextFutures = contracts.filter((market) => isFutureMarket(market)).slice(0, 9)
+      marketsRef.current = nextMarkets
+      futuresRef.current = nextFutures
+      lastMarketListRefreshRef.current = Date.now()
+      setMarkets(nextMarkets)
+      setFutures(nextFutures)
+    }
     const visibleContracts = [...nextMarkets, ...nextFutures]
-    const ticker = selectedTicker || nextMarkets[0]?.ticker || nextFutures[0]?.ticker
-    const fillsByMarket = await Promise.all(visibleContracts.map((market) => fetchMarketFills(market.ticker).catch(() => [])))
+    const ticker = selectedTickerRef.current || nextMarkets[0]?.ticker || nextFutures[0]?.ticker
+    const fillContracts = activeViewRef.current === 'trade' && ticker
+      ? visibleContracts.filter((market) => market.ticker === ticker)
+      : visibleContracts
+    const fillsByMarket = await Promise.all(fillContracts.map((market) => fetchMarketFills(market.ticker).catch(() => [])))
     const incomingFills = fillsByMarket.flat()
     setFills((current) => mergeRecentFills(current, incomingFills, visibleContracts.map((market) => market.ticker)))
     if (!ticker) return
-    setOrderbook(await api(`/v1/markets/${ticker}/orderbook?depth=12`))
-  }, [api, fetchMarketFills, selectedTicker])
+    setOrderbook(await api(`/v1/markets/${ticker}/orderbook?depth=12`, { auth: false }))
+  }, [api, fetchMarketFills])
 
   const refreshBookMarks = useCallback(async (nextPositions = [], nextOrders = []) => {
     const tickers = new Set()
@@ -189,7 +208,7 @@ function App() {
     }
 
     const entries = await Promise.all([...tickers].map(async (ticker) => {
-      const book = await api(`/v1/markets/${ticker}/orderbook?depth=1`)
+      const book = await api(`/v1/markets/${ticker}/orderbook?depth=1`, { auth: false })
       const bid = Number(book?.bids?.[0]?.price_ticks || book?.bids?.[0]?.priceTicks || 0)
       const ask = Number(book?.asks?.[0]?.price_ticks || book?.asks?.[0]?.priceTicks || 0)
       const mark = midpoint(bid, ask) || ask || bid || 0
@@ -216,7 +235,7 @@ function App() {
   const refreshAll = useCallback(async () => {
     setLoading(true)
     try {
-      await refreshPublic()
+      await refreshPublic({ refreshMarkets: true })
       await refreshPrivate()
     } catch (err) {
       setError(err.message)
@@ -228,6 +247,23 @@ function App() {
   useEffect(() => {
     refreshAll()
   }, [refreshAll])
+
+  useEffect(() => {
+    marketsRef.current = markets
+  }, [markets])
+
+  useEffect(() => {
+    futuresRef.current = futures
+  }, [futures])
+
+  useEffect(() => {
+    selectedTickerRef.current = selectedTicker
+    if (selectedTicker) refreshPublic().catch((err) => setError(err.message))
+  }, [refreshPublic, selectedTicker])
+
+  useEffect(() => {
+    activeViewRef.current = activeView
+  }, [activeView])
 
   useEffect(() => {
     const onPopState = () => {
