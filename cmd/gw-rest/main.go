@@ -201,6 +201,8 @@ func (g *gateway) orders(w http.ResponseWriter, r *http.Request) {
 			Ticker        string `json:"ticker"`
 			Side          string `json:"side"`
 			Action        string `json:"action"`
+			OrderType     string `json:"order_type"`
+			Type          string `json:"type"`
 			PriceTicks    int64  `json:"price_ticks"`
 			Count         int64  `json:"count"`
 			TIF           string `json:"tif"`
@@ -210,6 +212,15 @@ func (g *gateway) orders(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 			writeErr(w, http.StatusBadRequest, "INVALID_ARGUMENT", "invalid json")
 			return
+		}
+		orderType := strings.ToUpper(strings.TrimSpace(in.OrderType))
+		if orderType == "" {
+			orderType = strings.ToUpper(strings.TrimSpace(in.Type))
+		}
+		if orderType == "MARKET" {
+			in.PriceTicks = 0
+			in.TIF = "IOC"
+			in.PostOnly = false
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
@@ -624,7 +635,7 @@ func (g *gateway) demoDeposit(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "INVALID_ARGUMENT", "demo deposit limit exceeded")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 6*time.Second)
 	defer cancel()
 	if _, err := g.ledgerClient.AdminCreditDeposit(ctx, &sarvexv1.AdminCreditDepositRequest{
 		UserId:          userID,
@@ -634,7 +645,9 @@ func (g *gateway) demoDeposit(w http.ResponseWriter, r *http.Request) {
 		writeGrpcErr(w, err)
 		return
 	}
-	resp, err := g.ledgerClient.GetBalance(ctx, &sarvexv1.GetBalanceRequest{UserId: userID})
+	balanceCtx, balanceCancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer balanceCancel()
+	resp, err := g.ledgerClient.GetBalance(balanceCtx, &sarvexv1.GetBalanceRequest{UserId: userID})
 	if err != nil {
 		writeGrpcErr(w, err)
 		return

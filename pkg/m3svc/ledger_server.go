@@ -388,13 +388,23 @@ func (s *ledgerServer) GetBalance(ctx context.Context, req *sarvexv1.GetBalanceR
 	}
 
 	var cash, held int64
-	err := s.pg.QueryRow(ctx,
-		`SELECT cash_micro_usdc, held_micro_usdc FROM ledger.user_balances WHERE user_id=$1`,
-		req.GetUserId(),
-	).Scan(&cash, &held)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return &sarvexv1.Balance{UserId: req.GetUserId(), CashMicroUsdc: 0, HeldMicroUsdc: 0, TotalMicroUsdc: 0}, nil
-	}
+	userCash := fmt.Sprintf("LIAB:USER:%s:CASH", req.GetUserId())
+	userHolds := fmt.Sprintf("LIAB:USER:%s:HOLDS", req.GetUserId())
+	err := s.pg.QueryRow(ctx, `SELECT
+COALESCE((
+  SELECT running_balance_micro_usdc
+  FROM ledger.entries
+  WHERE account_id = (SELECT account_id FROM ledger.accounts WHERE account_code=$1)
+  ORDER BY account_seq DESC
+  LIMIT 1
+), 0),
+COALESCE((
+  SELECT running_balance_micro_usdc
+  FROM ledger.entries
+  WHERE account_id = (SELECT account_id FROM ledger.accounts WHERE account_code=$2)
+  ORDER BY account_seq DESC
+  LIMIT 1
+), 0)`, userCash, userHolds).Scan(&cash, &held)
 	if err != nil {
 		return nil, mapPgErr(err)
 	}
@@ -598,7 +608,7 @@ func lockAccountState(ctx context.Context, tx pgx.Tx, code string) (int64, int64
 	var bal, seq int64
 	err := tx.QueryRow(ctx,
 		`SELECT COALESCE(running_balance_micro_usdc,0), COALESCE(account_seq,0)
-FROM ledger.entries WHERE account_id=$1 ORDER BY entry_id DESC LIMIT 1`,
+FROM ledger.entries WHERE account_id=$1 ORDER BY account_seq DESC LIMIT 1`,
 		accountID,
 	).Scan(&bal, &seq)
 	if errors.Is(err, pgx.ErrNoRows) {

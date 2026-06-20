@@ -26,6 +26,13 @@ var sfMu sync.Mutex
 var sfLastMs int64
 var sfSeq int64
 
+const (
+	meFlagIOC        uint32 = 1 << 0
+	meFlagFOK        uint32 = 1 << 1
+	meFlagPostOnly   uint32 = 1 << 2
+	meFlagReduceOnly uint32 = 1 << 3
+)
+
 func nextOrderID() string {
 	sfMu.Lock()
 	defer sfMu.Unlock()
@@ -54,6 +61,9 @@ func (s *orderRouterServer) SubmitOrder(ctx context.Context, req *sarvexv1.Submi
 	}
 	if req.GetClientOrderId() == "" {
 		req.ClientOrderId = fmt.Sprintf("coid_%d", time.Now().UnixNano())
+	}
+	if req.GetPriceTicks() == 0 {
+		req.Tif = sarvexv1.TimeInForce_TIME_IN_FORCE_IOC
 	}
 
 	orderID := nextOrderID()
@@ -89,8 +99,14 @@ $1,$2,$3,$4,$5::orders.order_side,$6::orders.order_action,$7,$8,0,$8,$9::orders.
 		s.publishExecEvents(orderID, req.GetUserId(), req.GetTicker(), "ORDER_REJECTED", "CONTRACT_NOT_OPEN")
 		return &sarvexv1.SubmitOrderResponse{RejectCode: "CONTRACT_NOT_OPEN", RejectReason: "contract not open"}, nil
 	}
+	execReq, rejectCode, rejectReason := executionOrderRequest(req, contract)
+	if rejectCode != "" {
+		_ = markRejected(ctx, s.pg, orderID, rejectCode, rejectReason)
+		s.publishExecEvents(orderID, req.GetUserId(), req.GetTicker(), "ORDER_REJECTED", rejectCode)
+		return &sarvexv1.SubmitOrderResponse{RejectCode: rejectCode, RejectReason: rejectReason}, nil
+	}
 	if req.GetReduceOnly() {
-		rejectCode, rejectReason, err := s.validateReduceOnly(ctx, req)
+		rejectCode, rejectReason, err := s.validateReduceOnly(ctx, execReq)
 		if err != nil {
 			return nil, err
 		}
@@ -103,7 +119,7 @@ $1,$2,$3,$4,$5::orders.order_side,$6::orders.order_action,$7,$8,0,$8,$9::orders.
 
 	risk := &riskServer{pg: s.pg}
 	riskResp, err := risk.PreTradeCheck(ctx, &sarvexv1.PreTradeCheckRequest{
-		UserId: req.GetUserId(), Ticker: req.GetTicker(), Side: req.GetSide(), Action: req.GetAction(), PriceTicks: req.GetPriceTicks(), Count: req.GetCount(),
+		UserId: execReq.GetUserId(), Ticker: execReq.GetTicker(), Side: execReq.GetSide(), Action: execReq.GetAction(), PriceTicks: execReq.GetPriceTicks(), Count: execReq.GetCount(),
 	})
 	if err != nil {
 		return nil, err
@@ -128,7 +144,7 @@ $1,$2,$3,$4,$5::orders.order_side,$6::orders.order_action,$7,$8,0,$8,$9::orders.
 	}
 	_, _ = s.pg.Exec(ctx, `UPDATE orders.orders SET hold_id=$1, updated_at=now() WHERE order_id=$2`, holdResp.GetHoldId(), orderID)
 
-	meResp, meErr := s.submitToME(ctx, req, orderID, holdResp.GetHoldId())
+	meResp, meErr := s.submitToME(ctx, execReq, orderID, holdResp.GetHoldId())
 	if meErr != nil {
 		if status.Code(meErr) == codes.ResourceExhausted {
 			_, _ = ledger.ReleaseHold(ctx, &sarvexv1.ReleaseHoldRequest{IdempotencyKey: "release:" + orderID + ":QUEUE_FULL", HoldId: holdResp.GetHoldId(), AmountMicroUsdc: riskResp.GetRequiredHoldMicroUsdc(), ReasonCode: "ENGINE_QUEUE_FULL"})
@@ -149,7 +165,7 @@ $1,$2,$3,$4,$5::orders.order_side,$6::orders.order_action,$7,$8,0,$8,$9::orders.
 		return &sarvexv1.SubmitOrderResponse{RejectCode: meResp.GetRejectCode(), RejectReason: "matching rejected order"}, nil
 	}
 
-	if err := persistFillsAndOrder(ctx, s.pg, req.GetUserId(), orderID, holdResp.GetHoldId(), req, meResp.GetFills()); err != nil {
+	if err := persistFillsAndOrder(ctx, s.pg, req.GetUserId(), orderID, holdResp.GetHoldId(), execReq, meResp.GetFills()); err != nil {
 		return nil, err
 	}
 	s.publishExecEvents(orderID, req.GetUserId(), req.GetTicker(), "ORDER_ACCEPTED", "")
@@ -157,6 +173,9 @@ $1,$2,$3,$4,$5::orders.order_side,$6::orders.order_action,$7,$8,0,$8,$9::orders.
 		s.publishFillEvents(f)
 	}
 	_ = s.runFillPosterOnce(ctx)
+	if isTakeOnly(execReq) {
+		_ = releaseRemainingHold(ctx, s.pg, "ioc-release:"+orderID, holdResp.GetHoldId())
+	}
 	out := mustGetOrder(ctx, s.pg, req.GetUserId(), orderID)
 	return &sarvexv1.SubmitOrderResponse{Order: out, Fills: mapFillsForResponse(orderID, meResp.GetFills())}, nil
 }
@@ -339,8 +358,92 @@ func (s *orderRouterServer) submitToME(ctx context.Context, req *sarvexv1.Submit
 	cctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	return client.SubmitOrder(cctx, &sarvexv1.MeSubmitOrderRequest{
-		OrderId: orderID, UserId: req.GetUserId(), HoldId: holdID, Ticker: req.GetTicker(), Side: req.GetSide(), Action: req.GetAction(), PriceTicks: req.GetPriceTicks(), Count: req.GetCount(), Stp: req.GetStp(),
+		OrderId: orderID, UserId: req.GetUserId(), HoldId: holdID, Ticker: req.GetTicker(), Side: req.GetSide(), Action: req.GetAction(), PriceTicks: req.GetPriceTicks(), Count: req.GetCount(), Flags: meFlags(req), Stp: req.GetStp(),
 	})
+}
+
+func executionOrderRequest(req *sarvexv1.SubmitOrderRequest, contract *sarvexv1.Contract) (*sarvexv1.SubmitOrderRequest, string, string) {
+	execReq := &sarvexv1.SubmitOrderRequest{
+		UserId:         req.GetUserId(),
+		ClientOrderId:  req.GetClientOrderId(),
+		Ticker:         req.GetTicker(),
+		Side:           req.GetSide(),
+		Action:         req.GetAction(),
+		PriceTicks:     req.GetPriceTicks(),
+		Count:          req.GetCount(),
+		Tif:            req.GetTif(),
+		PostOnly:       req.GetPostOnly(),
+		ReduceOnly:     req.GetReduceOnly(),
+		Stp:            req.GetStp(),
+		ExpiresAt:      req.GetExpiresAt(),
+		IdempotencyKey: req.GetIdempotencyKey(),
+	}
+	if execReq.GetTif() == sarvexv1.TimeInForce_TIME_IN_FORCE_UNSPECIFIED {
+		execReq.Tif = sarvexv1.TimeInForce_TIME_IN_FORCE_GTC
+	}
+	if execReq.GetPriceTicks() != 0 {
+		return execReq, "", ""
+	}
+	if execReq.GetPostOnly() {
+		return nil, "INVALID_ORDER", "market orders cannot be post-only"
+	}
+	execReq.Tif = sarvexv1.TimeInForce_TIME_IN_FORCE_IOC
+	if execReq.GetAction() == sarvexv1.Action_ACTION_SELL {
+		execReq.PriceTicks = contract.GetMinPriceTicks()
+	} else {
+		execReq.PriceTicks = contract.GetMaxPriceTicks()
+	}
+	if execReq.GetPriceTicks() <= 0 {
+		return nil, "INVALID_PRICE", "market order has no executable price range"
+	}
+	return execReq, "", ""
+}
+
+func meFlags(req *sarvexv1.SubmitOrderRequest) uint32 {
+	var flags uint32
+	switch req.GetTif() {
+	case sarvexv1.TimeInForce_TIME_IN_FORCE_IOC:
+		flags |= meFlagIOC
+	case sarvexv1.TimeInForce_TIME_IN_FORCE_FOK:
+		flags |= meFlagFOK
+	}
+	if req.GetPostOnly() {
+		flags |= meFlagPostOnly
+	}
+	if req.GetReduceOnly() {
+		flags |= meFlagReduceOnly
+	}
+	return flags
+}
+
+func isTakeOnly(req *sarvexv1.SubmitOrderRequest) bool {
+	return req.GetTif() == sarvexv1.TimeInForce_TIME_IN_FORCE_IOC || req.GetTif() == sarvexv1.TimeInForce_TIME_IN_FORCE_FOK
+}
+
+func releaseRemainingHold(ctx context.Context, pool *pgxpool.Pool, idemPrefix, holdID string) error {
+	if strings.TrimSpace(holdID) == "" {
+		return nil
+	}
+	var remaining int64
+	err := pool.QueryRow(ctx, `SELECT GREATEST(amount_micro_usdc - committed_micro_usdc - released_micro_usdc, 0)
+FROM ledger.holds WHERE hold_id=$1`, holdID).Scan(&remaining)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return mapPgErr(err)
+	}
+	if remaining <= 0 {
+		return nil
+	}
+	ledger := &ledgerServer{pg: pool}
+	_, err = ledger.ReleaseHold(ctx, &sarvexv1.ReleaseHoldRequest{
+		IdempotencyKey:  idemPrefix + ":unused",
+		HoldId:          holdID,
+		AmountMicroUsdc: remaining,
+		ReasonCode:      "IOC_UNUSED",
+	})
+	return err
 }
 
 func (s *orderRouterServer) validateReduceOnly(ctx context.Context, req *sarvexv1.SubmitOrderRequest) (string, string, error) {
@@ -437,6 +540,9 @@ VALUES ($1,$2,'PENDING',0,now(),now(),now()) ON CONFLICT (fill_id) DO NOTHING`, 
 	}
 	if newRemaining == 0 {
 		newStatus = "FILLED"
+	}
+	if isTakeOnly(req) && newRemaining > 0 {
+		newStatus = "CANCELLED"
 	}
 	avg := int64(0)
 	if fillQty > 0 {

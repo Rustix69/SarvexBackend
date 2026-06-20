@@ -82,6 +82,9 @@ func (s *matchingEngineServer) SubmitOrder(ctx context.Context, req *sarvexv1.Me
 			makers = append(makers, o)
 		}
 	}
+	if req.GetFlags()&meFlagPostOnly != 0 && len(makers) > 0 {
+		return &sarvexv1.MeSubmitOrderResponse{OrderId: req.GetOrderId(), RejectCode: "POST_ONLY_WOULD_MATCH"}, nil
+	}
 	sort.Slice(makers, func(i, j int) bool {
 		if makers[i].priceTicks == makers[j].priceTicks {
 			return makers[i].orderID < makers[j].orderID
@@ -93,6 +96,18 @@ func (s *matchingEngineServer) SubmitOrder(ctx context.Context, req *sarvexv1.Me
 	})
 
 	resp := &sarvexv1.MeSubmitOrderResponse{OrderId: req.GetOrderId(), Accepted: true}
+	if req.GetFlags()&meFlagFOK != 0 {
+		var available int64
+		for _, maker := range makers {
+			available += maker.openQty
+			if available >= incoming.openQty {
+				break
+			}
+		}
+		if available < incoming.openQty {
+			return &sarvexv1.MeSubmitOrderResponse{OrderId: req.GetOrderId(), RejectCode: "FOK_NOT_FILLED"}, nil
+		}
+	}
 	for _, maker := range makers {
 		if incoming.openQty <= 0 {
 			break
@@ -133,7 +148,7 @@ func (s *matchingEngineServer) SubmitOrder(ctx context.Context, req *sarvexv1.Me
 			delete(b.orders, maker.orderID)
 		}
 	}
-	if incoming.openQty > 0 {
+	if incoming.openQty > 0 && req.GetFlags()&meFlagIOC == 0 && req.GetFlags()&meFlagFOK == 0 {
 		b.orders[incoming.orderID] = incoming
 	}
 	if len(resp.Fills) == 0 {

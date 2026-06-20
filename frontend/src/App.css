@@ -578,10 +578,10 @@ button:disabled {
 
 .ticket-tabs {
   display: grid;
-  grid-template-columns: 1fr 1fr auto;
+  grid-template-columns: 1fr 1fr;
   align-items: center;
   gap: 12px;
-  margin-bottom: 18px;
+  margin-bottom: 12px;
 }
 .ticket-tabs button {
   border: 0;
@@ -592,7 +592,34 @@ button:disabled {
   font-weight: 400;
 }
 .ticket-tabs .active { color: #16130f; border-color: #16130f; }
-.ticket-tabs span { display: inline-flex; align-items: center; gap: 4px; font-weight: 400; }
+
+.order-type-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 4px;
+  margin-bottom: 18px;
+  border: 1px solid rgba(22, 19, 15, 0.12);
+  border-radius: 8px;
+  background: #f3f0e9;
+}
+
+.order-type-toggle button {
+  height: 34px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #756b5f;
+  font-family: "Times New Roman", Times, serif;
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.order-type-toggle .active {
+  background: #fffefb;
+  color: #16130f;
+  box-shadow: 0 6px 16px rgba(22, 19, 15, 0.08);
+}
 
 .outcome-toggle {
   display: grid;
@@ -612,7 +639,7 @@ button:disabled {
 .outcome-toggle .no.active { background: #a51f3d; color: white; }
 
 .futures-ticket .ticket-tabs {
-  grid-template-columns: 1fr 1fr auto;
+  grid-template-columns: 1fr 1fr;
 }
 
 .futures-ticket .ticket-tabs .long-tab.active {
@@ -645,18 +672,21 @@ button:disabled {
 }
 
 .future-price-input,
-.future-size-input {
+.future-size-input,
+.ticket-price-input {
   margin-bottom: 14px;
 }
 
 .future-price-input input,
-.future-size-input input {
+.future-size-input input,
+.ticket-price-input input {
   height: 48px;
   font-size: 34px;
 }
 
 .future-price-input::before,
-.future-size-input::before {
+.future-size-input::before,
+.ticket-price-input::before {
   content: '';
 }
 .amount-input::before {
@@ -690,6 +720,14 @@ button:disabled {
 .ticket-summary.muted {
   margin-top: 0;
   font-size: 14px;
+}
+.ticket-summary.market-estimate {
+  min-height: 44px;
+  align-items: center;
+  padding: 10px 12px;
+  margin: 0 0 14px;
+  border-radius: 8px;
+  background: #f3f0e9;
 }
 .ticket-note {
   margin: 2px 0 12px;

@@ -5,7 +5,6 @@ import {
   ArrowLeft,
   BarChart3,
   Bookmark,
-  ChevronDown,
   CircleDollarSign,
   Clock3,
   Gift,
@@ -869,37 +868,59 @@ function ContractRow({ title, price, side, onClick }) {
 function TradeTicket({ market, bestBid, bestAsk, authed, busy, onTrade }) {
   const [tab, setTab] = useState('buy')
   const [outcome, setOutcome] = useState('YES')
+  const [orderType, setOrderType] = useState('market')
+  const [limitInput, setLimitInput] = useState(String(bestAsk || bestBid || 50))
   const [amount, setAmount] = useState('10')
-  const suggestedYes = bestAsk || bestBid || 50
-  const price = outcome === 'YES' ? suggestedYes : 100 - suggestedYes
-  const priceTicks = Math.max(1, Math.min(99, Math.round(price || 50)))
+  const action = outcome === 'YES'
+    ? (tab === 'buy' ? 'BUY' : 'SELL')
+    : (tab === 'buy' ? 'SELL' : 'BUY')
+  const referenceYes = action === 'BUY' ? (bestAsk || bestBid || 50) : (bestBid || bestAsk || 50)
+  const referenceOutcomePrice = outcome === 'YES' ? referenceYes : 100 - referenceYes
+  const limitOutcomePrice = clampBinaryPrice(Number(limitInput || referenceOutcomePrice))
+  const displayedPrice = orderType === 'market' ? clampBinaryPrice(referenceOutcomePrice) : limitOutcomePrice
+  const priceTicks = orderType === 'market' ? 0 : clampBinaryPrice(outcome === 'YES' ? limitOutcomePrice : 100 - limitOutcomePrice)
   const spend = Math.max(0, Number(amount || 0))
-  const requestedShares = spend > 0 ? Math.floor(spend / (priceTicks / 100)) : 0
-  const maxShares = Math.max(1, Math.floor(DEMO_MAX_ORDER_CENTS / priceTicks))
+  const requestedShares = spend > 0 ? Math.floor(spend / (displayedPrice / 100)) : 0
+  const maxShares = Math.max(1, Math.floor(DEMO_MAX_ORDER_CENTS / displayedPrice))
   const shares = requestedShares > 0 ? Math.max(1, Math.min(requestedShares, maxShares)) : 0
   const capped = requestedShares > maxShares
-  const estimatedSpend = shares * priceTicks / 100
+  const estimatedSpend = shares * displayedPrice / 100
 
   const updateAmount = (value) => {
     const nextAmount = Number(value || 0)
     setAmount(String(Math.min(100, Math.max(0, nextAmount))))
   }
 
+  const suggestedLimit = (nextOutcome = outcome, nextTab = tab) => {
+    const nextAction = nextOutcome === 'YES'
+      ? (nextTab === 'buy' ? 'BUY' : 'SELL')
+      : (nextTab === 'buy' ? 'SELL' : 'BUY')
+    const yesPrice = nextAction === 'BUY' ? (bestAsk || bestBid || 50) : (bestBid || bestAsk || 50)
+    return String(clampBinaryPrice(nextOutcome === 'YES' ? yesPrice : 100 - yesPrice))
+  }
+
+  const switchTab = (nextTab) => {
+    setTab(nextTab)
+    setLimitInput(suggestedLimit(outcome, nextTab))
+  }
+
+  const switchOutcome = (nextOutcome) => {
+    setOutcome(nextOutcome)
+    setLimitInput(suggestedLimit(nextOutcome, tab))
+  }
+
   const submit = () => {
     if (!shares) return
-    const yesPrice = outcome === 'YES' ? price : 100 - price
-    const action = outcome === 'YES'
-      ? (tab === 'buy' ? 'BUY' : 'SELL')
-      : (tab === 'buy' ? 'SELL' : 'BUY')
     const id = `fe-${Date.now()}-${Math.random().toString(16).slice(2)}`
     onTrade({
       client_order_id: id,
       ticker: market.ticker,
       side: 'YES',
       action,
-      price_ticks: Math.max(1, Math.min(99, Math.round(yesPrice))),
+      order_type: orderType === 'market' ? 'MARKET' : 'LIMIT',
+      price_ticks: priceTicks,
       count: shares,
-      tif: 'GTC',
+      tif: orderType === 'market' ? 'IOC' : 'GTC',
     })
   }
 
@@ -907,14 +928,25 @@ function TradeTicket({ market, bestBid, bestAsk, authed, busy, onTrade }) {
     <section className="ticket" id="trade-ticket">
       <div className="ticket-market"><div className="market-avatar small">{avatarText(market)}</div><span>{market.ticker}</span></div>
       <div className="ticket-tabs">
-        <button className={tab === 'buy' ? 'active' : ''} type="button" onClick={() => setTab('buy')}>Buy</button>
-        <button className={tab === 'sell' ? 'active' : ''} type="button" onClick={() => setTab('sell')}>Sell</button>
-        <span>Limit <ChevronDown size={14} /></span>
+        <button className={tab === 'buy' ? 'active' : ''} type="button" onClick={() => switchTab('buy')}>Buy</button>
+        <button className={tab === 'sell' ? 'active' : ''} type="button" onClick={() => switchTab('sell')}>Sell</button>
+      </div>
+      <div className="order-type-toggle">
+        <button className={orderType === 'market' ? 'active' : ''} type="button" onClick={() => setOrderType('market')}>Market</button>
+        <button className={orderType === 'limit' ? 'active' : ''} type="button" onClick={() => setOrderType('limit')}>Limit</button>
       </div>
       <div className="outcome-toggle">
-        <button className={outcome === 'YES' ? 'yes active' : 'yes'} type="button" onClick={() => setOutcome('YES')}>Yes {suggestedYes}¢</button>
-        <button className={outcome === 'NO' ? 'no active' : 'no'} type="button" onClick={() => setOutcome('NO')}>No {100 - suggestedYes}¢</button>
+        <button className={outcome === 'YES' ? 'yes active' : 'yes'} type="button" onClick={() => switchOutcome('YES')}>Yes {clampBinaryPrice(referenceYes)}¢</button>
+        <button className={outcome === 'NO' ? 'no active' : 'no'} type="button" onClick={() => switchOutcome('NO')}>No {clampBinaryPrice(100 - referenceYes)}¢</button>
       </div>
+      {orderType === 'limit' ? (
+        <label className="amount-input ticket-price-input">
+          <span>Limit price</span>
+          <input value={limitInput} onChange={(event) => setLimitInput(event.target.value.replace(/[^\d.]/g, ''))} inputMode="decimal" />
+        </label>
+      ) : (
+        <div className="ticket-summary market-estimate"><span>Market estimate</span><strong>{displayedPrice}¢</strong></div>
+      )}
       <label className="amount-input">
         <span>Amount</span>
         <input value={amount} onChange={(event) => setAmount(event.target.value.replace(/[^\d.]/g, ''))} inputMode="decimal" />
@@ -926,7 +958,7 @@ function TradeTicket({ market, bestBid, bestAsk, authed, busy, onTrade }) {
       <div className="ticket-summary muted"><span>Est. spend</span><strong>${estimatedSpend.toFixed(2)}</strong></div>
       {capped ? <div className="ticket-note">Demo cap applied at $100 per order.</div> : null}
       <button className="trade-btn" type="button" disabled={!authed || busy || !shares} onClick={submit}>
-        {busy ? <Loader2 className="spin" size={17} /> : <CircleDollarSign size={17} />} {authed ? 'Trade' : 'Login to trade'}
+        {busy ? <Loader2 className="spin" size={17} /> : <CircleDollarSign size={17} />} {authed ? `${orderType === 'market' ? 'Market' : 'Limit'} trade` : 'Login to trade'}
       </button>
       <p>By trading, you agree to Sarvex demo terms.</p>
     </section>
@@ -935,12 +967,15 @@ function TradeTicket({ market, bestBid, bestAsk, authed, busy, onTrade }) {
 
 function FutureTradeTicket({ market, bestBid, bestAsk, mark, authed, busy, onTrade }) {
   const [tab, setTab] = useState('buy')
+  const [orderType, setOrderType] = useState('market')
   const [priceInput, setPriceInput] = useState(() => formatFutureInput(market, bestAsk || bestBid || mark))
   const [size, setSize] = useState('5')
   const parsedPrice = parseFutureInput(market, priceInput)
   const priceTicks = parsedPrice > 0 ? clampFutureTicks(market, parsedPrice) : 0
+  const marketPriceTicks = tab === 'buy' ? (bestAsk || mark || bestBid || futureFallbackTicks(market)) : (bestBid || mark || bestAsk || futureFallbackTicks(market))
+  const executionTicks = orderType === 'market' ? marketSweepTicks(market, tab === 'buy' ? 'BUY' : 'SELL') : priceTicks
   const contracts = Math.max(0, Math.floor(Number(size || 0)))
-  const hold = computeFutureHoldMicro(market, tab, priceTicks, contracts)
+  const hold = computeFutureHoldMicro(market, tab, executionTicks, contracts)
   const payoffNote = tab === 'buy'
     ? 'Final payoff: (final value - entry) x contracts x multiplier.'
     : 'Final payoff: (entry - final value) x contracts x multiplier.'
@@ -951,16 +986,17 @@ function FutureTradeTicket({ market, bestBid, bestAsk, mark, authed, busy, onTra
   }
 
   const submit = () => {
-    if (!contracts || !priceTicks) return
+    if (!contracts || (orderType === 'limit' && !priceTicks)) return
     const id = `fut-${Date.now()}-${Math.random().toString(16).slice(2)}`
     onTrade({
       client_order_id: id,
       ticker: market.ticker,
       side: 'LONG',
       action: tab === 'buy' ? 'BUY' : 'SELL',
-      price_ticks: priceTicks,
+      order_type: orderType === 'market' ? 'MARKET' : 'LIMIT',
+      price_ticks: orderType === 'market' ? 0 : priceTicks,
       count: contracts,
-      tif: 'GTC',
+      tif: orderType === 'market' ? 'IOC' : 'GTC',
     })
   }
 
@@ -970,12 +1006,19 @@ function FutureTradeTicket({ market, bestBid, bestAsk, mark, authed, busy, onTra
       <div className="ticket-tabs">
         <button className={tab === 'buy' ? 'active long-tab' : 'long-tab'} type="button" onClick={() => switchSide('buy')}>Buy / Long</button>
         <button className={tab === 'sell' ? 'active short-tab' : 'short-tab'} type="button" onClick={() => switchSide('sell')}>Sell / Short</button>
-        <span>Limit <ChevronDown size={14} /></span>
       </div>
-      <label className="amount-input future-price-input">
-        <span>Entry price</span>
-        <input value={priceInput} onChange={(event) => setPriceInput(event.target.value.replace(/[^\d.]/g, ''))} inputMode="decimal" />
-      </label>
+      <div className="order-type-toggle">
+        <button className={orderType === 'market' ? 'active' : ''} type="button" onClick={() => setOrderType('market')}>Market</button>
+        <button className={orderType === 'limit' ? 'active' : ''} type="button" onClick={() => setOrderType('limit')}>Limit</button>
+      </div>
+      {orderType === 'limit' ? (
+        <label className="amount-input future-price-input">
+          <span>Entry price</span>
+          <input value={priceInput} onChange={(event) => setPriceInput(event.target.value.replace(/[^\d.]/g, ''))} inputMode="decimal" />
+        </label>
+      ) : (
+        <div className="ticket-summary market-estimate"><span>Market estimate</span><strong>{formatFuturePrice(market, marketPriceTicks)}</strong></div>
+      )}
       <label className="amount-input future-size-input">
         <span>Contracts</span>
         <input value={size} onChange={(event) => setSize(event.target.value.replace(/[^\d]/g, ''))} inputMode="numeric" />
@@ -983,11 +1026,11 @@ function FutureTradeTicket({ market, bestBid, bestAsk, mark, authed, busy, onTra
       <div className="quick-amounts">
         {[1, 5, 10, 25].map((value) => <button type="button" key={value} onClick={() => setSize(String(Math.max(0, Number(size || 0)) + value))}>+{value}</button>)}
       </div>
-      <div className="ticket-summary"><span>Entry</span><strong>{formatFuturePrice(market, priceTicks)}</strong></div>
+      <div className="ticket-summary"><span>{orderType === 'market' ? 'Est. entry' : 'Entry'}</span><strong>{formatFuturePrice(market, orderType === 'market' ? marketPriceTicks : priceTicks)}</strong></div>
       <div className="ticket-summary muted"><span>Demo hold</span><strong>{formatUSDC(hold)}</strong></div>
       <div className="ticket-note">{payoffNote}</div>
-      <button className={tab === 'buy' ? 'trade-btn long-submit' : 'trade-btn short-submit'} type="button" disabled={!authed || busy || !contracts || !priceTicks} onClick={submit}>
-        {busy ? <Loader2 className="spin" size={17} /> : <CircleDollarSign size={17} />} {authed ? `${tab === 'buy' ? 'Buy' : 'Sell'} ${contracts} @ ${formatFuturePrice(market, priceTicks)}` : 'Login to trade'}
+      <button className={tab === 'buy' ? 'trade-btn long-submit' : 'trade-btn short-submit'} type="button" disabled={!authed || busy || !contracts || (orderType === 'limit' && !priceTicks)} onClick={submit}>
+        {busy ? <Loader2 className="spin" size={17} /> : <CircleDollarSign size={17} />} {authed ? `${orderType === 'market' ? 'Market' : 'Limit'} ${tab === 'buy' ? 'buy' : 'sell'} ${contracts}` : 'Login to trade'}
       </button>
       <p>Numeric futures are demo USDC-settled contracts.</p>
     </section>
@@ -1264,6 +1307,16 @@ function clampFutureTicks(market, value) {
   const tick = Number(market?.tick_size ?? market?.tickSize ?? 1)
   const rounded = Math.round(Number(value || 0) / tick) * tick
   return Math.max(min, Math.min(max, rounded))
+}
+
+function marketSweepTicks(market, action) {
+  const min = Number(market?.min_price_ticks ?? market?.minPriceTicks ?? market?.lower_bound_ticks ?? market?.lowerBoundTicks ?? 1)
+  const max = Number(market?.max_price_ticks ?? market?.maxPriceTicks ?? market?.upper_bound_ticks ?? market?.upperBoundTicks ?? 99)
+  return action === 'SELL' ? min : max
+}
+
+function clampBinaryPrice(value) {
+  return Math.max(1, Math.min(99, Math.round(Number(value || 50))))
 }
 
 function midpoint(bid, ask) {
