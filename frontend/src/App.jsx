@@ -57,7 +57,6 @@ function pushViewPath(view) {
 
 function App() {
   const [token, setToken] = useState(() => localStorage.getItem('sarvex_token') || '')
-  const [userId, setUserId] = useState(() => localStorage.getItem('sarvex_user_id') || 'u_retail_1')
   const [markets, setMarkets] = useState([])
   const [futures, setFutures] = useState([])
   const [selectedTicker, setSelectedTicker] = useState('')
@@ -125,10 +124,11 @@ function App() {
   )
 
   const login = useCallback(
-    async (nextUserId = userId) => {
+    async () => {
       setBusy(true)
       setError('')
       try {
+        const nextUserId = DEMO_USERS[0].id
         const body = await fetch(`${API_BASE}/v1/auth/login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -141,14 +141,13 @@ function App() {
         localStorage.setItem('sarvex_token', body.token)
         localStorage.setItem('sarvex_user_id', nextUserId)
         setToken(body.token)
-        setUserId(nextUserId)
       } catch (err) {
         setError(err.message)
       } finally {
         setBusy(false)
       }
     },
-    [userId],
+    [],
   )
 
   const fetchMarketFills = useCallback(async (ticker) => {
@@ -373,15 +372,13 @@ function App() {
     }
   }
 
-  const selectedUser = DEMO_USERS.find((user) => user.id === userId) || DEMO_USERS[0]
+  const selectedUser = DEMO_USERS[0]
   const selectedFills = selectedMarket ? fills.filter((fill) => fill.ticker === selectedMarket.ticker) : []
 
   return (
     <div className="sarvex-shell">
       <TopNav
         selectedUser={selectedUser}
-        userId={userId}
-        setUserId={setUserId}
         token={token}
         busy={busy}
         onLogin={login}
@@ -485,7 +482,7 @@ function App() {
   )
 }
 
-function TopNav({ selectedUser, userId, setUserId, token, busy, onLogin, onMarkets, onNavigateView, activeView }) {
+function TopNav({ selectedUser, token, busy, onLogin, onMarkets, onNavigateView, activeView }) {
   return (
     <header className="topbar">
       <button className="brand" type="button" onClick={onMarkets}>
@@ -498,12 +495,7 @@ function TopNav({ selectedUser, userId, setUserId, token, busy, onLogin, onMarke
         <button className={activeView === 'futures' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => onNavigateView('futures')}>Futures</button>
         <button className={activeView === 'portfolio' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => onNavigateView('portfolio')}>Portfolio</button>
         <button className={activeView === 'health' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => onNavigateView('health')}>Health</button>
-        <select value={userId} onChange={(event) => setUserId(event.target.value)}>
-          {DEMO_USERS.map((user) => (
-            <option value={user.id} key={user.id}>{user.label}</option>
-          ))}
-        </select>
-        <button className="demo-login-btn" type="button" onClick={() => onLogin(userId)} disabled={busy}>
+        <button className="demo-login-btn" type="button" onClick={onLogin} disabled={busy}>
           {busy ? <Loader2 className="spin" size={15} /> : null}{token ? selectedUser.label : 'Log in demo'}
         </button>
       </div>
