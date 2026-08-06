@@ -98,6 +98,9 @@ func applyPositionFillWithReplay(ctx context.Context, pg *pgxpool.Pool, f *sarve
 		_ = tx.Commit(ctx)
 		return
 	}
+	contract := positionContract{kind: "BINARY", multiplierMicroUSDC: 10000}
+	_ = tx.QueryRow(ctx, `SELECT kind::text, COALESCE(multiplier_micro_usdc,10000) FROM refdata.contracts WHERE ticker=$1`, f.GetTicker()).
+		Scan(&contract.kind, &contract.multiplierMicroUSDC)
 	applyLeg := func(userID, side, action string, qty int64) {
 		sign := int64(1)
 		if side == "NO" || side == "SHORT" {
@@ -116,6 +119,7 @@ FROM position.positions WHERE user_id=$1 AND ticker=$2 FOR UPDATE`, userID, f.Ge
 		}
 		after := before + delta
 		afterAvg := nextAvgCost(before, beforeAvg, delta, fillCost)
+		realized += realizedPnLDelta(contract, before, beforeAvg, delta, f.GetPriceTicks())
 		_, _ = tx.Exec(ctx, `INSERT INTO position.positions (user_id,ticker,net_qty,avg_cost_micro_usdc,realized_pnl_micro_usdc,last_global_seq,updated_at)
 VALUES ($1,$2,$3,$4,0,$5,now())
 ON CONFLICT (user_id,ticker) DO UPDATE SET net_qty=$3,avg_cost_micro_usdc=$4,realized_pnl_micro_usdc=$6,last_global_seq=GREATEST(position.positions.last_global_seq,$5),updated_at=now()`,
@@ -129,6 +133,38 @@ ON CONFLICT (user_id,ticker) DO UPDATE SET net_qty=$3,avg_cost_micro_usdc=$4,rea
 		f.GetFillId(), f.GetTicker(), g)
 	_, _ = tx.Exec(ctx, `UPDATE position.consumer_offsets SET last_global_seq=GREATEST(last_global_seq,$1), updated_at=now() WHERE stream_name='exec.fills'`, g)
 	_ = tx.Commit(ctx)
+}
+
+type positionContract struct {
+	kind                string
+	multiplierMicroUSDC int64
+}
+
+func realizedPnLDelta(contract positionContract, beforeQty, beforeAvg, delta, fillPriceTicks int64) int64 {
+	if beforeQty == 0 || delta == 0 || sameSign(beforeQty, delta) {
+		return 0
+	}
+	closingQty := abs64(delta)
+	if abs64(beforeQty) < closingQty {
+		closingQty = abs64(beforeQty)
+	}
+	if closingQty <= 0 {
+		return 0
+	}
+	positionSign := int64(1)
+	if beforeQty < 0 {
+		positionSign = -1
+	}
+	if contract.kind == "SCALAR" {
+		multiplier := contract.multiplierMicroUSDC
+		if multiplier <= 0 {
+			multiplier = 10000
+		}
+		avgTicks := beforeAvg / 10000
+		return positionSign * closingQty * (fillPriceTicks - avgTicks) * multiplier
+	}
+	fillCost := fillPriceTicks * 10000
+	return positionSign * closingQty * (fillCost - beforeAvg)
 }
 
 func nextAvgCost(beforeQty, beforeAvg, delta, fillCost int64) int64 {

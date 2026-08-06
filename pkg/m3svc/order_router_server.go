@@ -172,8 +172,8 @@ $1,$2,$3,$4,$5::orders.order_side,$6::orders.order_action,$7,$8,0,$8,$9::orders.
 	for _, f := range meResp.GetFills() {
 		s.publishFillEvents(f)
 	}
-	_ = s.runFillPosterOnce(ctx)
-	if isTakeOnly(execReq) {
+	fillPosterErr := s.runFillPosterOnce(ctx)
+	if fillPosterErr == nil && (isTakeOnly(execReq) || fillCount(meResp.GetFills()) >= execReq.GetCount()) {
 		_ = releaseRemainingHold(ctx, s.pg, "ioc-release:"+orderID, holdResp.GetHoldId())
 	}
 	out := mustGetOrder(ctx, s.pg, req.GetUserId(), orderID)
@@ -657,10 +657,21 @@ func mapFillsForResponse(orderID string, in []*sarvexv1.MeFill) []*sarvexv1.Fill
 	return out
 }
 
+func fillCount(in []*sarvexv1.MeFill) int64 {
+	var count int64
+	for _, f := range in {
+		count += f.GetCount()
+	}
+	return count
+}
+
 func (s *orderRouterServer) runFillPosterOnce(ctx context.Context) error {
-	rows, err := s.pg.Query(ctx, `SELECT f.fill_id, f.ticker, f.maker_hold_id, f.taker_hold_id, f.price_ticks, f.count, f.maker_side::text, f.taker_side::text
+	rows, err := s.pg.Query(ctx, `SELECT f.fill_id, f.ticker, f.maker_hold_id, f.taker_hold_id, f.price_ticks, f.count,
+f.maker_side::text, f.maker_action::text, f.taker_side::text, f.taker_action::text,
+c.kind::text, COALESCE(c.lower_bound_ticks,0), COALESCE(c.upper_bound_ticks,0), COALESCE(c.multiplier_micro_usdc,0)
 FROM orders.fill_posting_outbox o
 JOIN orders.fills f ON f.fill_id=o.fill_id
+JOIN refdata.contracts c ON c.ticker=f.ticker
 WHERE o.status='PENDING' AND o.next_attempt_at <= now()
 ORDER BY o.global_seq ASC
 LIMIT 100`)
@@ -670,26 +681,65 @@ LIMIT 100`)
 	defer rows.Close()
 	ledger := &ledgerServer{pg: s.pg}
 	for rows.Next() {
-		var fillID, ticker, makerHold, takerHold, makerSide, takerSide string
-		var price, count int64
-		if err := rows.Scan(&fillID, &ticker, &makerHold, &takerHold, &price, &count, &makerSide, &takerSide); err != nil {
+		var fillID, ticker, makerHold, takerHold, makerSide, makerAction, takerSide, takerAction, kind string
+		var price, count, lower, upper, multiplier int64
+		if err := rows.Scan(&fillID, &ticker, &makerHold, &takerHold, &price, &count, &makerSide, &makerAction, &takerSide, &takerAction, &kind, &lower, &upper, &multiplier); err != nil {
 			return mapPgErr(err)
 		}
-		amt := price * count * 10000
-		if amt < 0 {
-			amt = 0
+		contract := &sarvexv1.Contract{
+			Kind:                sarvexv1.ContractKind_CONTRACT_KIND_BINARY,
+			LowerBoundTicks:     lower,
+			UpperBoundTicks:     upper,
+			MultiplierMicroUsdc: multiplier,
+		}
+		if kind == "SCALAR" {
+			contract.Kind = sarvexv1.ContractKind_CONTRACT_KIND_SCALAR
 		}
 		dest := "LIAB:HOUSE:UNSETTLED_TRADES:" + ticker
 		if makerHold != "" {
+			amt, err := fillHoldAmount(contract, makerSide, makerAction, price, count)
+			if err != nil {
+				return err
+			}
 			_, _ = ledger.CommitHold(ctx, &sarvexv1.CommitHoldRequest{IdempotencyKey: "fill:" + fillID + ":maker", HoldId: makerHold, CommitAmountMicroUsdc: amt, ReleaseAmountMicroUsdc: 0, DestinationAccountCode: dest, ReasonCode: "FILL"})
 		}
 		if takerHold != "" {
+			amt, err := fillHoldAmount(contract, takerSide, takerAction, price, count)
+			if err != nil {
+				return err
+			}
 			_, _ = ledger.CommitHold(ctx, &sarvexv1.CommitHoldRequest{IdempotencyKey: "fill:" + fillID + ":taker", HoldId: takerHold, CommitAmountMicroUsdc: amt, ReleaseAmountMicroUsdc: 0, DestinationAccountCode: dest, ReasonCode: "FILL"})
 		}
 		_, _ = s.pg.Exec(ctx, `UPDATE orders.fills SET ledger_post_status='POSTED' WHERE fill_id=$1`, fillID)
 		_, _ = s.pg.Exec(ctx, `UPDATE orders.fill_posting_outbox SET status='POSTED', attempts=attempts+1, updated_at=now() WHERE fill_id=$1`, fillID)
 	}
 	return nil
+}
+
+func fillHoldAmount(contract *sarvexv1.Contract, side, action string, price, count int64) (int64, error) {
+	if price <= 0 || count <= 0 {
+		return 0, errors.New("price and count must be positive")
+	}
+	if contract.GetKind() == sarvexv1.ContractKind_CONTRACT_KIND_SCALAR {
+		multiplier := contract.GetMultiplierMicroUsdc()
+		if multiplier <= 0 {
+			return 0, errors.New("scalar multiplier missing")
+		}
+		if signedPositionDelta(sideProto(side), actionProto(action), count) >= 0 {
+			if price < contract.GetLowerBoundTicks() {
+				return 0, errors.New("scalar fill below lower bound")
+			}
+			return (price - contract.GetLowerBoundTicks()) * count * multiplier, nil
+		}
+		if price > contract.GetUpperBoundTicks() {
+			return 0, errors.New("scalar fill above upper bound")
+		}
+		return (contract.GetUpperBoundTicks() - price) * count * multiplier, nil
+	}
+	if actionProto(action) == sarvexv1.Action_ACTION_SELL {
+		return (100 - price) * count * 10000, nil
+	}
+	return price * count * 10000, nil
 }
 
 func sideDB(v sarvexv1.Side) string {

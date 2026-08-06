@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -463,10 +464,25 @@ func infrastructureHealthChecks() []struct {
 		name   string
 		target string
 	}{
-		{"postgres", "postgres:5432"},
-		{"redis", "redis:6379"},
-		{"nats", "nats:4222"},
+		{"postgres", targetFromURL(getenv("POSTGRES_URL", ""), "postgres:5432")},
+		{"redis", targetFromURL(getenv("REDIS_URL", ""), getenv("REDIS_ADDR", "redis:6379"))},
+		{"nats", targetFromURL(getenv("NATS_URL", ""), "nats:4222")},
 	}
+}
+
+func targetFromURL(raw, fallback string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback
+	}
+	if strings.Contains(raw, ",") {
+		raw = strings.TrimSpace(strings.Split(raw, ",")[0])
+	}
+	u, err := url.Parse(raw)
+	if err != nil || strings.TrimSpace(u.Host) == "" {
+		return fallback
+	}
+	return u.Host
 }
 
 func backendHealthChecks() []struct {

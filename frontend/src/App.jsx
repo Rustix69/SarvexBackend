@@ -490,7 +490,7 @@ function TopNav({ selectedUser, userId, setUserId, token, busy, onLogin, onMarke
     <header className="topbar">
       <button className="brand" type="button" onClick={onMarkets}>
         <img className="brand-mark" src="/logo.png" alt="" aria-hidden="true" />
-        <span>SarvaEX</span>
+        <span>Sarvaex</span>
       </button>
       <div />
       <div className="user-cluster">
@@ -541,7 +541,7 @@ function HealthPage({ api }) {
     <main className="health-page">
       <section className="health-hero">
         <div>
-          <p className="portfolio-kicker">SarvaEX system status</p>
+          <p className="portfolio-kicker">Sarvaex system status</p>
           <h1>Health</h1>
         </div>
         <button className="secondary-btn refresh-btn" type="button" onClick={loadHealth}><RefreshCw size={16} /> Refresh</button>
@@ -597,13 +597,13 @@ function MarketDashboard({ loading, markets, fills, onSelect, onRefresh }) {
     <main className="dashboard-page">
       <section className="dashboard-hero">
         <div>
-          <h1>Trade real-world outcomes with USDC-settled order books.</h1>
+          <h1>Trade Futures and options on real-world event outcomes</h1>
         </div>
         <button className="secondary-btn refresh-btn" type="button" onClick={onRefresh}><RefreshCw size={16} /> Refresh markets</button>
       </section>
 
       {loading ? (
-        <div className="loading-panel"><Loader2 className="spin" /> Loading Sarvex markets...</div>
+        <div className="loading-panel"><Loader2 className="spin" /> Loading Sarvaex markets...</div>
       ) : (
         <section className="market-grid">
           {rows.map((market, index) => (
@@ -657,7 +657,7 @@ function FuturesDashboard({ loading, futures, fills, onSelect, onRefresh }) {
       </section>
 
       {loading ? (
-        <div className="loading-panel"><Loader2 className="spin" /> Loading Sarvex futures...</div>
+        <div className="loading-panel"><Loader2 className="spin" /> Loading Sarvaex futures...</div>
       ) : rows.length ? (
         <section className="market-grid">
           {rows.map((market, index) => (
@@ -712,7 +712,7 @@ function MarketDetail({ market, orderbook, fills, position, authed, busy, onBack
         <div className="detail-heading">
           <div className="market-avatar xl">{avatarText(market)}</div>
           <div>
-            <p className="crumb">{market.series_ticker || market.seriesTicker || 'Sarvex'} · {market.kind === 2 ? 'Scalar Future' : 'Binary Contract'}</p>
+            <p className="crumb">{market.series_ticker || market.seriesTicker || 'Sarvaex'} · {market.kind === 2 ? 'Scalar Future' : 'Binary Contract'}</p>
             <h1>{market.question || market.underlying || market.ticker}</h1>
           </div>
           <div className="heading-actions"><Share2 size={18} /><Link2 size={18} /><Bookmark size={18} /></div>
@@ -727,7 +727,7 @@ function MarketDetail({ market, orderbook, fills, position, authed, busy, onBack
         <section className="chart-card">
           <div className="chart-header">
             <div><span>Implied chance</span><strong>{last}%</strong></div>
-            <span className="powered">Powered by Sarvex ME</span>
+            <span className="powered">Powered by Sarvaex ME</span>
           </div>
           <svg className="price-chart" viewBox="0 0 720 260" role="img" aria-label="Market price chart">
             <defs>
@@ -782,7 +782,7 @@ function FutureDetail({ market, orderbook, fills, position, authed, busy, onBack
         <div className="detail-heading">
           <div className="market-avatar xl">{avatarText(market)}</div>
           <div>
-            <p className="crumb">{market.series_ticker || market.seriesTicker || 'Sarvex'} · Numeric Future</p>
+            <p className="crumb">{market.series_ticker || market.seriesTicker || 'Sarvaex'} · Numeric Future</p>
             <h1>{market.question || market.underlying || market.ticker}</h1>
           </div>
           <div className="heading-actions"><Share2 size={18} /><Link2 size={18} /><Bookmark size={18} /></div>
@@ -960,7 +960,7 @@ function TradeTicket({ market, bestBid, bestAsk, authed, busy, onTrade }) {
       <button className="trade-btn" type="button" disabled={!authed || busy || !shares} onClick={submit}>
         {busy ? <Loader2 className="spin" size={17} /> : <CircleDollarSign size={17} />} {authed ? `${orderType === 'market' ? 'Market' : 'Limit'} trade` : 'Login to trade'}
       </button>
-      <p>By trading, you agree to Sarvex demo terms.</p>
+      <p>By trading, you agree to Sarvaex demo terms.</p>
     </section>
   )
 }
