@@ -783,6 +783,8 @@ function MarketDetail({ market, watchlist, onSelect, orderbook, fills, position,
           </svg>
         </section>
 
+        <OracleDetails market={market} />
+
         <section className="contracts-table">
           <ContractRow title="Yes" price={bestAsk || last} side="yes" onClick={() => document.querySelector('#trade-ticket')?.scrollIntoView({ behavior: 'smooth' })} />
           <ContractRow title="No" price={100 - (bestBid || last)} side="no" onClick={() => document.querySelector('#trade-ticket')?.scrollIntoView({ behavior: 'smooth' })} />
@@ -855,6 +857,8 @@ function FutureDetail({ market, watchlist, onSelect, orderbook, fills, position,
           </svg>
         </section>
 
+        <OracleDetails market={market} />
+
         <section className="contracts-table future-contracts">
           <button className="contract-row" type="button" onClick={() => document.querySelector('#trade-ticket')?.scrollIntoView({ behavior: 'smooth' })}>
             <div><strong>Long higher</strong><span>Payoff rises when final value is above entry.</span></div>
@@ -904,6 +908,49 @@ function ContractRow({ title, price, side, onClick }) {
       <b key={price}>{price}%</b>
       <em className={side === 'yes' ? 'yes' : 'no'}>Buy {title} {Math.max(1, Math.min(99, price))}¢</em>
     </button>
+  )
+}
+
+function OracleDetails({ market }) {
+  const source = market?.settlement_source || market?.settlementSource || 'Not published'
+  const policy = market?.oracle_policy || market?.oraclePolicy || 'Not published'
+  const underlying = market?.underlying || (isFutureMarket(market) ? 'Numeric value defined by the contract' : 'Binary outcome defined by the contract')
+  const closeAt = market?.close_at || market?.closeAt
+  const resolutionAt = market?.expected_resolution_at || market?.expectedResolutionAt
+
+  return (
+    <section className="oracle-details">
+      <div className="panel-head compact">
+        <div className="oracle-title"><Activity size={16} /><h2>Oracle & settlement</h2></div>
+        <span>{market?.catalogOnly ? 'Awaiting refdata' : 'Configured'}</span>
+      </div>
+      <div className="oracle-grid">
+        <div className="oracle-item oracle-wide">
+          <span>Underlying / observation</span>
+          <strong>{underlying}</strong>
+        </div>
+        <div className="oracle-item">
+          <span>Settlement source</span>
+          <strong>{source}</strong>
+        </div>
+        <div className="oracle-item">
+          <span>Oracle policy</span>
+          <strong>{policy}</strong>
+        </div>
+        <div className="oracle-item">
+          <span>Settlement rule</span>
+          <strong>{formatSettlementRule(market?.settlement_rule || market?.settlementRule)}</strong>
+        </div>
+        <div className="oracle-item">
+          <span>Trading closes</span>
+          <strong>{formatDate(closeAt)}</strong>
+        </div>
+        <div className="oracle-item">
+          <span>Expected resolution</span>
+          <strong>{formatDate(resolutionAt)}</strong>
+        </div>
+      </div>
+    </section>
   )
 }
 
@@ -1588,6 +1635,24 @@ function formatDate(value) {
   const seconds = value?.seconds
   if (!seconds) return 'Demo market'
   return new Date(Number(seconds) * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function formatSettlementRule(value) {
+  if (!value) return 'Not published'
+  let rule = value
+  if (typeof value === 'string') {
+    try {
+      rule = JSON.parse(value)
+    } catch {
+      return value
+    }
+  }
+  if (rule?.type === 'categorical_equals') {
+    const values = Array.isArray(rule.yes_values) ? rule.yes_values.join(', ') : 'YES'
+    return `Binary: ${values}`
+  }
+  if (rule?.type === 'scalar_numeric') return 'Scalar numeric'
+  return rule?.type || 'Configured rule'
 }
 
 function formatTime(value) {
