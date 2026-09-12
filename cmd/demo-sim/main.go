@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"math/rand"
 	"net/http"
 	"os"
@@ -36,6 +37,7 @@ type config struct {
 	resetBook    bool
 	continuous   bool
 	initialBook  bool
+	booksOnly    bool
 }
 
 type demoContract struct {
@@ -146,12 +148,24 @@ func main() {
 	}
 
 	log.Printf("simulator ready tickers=%s bots=%d rounds=%d continuous=%v", strings.Join(cfg.tickers, ","), len(bots), cfg.rounds, cfg.continuous)
-	if cfg.initialBook {
+	if cfg.initialBook && !cfg.booksOnly {
 		for _, ticker := range cfg.tickers {
 			runCfg := cfg
 			runCfg.ticker = ticker
 			seedInitialBook(ctx, runCfg, contracts[ticker], bots, rng)
 		}
+	}
+	if cfg.booksOnly {
+		for _, ticker := range cfg.tickers {
+			runCfg := cfg
+			runCfg.ticker = ticker
+			if err := reopenMatchingBook(ctx, runCfg); err != nil {
+				log.Printf("initialize matching book %s: %v", ticker, err)
+				continue
+			}
+		}
+		log.Printf("matching books initialized tickers=%d", len(cfg.tickers))
+		return
 	}
 
 	round := 0
@@ -193,6 +207,7 @@ func parseFlags() config {
 	flag.BoolVar(&cfg.resetBook, "reset-book", false, "reset/reopen the in-memory matching book before simulating")
 	flag.BoolVar(&cfg.continuous, "continuous", false, "run until interrupted")
 	flag.BoolVar(&cfg.initialBook, "initial-book", true, "seed passive book depth before trade rounds")
+	flag.BoolVar(&cfg.booksOnly, "books-only", false, "initialize matching books and exit without submitting orders")
 	flag.Parse()
 	if cfg.users < 4 {
 		cfg.users = 4
@@ -367,7 +382,9 @@ ON CONFLICT (user_id) DO UPDATE SET email=EXCLUDED.email, display_name=EXCLUDED.
 		_, err = pool.Exec(ctx, `INSERT INTO risk.user_limits (user_id, kyc_tier, max_order_size_micro_usdc, daily_loss_limit_micro_usdc, orders_per_second_limit)
 VALUES ($1,$2,$3,$4,$5)
 ON CONFLICT (user_id) DO UPDATE SET kyc_tier=EXCLUDED.kyc_tier, max_order_size_micro_usdc=EXCLUDED.max_order_size_micro_usdc, daily_loss_limit_micro_usdc=EXCLUDED.daily_loss_limit_micro_usdc, orders_per_second_limit=EXCLUDED.orders_per_second_limit, updated_at=now()`,
-			userID, kycTier, int64(100_000_000_000), int64(1_000_000_000_000), 100)
+			// Workbook scalar contracts use larger integer price scales than binary
+			// contracts; keep this elevated limit scoped to simulator users only.
+			userID, kycTier, int64(1_000_000_000_000_000), int64(1_000_000_000_000_000), 100)
 		if err != nil {
 			return err
 		}
@@ -397,7 +414,9 @@ func seedInitialBook(ctx context.Context, cfg config, contract demoContract, bot
 }
 
 func runRound(ctx context.Context, cfg config, contract demoContract, bots []bot, rng *rand.Rand, round int) {
-	fair := fairTicks(contract, rng)
+	// Move the demo fair value through a bounded path so real fills produce a useful
+	// market history while remaining inside the contract's valid price range.
+	fair := movingFairTicks(contract, rng, round)
 	step := priceStep(contract)
 	side := orderSide(contract)
 	makerCount := 4 + rng.Intn(5)
@@ -521,6 +540,29 @@ func fairTicks(contract demoContract, rng *rand.Rand) int64 {
 		jitter = contract.tickSize()
 	}
 	return clampTicks(mid+int64(rng.Int63n(jitter*2+1))-jitter, contract)
+}
+
+func movingFairTicks(contract demoContract, rng *rand.Rand, round int) int64 {
+	minPrice := contract.minPrice()
+	maxPrice := contract.maxPrice()
+	width := maxPrice - minPrice
+	if width <= 0 {
+		return minPrice
+	}
+
+	center := minPrice + width/2
+	// Two frequencies create visible turns without making the demo price jump
+	// unrealistically between adjacent rounds.
+	swing := float64(width) * (0.16*math.Sin(float64(round)/2.4) + 0.07*math.Sin(float64(round)/5.8))
+	jitterRange := width / 45
+	if contract.isScalar() {
+		jitterRange = width / 70
+	}
+	if jitterRange < contract.tickSize() {
+		jitterRange = contract.tickSize()
+	}
+	jitter := float64(rng.Int63n(jitterRange*2+1) - jitterRange)
+	return clampTicks(center+int64(swing+jitter), contract)
 }
 
 func priceStep(contract demoContract) int64 {

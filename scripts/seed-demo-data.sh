@@ -20,8 +20,10 @@ PSQL_BASE=(psql "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_H
 echo "[seed-demo-data] Seeding demo users..."
 "${PSQL_BASE[@]}" -f "${ROOT_DIR}/db/seed/demo_users.sql"
 
-echo "[seed-demo-data] Seeding contracts/events..."
-"${PSQL_BASE[@]}" -f "${ROOT_DIR}/db/seed/contracts.sql"
+echo "[seed-demo-data] Seeding workbook contracts/events..."
+for workbook_seed in "${ROOT_DIR}"/db/seed/contracts_workbook_*.sql; do
+  "${PSQL_BASE[@]}" -f "${workbook_seed}"
+done
 
 echo "[seed-demo-data] Seeding house accounts..."
 "${PSQL_BASE[@]}" -f "${ROOT_DIR}/db/seed/house_accounts.sql"

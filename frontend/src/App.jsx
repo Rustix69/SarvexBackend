@@ -6,14 +6,22 @@ import {
   BarChart3,
   Bookmark,
   CircleDollarSign,
+  CalendarDays,
+  ChevronDown,
+  Grid2X2,
   Clock3,
   Gift,
+  Hexagon,
   Link2,
   Loader2,
   LogOut,
   RefreshCw,
   Share2,
+  SlidersHorizontal,
+  List,
+  Search,
 } from 'lucide-react'
+import { contractsCatalog } from './contractsCatalog'
 import './App.css'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api'
@@ -166,14 +174,19 @@ function App() {
     setError('')
     let nextMarkets = marketsRef.current
     let nextFutures = futuresRef.current
+    let liveContracts = []
     const shouldRefreshMarkets = refreshMarkets || !nextMarkets.length || !nextFutures.length || Date.now() - lastMarketListRefreshRef.current > MARKET_LIST_REFRESH_MS
     if (shouldRefreshMarkets) {
-      const marketBody = await api('/v1/markets?state=OPEN&limit=50', { auth: false })
-      const contracts = marketBody?.contracts || []
-      nextMarkets = contracts
+      // The refdata API permits up to 200 contracts; load the complete MVP
+      // catalog so cards are not incorrectly treated as catalog-only.
+      const marketBody = await api('/v1/markets?state=OPEN&limit=200', { auth: false })
+      liveContracts = marketBody?.contracts || []
+      const catalogContracts = contractsCatalog.map(catalogMarket)
+      const liveByTicker = new Map(liveContracts.map((market) => [market.ticker, market]))
+      const mergedContracts = catalogContracts.map((market) => ({ ...market, ...(liveByTicker.get(market.ticker) || {}), catalogOnly: !liveByTicker.has(market.ticker) }))
+      nextMarkets = mergedContracts
         .filter((market) => !isFutureMarket(market) && !HIDDEN_DEMO_MARKET_TICKERS.has(market.ticker))
-        .slice(0, 9)
-      nextFutures = contracts.filter((market) => isFutureMarket(market)).slice(0, 9)
+      nextFutures = mergedContracts.filter((market) => isFutureMarket(market))
       marketsRef.current = nextMarkets
       futuresRef.current = nextFutures
       lastMarketListRefreshRef.current = Date.now()
@@ -181,10 +194,12 @@ function App() {
       setFutures(nextFutures)
     }
     const visibleContracts = [...nextMarkets, ...nextFutures]
-    const ticker = selectedTickerRef.current || nextMarkets[0]?.ticker || nextFutures[0]?.ticker
-    const fillContracts = activeViewRef.current === 'trade' && ticker
-      ? visibleContracts.filter((market) => market.ticker === ticker)
-      : visibleContracts
+    const liveTickers = new Set(visibleContracts.filter((market) => !market.catalogOnly).map((market) => market.ticker))
+    const ticker = liveTickers.has(selectedTickerRef.current) ? selectedTickerRef.current : [...liveTickers][0]
+    const liveVisibleContracts = visibleContracts.filter((market) => liveTickers.has(market.ticker))
+    const fillContracts = ticker
+      ? liveVisibleContracts.filter((market) => market.ticker === ticker)
+      : liveVisibleContracts.slice(0, 12)
     const fillsByMarket = await Promise.all(fillContracts.map((market) => fetchMarketFills(market.ticker).catch(() => [])))
     const incomingFills = fillsByMarket.flat()
     setFills((current) => mergeRecentFills(current, incomingFills, visibleContracts.map((market) => market.ticker)))
@@ -392,6 +407,8 @@ function App() {
       {activeView === 'trade' && selectedMarket && selectedIsFuture ? (
         <FutureDetail
           market={selectedMarket}
+          watchlist={futures}
+          onSelect={handleMarketSelect}
           orderbook={orderbook}
           fills={selectedFills}
           position={selectedPosition}
@@ -420,6 +437,8 @@ function App() {
       ) : activeView === 'trade' && selectedMarket ? (
         <MarketDetail
           market={selectedMarket}
+          watchlist={markets}
+          onSelect={handleMarketSelect}
           orderbook={orderbook}
           fills={selectedFills}
           position={selectedPosition}
@@ -486,15 +505,19 @@ function TopNav({ selectedUser, token, busy, onLogin, onMarkets, onNavigateView,
   return (
     <header className="topbar">
       <button className="brand" type="button" onClick={onMarkets}>
-        <img className="brand-mark" src="/logo.png" alt="" aria-hidden="true" />
+        <span className="brand-mark-new" aria-hidden="true"><Hexagon size={25} strokeWidth={1.8} /></span>
         <span>Sarvaex</span>
       </button>
-      <div />
+      <div className="topbar-center">
+        <label className="global-search"><Search size={15} /><input placeholder="Search" aria-label="Search markets" /><kbd>/</kbd></label>
+        <nav className="main-nav">
+          <button className={activeView === 'markets' ? 'nav-link active' : 'nav-link'} type="button" onClick={onMarkets}>Discover</button>
+          <button className={activeView === 'futures' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => onNavigateView('futures')}>Futures</button>
+          <button className="nav-link" type="button" onClick={onMarkets}>Terminal</button>
+          <button className={activeView === 'portfolio' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => onNavigateView('portfolio')}>Portfolio</button>
+        </nav>
+      </div>
       <div className="user-cluster">
-        <button className={activeView === 'markets' ? 'nav-link active' : 'nav-link'} type="button" onClick={onMarkets}>Markets</button>
-        <button className={activeView === 'futures' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => onNavigateView('futures')}>Futures</button>
-        <button className={activeView === 'portfolio' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => onNavigateView('portfolio')}>Portfolio</button>
-        <button className={activeView === 'health' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => onNavigateView('health')}>Health</button>
         <button className="demo-login-btn" type="button" onClick={onLogin} disabled={busy}>
           {busy ? <Loader2 className="spin" size={15} /> : null}{token ? selectedUser.label : 'Log in demo'}
         </button>
@@ -584,16 +607,26 @@ function HealthPage({ api }) {
 }
 
 function MarketDashboard({ loading, markets, fills, onSelect, onRefresh }) {
-  const rows = markets.length ? markets : []
+  const [section, setSection] = useState('All')
+  const sections = ['All', 'Economics', 'Finance', 'Crypto', 'Commodities', 'Elections', 'Sports', 'Climate', 'Geopolitics / Shipping']
+  const rows = markets.filter((market) => section === 'All' || contractSection(market) === section)
   return (
     <main className="dashboard-page">
+      <nav className="category-nav" aria-label="Market categories">
+        {sections.map((item) => <button className={section === item ? 'category-link active' : 'category-link'} type="button" key={item} onClick={() => setSection(item)}>{item}</button>)}
+      </nav>
       <section className="dashboard-hero">
-        <div>
-          <h1>Trade Futures and options on real-world event outcomes</h1>
+        <div className="promo-banner">
+          <img src="/logo.png" alt="" aria-hidden="true" />
+          <div><span>Powered by Sarvaex</span><strong>Trade what happens next.</strong><small>Event markets with live prices and transparent settlement.</small></div>
         </div>
-        <button className="secondary-btn refresh-btn" type="button" onClick={onRefresh}><RefreshCw size={16} /> Refresh markets</button>
+        <aside className="live-panel">
+          <div className="live-panel-head"><span><i /> Live markets</span><span>1 / 11 <ChevronDown size={13} /></span></div>
+          {markets.slice(0, 5).map((market, index) => <button type="button" className="live-market" key={market.ticker} onClick={() => onSelect(market.ticker)}><span className={`live-avatar avatar-${index}`}>{avatarText(market)}</span><span><small>{contractSection(market)} · {market.catalogOnly ? 'Planned' : 'Live'}</small><b>{market.question || market.underlying || market.ticker}</b></span><strong>{Math.max(1, Math.min(99, impliedPrice(market, fills)))}%</strong></button>)}
+        </aside>
       </section>
 
+      <div className="market-toolbar"><label><Search size={15} /> Search loaded markets</label><div><span>All Platforms <ChevronDown size={14} /></span><span>1h Vol <ChevronDown size={14} /></span><button title="Grid view"><Grid2X2 size={16} /></button><button title="List view"><List size={16} /></button><button title="Date filter"><CalendarDays size={16} /></button><button title="Filters"><SlidersHorizontal size={16} /></button></div></div>
       {loading ? (
         <div className="loading-panel"><Loader2 className="spin" /> Loading Sarvaex markets...</div>
       ) : (
@@ -622,7 +655,7 @@ function MarketCard({ market, fills, index, onClick }) {
   return (
     <button className="market-card" type="button" onClick={onClick} style={{ animationDelay: `${index * 35}ms` }}>
       <div className="card-topline">
-        <div className="market-avatar">{avatarText(market)}</div>
+        <MarketImage market={market} index={index} />
         <h3>{market.question || market.underlying || market.ticker}</h3>
       </div>
       <div className="outcome-list">
@@ -674,7 +707,7 @@ function FutureCard({ market, fills, index, onClick }) {
   return (
     <button className="market-card future-card" type="button" onClick={onClick} style={{ animationDelay: `${index * 35}ms` }}>
       <div className="card-topline">
-        <div className="market-avatar">{avatarText(market)}</div>
+        <MarketImage market={market} index={index} />
         <h3>{market.question || market.underlying || market.ticker}</h3>
       </div>
       <div className="outcome-list future-list">
@@ -691,14 +724,30 @@ function FutureCard({ market, fills, index, onClick }) {
   )
 }
 
-function MarketDetail({ market, orderbook, fills, position, authed, busy, onBack, onTrade }) {
+function TerminalWatchlist({ markets, selectedTicker, onSelect }) {
+  return (
+    <aside className="terminal-watchlist">
+      <div className="terminal-watchlist-head"><span>Markets</span><span><RefreshCw size={12} /></span></div>
+      <div className="terminal-watchlist-list">
+        {markets.slice(0, 14).map((item, index) => <button className={item.ticker === selectedTicker ? 'watch-item active' : 'watch-item'} type="button" key={item.ticker} onClick={() => onSelect(item.ticker)}>
+          <span className={`watch-icon watch-${index % 5}`}>{avatarText(item)}</span>
+          <span><b>{item.question || item.ticker}</b><small>{Math.max(1, Math.min(99, impliedPrice(item, [])))}¢ <em>{100 - Math.max(1, Math.min(99, impliedPrice(item, [])))}¢</em></small></span>
+        </button>)}
+      </div>
+      {!markets.length && <div className="watch-empty">No markets loaded</div>}
+    </aside>
+  )
+}
+
+function MarketDetail({ market, watchlist, onSelect, orderbook, fills, position, authed, busy, onBack, onTrade }) {
   const bestBid = Number(orderbook?.bids?.[0]?.price_ticks || orderbook?.bids?.[0]?.priceTicks || 0)
   const bestAsk = Number(orderbook?.asks?.[0]?.price_ticks || orderbook?.asks?.[0]?.priceTicks || 0)
   const last = Number(fills?.[fills.length - 1]?.price_ticks || fills?.[fills.length - 1]?.priceTicks || bestAsk || bestBid || 50)
   const chartPoints = useMemo(() => buildChartPoints(fills, last), [fills, last])
 
   return (
-    <main className="detail-page">
+    <main className="detail-page terminal-page">
+      <TerminalWatchlist markets={watchlist} selectedTicker={market.ticker} onSelect={onSelect} />
       <section className="market-main">
         <button className="back-btn" type="button" onClick={onBack}><ArrowLeft size={16} /> All markets</button>
         <div className="detail-heading">
@@ -719,18 +768,18 @@ function MarketDetail({ market, orderbook, fills, position, authed, busy, onBack
         <section className="chart-card">
           <div className="chart-header">
             <div><span>Implied chance</span><strong>{last}%</strong></div>
-            <span className="powered">Powered by Sarvaex ME</span>
+          <span className="powered">Powered by Sarvaex ME</span>
           </div>
-          <svg className="price-chart" viewBox="0 0 720 260" role="img" aria-label="Market price chart">
+          <svg className="price-chart" viewBox="0 0 720 360" role="img" aria-label="Market price chart">
             <defs>
               <linearGradient id="priceFill" x1="0" x2="0" y1="0" y2="1">
                 <stop offset="0%" stopColor="#4f46e5" stopOpacity="0.22" />
                 <stop offset="100%" stopColor="#4f46e5" stopOpacity="0" />
               </linearGradient>
             </defs>
-            <path d={`${chartPoints.area} L 720 248 L 0 248 Z`} fill="url(#priceFill)" />
+            <path d={`${chartPoints.area} L 720 348 L 0 348 Z`} fill="url(#priceFill)" />
             <path d={chartPoints.line} fill="none" stroke="#4f46e5" strokeWidth="3" strokeLinecap="round" />
-            {[0, 1, 2, 3].map((line) => <line key={line} x1="0" x2="720" y1={28 + line * 56} y2={28 + line * 56} stroke="#ececf2" />)}
+            {[0, 1, 2, 3, 4, 5].map((line) => <line key={line} x1="0" x2="720" y1={30 + line * 58} y2={30 + line * 58} stroke="#292b32" />)}
           </svg>
         </section>
 
@@ -740,12 +789,12 @@ function MarketDetail({ market, orderbook, fills, position, authed, busy, onBack
         </section>
 
         <section className="lower-grid">
-          <OrderBook book={orderbook} market={market} />
           <RecentTrades fills={fills} market={market} />
         </section>
       </section>
 
       <aside className="trade-side">
+        <OrderBook book={orderbook} market={market} />
         <TradeTicket
           market={market}
           bestBid={bestBid}
@@ -760,15 +809,16 @@ function MarketDetail({ market, orderbook, fills, position, authed, busy, onBack
   )
 }
 
-function FutureDetail({ market, orderbook, fills, position, authed, busy, onBack, onTrade }) {
+function FutureDetail({ market, watchlist, onSelect, orderbook, fills, position, authed, busy, onBack, onTrade }) {
   const bestBid = Number(orderbook?.bids?.[0]?.price_ticks || orderbook?.bids?.[0]?.priceTicks || 0)
   const bestAsk = Number(orderbook?.asks?.[0]?.price_ticks || orderbook?.asks?.[0]?.priceTicks || 0)
   const last = Number(fills?.[fills.length - 1]?.price_ticks || fills?.[fills.length - 1]?.priceTicks || midpoint(bestBid, bestAsk) || futureFallbackTicks(market))
-  const chartPoints = useMemo(() => buildChartPoints(fills, last, market), [fills, last, market])
+  const candles = useMemo(() => buildCandles(fills, last, market), [fills, last, market])
   const multiplier = Number(market.multiplier_micro_usdc ?? market.multiplierMicroUsdc ?? 0)
 
   return (
-    <main className="detail-page">
+    <main className="detail-page terminal-page">
+      <TerminalWatchlist markets={watchlist} selectedTicker={market.ticker} onSelect={onSelect} />
       <section className="market-main">
         <button className="back-btn" type="button" onClick={onBack}><ArrowLeft size={16} /> All futures</button>
         <div className="detail-heading">
@@ -789,19 +839,19 @@ function FutureDetail({ market, orderbook, fills, position, authed, busy, onBack
 
         <section className="chart-card">
           <div className="chart-header">
-            <div><span>Market price</span><strong>{formatFuturePrice(market, last)}</strong></div>
+            <div><span>Candlestick · Market price</span><strong>{formatFuturePrice(market, last)}</strong></div>
             <span className="powered">Linear USDC-settled demo future</span>
           </div>
-          <svg className="price-chart" viewBox="0 0 720 260" role="img" aria-label="Futures price chart">
-            <defs>
-              <linearGradient id="futurePriceFill" x1="0" x2="0" y1="0" y2="1">
-                <stop offset="0%" stopColor="#08784e" stopOpacity="0.2" />
-                <stop offset="100%" stopColor="#08784e" stopOpacity="0" />
-              </linearGradient>
-            </defs>
-            <path d={`${chartPoints.area} L 720 248 L 0 248 Z`} fill="url(#futurePriceFill)" />
-            <path d={chartPoints.line} fill="none" stroke="#08784e" strokeWidth="3" strokeLinecap="round" />
-            {[0, 1, 2, 3].map((line) => <line key={line} x1="0" x2="720" y1={28 + line * 56} y2={28 + line * 56} stroke="#ececf2" />)}
+          <svg className="price-chart futures-candle-chart" viewBox="0 0 720 360" role="img" aria-label="Futures candlestick price chart">
+            {[0, 1, 2, 3, 4, 5].map((line) => <line key={line} x1="0" x2="720" y1={30 + line * 58} y2={30 + line * 58} stroke="#292b32" />)}
+            <g className="futures-candles">
+              {candles.map((candle) => (
+                <g key={candle.key} className={candle.close >= candle.open ? 'candle-up' : 'candle-down'}>
+                  <line x1={candle.x} x2={candle.x} y1={candle.highY} y2={candle.lowY} />
+                  <rect x={candle.x - candle.width / 2} y={Math.min(candle.openY, candle.closeY)} width={candle.width} height={Math.max(2, Math.abs(candle.closeY - candle.openY))} />
+                </g>
+              ))}
+            </g>
           </svg>
         </section>
 
@@ -819,12 +869,12 @@ function FutureDetail({ market, orderbook, fills, position, authed, busy, onBack
         </section>
 
         <section className="lower-grid">
-          <OrderBook book={orderbook} market={market} />
           <RecentTrades fills={fills} market={market} />
         </section>
       </section>
 
       <aside className="trade-side">
+        <OrderBook book={orderbook} market={market} />
         <FutureTradeTicket
           market={market}
           bestBid={bestBid}
@@ -1060,40 +1110,55 @@ function PortfolioPage({ balance, authed, busy, positions, orders, marketPrices,
   return (
     <main className="portfolio-page">
       <section className="portfolio-hero">
-        <div>
-          <p className="portfolio-kicker">{selectedUser.label}</p>
-          <h1>Portfolio</h1>
-        </div>
+        <h1>Portfolio</h1>
         <div className="portfolio-actions">
           <button className="secondary-btn refresh-btn" type="button" onClick={onRefresh}><RefreshCw size={16} /> Refresh</button>
           <button className="fund-btn compact" type="button" disabled={!authed || busy} onClick={onDeposit}><Gift size={16} /> Add $10k demo funds</button>
         </div>
       </section>
 
-      <section className="portfolio-metrics">
-        <div>
-          <span>Cash</span>
-          <strong>{authed ? formatUSDC(cash) : '--'}</strong>
-        </div>
-        <div>
-          <span>Held</span>
-          <strong>{authed ? formatUSDC(held) : '--'}</strong>
-        </div>
-        <div>
-          <span>Positions</span>
-          <strong>{positions.length}</strong>
-        </div>
-        <div>
-          <span>Live PnL</span>
-          <strong className={pnlClassName(livePnl)}>{authed ? formatSignedUSDC(livePnl) : '--'}</strong>
-        </div>
-        <div>
-          <span>Orders</span>
-          <strong>{orders.length}</strong>
-        </div>
+      <section className="portfolio-account-strip">
+        <div className="portfolio-account-name"><strong>{selectedUser.label}</strong><span>Demo account</span></div>
+        <PortfolioAccountMetric label="Portfolio" value={authed ? formatUSDC(cash) : '--'} />
+        <PortfolioAccountMetric label="Positions" value={authed ? formatUSDC(held) : '--'} />
+        <PortfolioAccountMetric label="Live PnL" value={authed ? formatSignedUSDC(livePnl) : '--'} tone={pnlClassName(livePnl)} />
+        <PortfolioAccountMetric label="Orders" value={orders.length} />
+        <div className="portfolio-account-tools"><button type="button" title="Refresh portfolio" onClick={onRefresh}><RefreshCw size={15} /></button><button type="button" title="Add demo funds" onClick={onDeposit} disabled={!authed || busy}><Gift size={15} /></button></div>
       </section>
 
-      <section className="portfolio-grid-page">
+      <section className="portfolio-workspace">
+        <aside className="portfolio-metrics-rail">
+          <div className="workspace-title">Metrics</div>
+          <div className="portfolio-winrate"><strong>0.0%</strong><span>Win Rate</span><em>{authed ? formatUSDC(livePnl) : '--'} <small>OW / OL</small></em></div>
+          <PortfolioRailMetric label="Realized PnL" value={authed ? formatSignedUSDC(0) : '--'} />
+          <PortfolioRailMetric label="Unrealized PnL" value={authed ? formatSignedUSDC(livePnl) : '--'} tone={pnlClassName(livePnl)} />
+          <PortfolioRailMetric label="Open Positions" value={positions.length} />
+          <PortfolioRailMetric label="At Risk" value={authed ? formatUSDC(held) : '--'} />
+          <PortfolioRailMetric label="Open Value" value={authed ? formatUSDC(cash) : '--'} />
+          <PortfolioRailMetric label="Volume" value={orders.length} />
+        </aside>
+
+        <section className="portfolio-calendar-panel">
+          <div className="workspace-tabs"><button className="active" type="button">Calendar</button><button type="button">Chart</button><div className="workspace-tabs-spacer" /><button className="active" type="button">PnL</button><button type="button">Volume</button></div>
+          <PortfolioCalendar />
+        </section>
+
+        <aside className="portfolio-referrals">
+          <div className="referrals-head"><strong>Referrals</strong><button type="button">+ New</button></div>
+          <PortfolioRailMetric label="Active" value="0" />
+          <PortfolioRailMetric label="Joined" value="0" />
+          <PortfolioRailMetric label="Left" value="0" />
+          <p>No invite codes yet.</p>
+          <div className="referral-art" aria-hidden="true" />
+        </aside>
+      </section>
+
+      <nav className="portfolio-subnav" aria-label="Portfolio sections">
+        {['Positions', 'Activity', 'Rewards', 'Copy Trading', 'Advanced Analytics', 'Competitions'].map((tab, index) => <button className={index === 0 ? 'active' : ''} type="button" key={tab}>{tab}</button>)}
+        <span className="portfolio-subnav-spacer" /><button type="button">Hide history</button><button type="button">Status⌄</button><button type="button">Category⌄</button><button type="button">Search markets...</button>
+      </nav>
+
+      <section className="portfolio-grid-page portfolio-data-panels">
         <div className="portfolio-panel">
           <div className="panel-head"><h2>Positions</h2><span>{positions.length} total</span></div>
           <div className="portfolio-table">
@@ -1139,6 +1204,31 @@ function PortfolioPage({ balance, authed, busy, positions, orders, marketPrices,
         </div>
       </section>
     </main>
+  )
+}
+
+function PortfolioAccountMetric({ label, value, tone = '' }) {
+  return <div className="portfolio-account-metric"><span>{label}</span><strong className={tone}>{value}</strong></div>
+}
+
+function PortfolioRailMetric({ label, value, tone = '' }) {
+  return <div className="portfolio-rail-metric"><span>{label}</span><strong className={tone}>{value}</strong></div>
+}
+
+function PortfolioCalendar() {
+  const today = new Date()
+  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1)
+  const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate()
+  const offset = (monthStart.getDay() + 6) % 7
+  const cells = Array.from({ length: offset + daysInMonth }, (_, index) => index < offset ? null : index - offset + 1)
+  while (cells.length % 7) cells.push(null)
+  return (
+    <div className="portfolio-calendar">
+      <div className="calendar-toolbar"><button type="button">‹</button><strong>{today.toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}</strong><button type="button">›</button><span>All⌄</span></div>
+      <div className="calendar-weekdays">{['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day) => <span key={day}>{day}</span>)}</div>
+      <div className="calendar-grid">{cells.map((day, index) => <div className={day === today.getDate() ? 'calendar-day today' : 'calendar-day'} key={`${day || 'empty'}-${index}`}>{day && <><span>{day}</span>{day === today.getDate() && <small>+$0</small>}</>}</div>)}</div>
+      <div className="calendar-legend"><span><i className="loss" /> Loss</span><span><i className="profit" /> Profit</span><span><i className="best" /> Best</span></div>
+    </div>
   )
 }
 
@@ -1205,6 +1295,51 @@ function RecentTrades({ fills, market }) {
 
 function avatarText(market) {
   return (market.series_ticker || market.seriesTicker || market.ticker || 'SX').split('-').map((part) => part[0]).join('').slice(0, 2)
+}
+
+function MarketImage({ market, index = 0, size = '' }) {
+  const imageIndex = marketImageIndex(market, index)
+  return (
+    <div className={`market-avatar market-image ${size}`}>
+      <img src={`/market-art-${imageIndex}.svg`} alt="" aria-hidden="true" />
+    </div>
+  )
+}
+
+function marketImageIndex(market, index = 0) {
+  const value = String(market?.ticker || market?.underlying || market?.question || index)
+  const hash = [...value].reduce((sum, character) => sum + character.charCodeAt(0), 0)
+  return (hash + index) % 5 + 1
+}
+
+function catalogMarket(contract) {
+  const future = contract.leg === 'Futures'
+  return {
+    ticker: contract.ticker,
+    kind: future ? SCALAR_KIND : 1,
+    question: future ? '' : contract.title,
+    underlying: future ? contract.title : '',
+    category: contract.category,
+    subcategory: contract.subcategory,
+    region: contract.region,
+    section: contract.section,
+    pair_id: contract.pairId,
+    launch_priority: contract.priority,
+    catalogOnly: true,
+  }
+}
+
+function contractSection(market) {
+  const category = String(market?.category || '')
+  if (category.startsWith('Economics')) return 'Economics'
+  if (category.startsWith('Finance') || category.startsWith('FX') || category.startsWith('Local equities')) return 'Finance'
+  if (category.startsWith('Crypto')) return 'Crypto'
+  if (category.startsWith('Commodities') || category.startsWith('Energy')) return 'Commodities'
+  if (category.startsWith('Elections')) return 'Elections'
+  if (category.startsWith('Sports')) return 'Sports'
+  if (category.startsWith('Climate')) return 'Climate'
+  if (category.startsWith('Geopolitics')) return 'Geopolitics / Shipping'
+  return category || 'Other'
 }
 
 function impliedPrice(market, fills) {
@@ -1478,16 +1613,75 @@ function spread(book) {
   return Math.max(0, ask - bid)
 }
 
+function buildCandles(fills, fallback, market) {
+  const min = Number(market?.min_price_ticks ?? market?.minPriceTicks ?? 0)
+  const maxCandidate = Number(market?.max_price_ticks ?? market?.maxPriceTicks ?? Math.max(fallback * 1.2, fallback + 10))
+  const max = maxCandidate > min ? maxCandidate : min + 1
+  const source = fills
+    .map((fill) => Number(fill.price_ticks ?? fill.priceTicks))
+    .filter((value) => Number.isFinite(value))
+    .slice(-36)
+
+  let values = source
+  if (!values.length) {
+    let seed = [...String(market?.ticker || 'sarvaex')].reduce((sum, char) => ((sum * 31) + char.charCodeAt(0)) >>> 0, 7)
+    const wave = Math.max(1, Math.round((max - min) * 0.025))
+    values = Array.from({ length: 36 }, (_, index) => {
+      seed = (seed * 1664525 + 1013904223) >>> 0
+      const jitter = ((seed % 1000) / 1000 - 0.5) * wave * 1.8
+      const swing = Math.sin(index / 2.4) * wave * 1.8 + Math.sin(index / 5.6) * wave * 1.2
+      return Math.max(min, Math.min(max, fallback + swing + jitter))
+    })
+  }
+
+  const groupSize = Math.max(1, Math.ceil(values.length / 12))
+  const groups = []
+  for (let index = 0; index < values.length; index += groupSize) {
+    const group = values.slice(index, index + groupSize)
+    if (!group.length) continue
+    const open = group[0]
+    const close = group[group.length - 1]
+    groups.push({
+      key: `${index}-${open}-${close}`,
+      open,
+      close,
+      high: Math.max(...group),
+      low: Math.min(...group),
+    })
+  }
+
+  return groups.map((candle, index) => ({
+    ...candle,
+    x: ((index + 0.5) / groups.length) * 720,
+    width: Math.max(7, Math.min(24, 540 / groups.length)),
+    openY: chartY(candle.open, min, max),
+    closeY: chartY(candle.close, min, max),
+    highY: chartY(candle.high, min, max),
+    lowY: chartY(candle.low, min, max),
+  }))
+}
+
+function chartY(value, min, max) {
+  return 248 - ((value - min) / Math.max(1, max - min)) * 220
+}
+
 function buildChartPoints(fills, fallback, market) {
   const source = fills.length ? fills.slice(-34).map((fill) => Number(fill.price_ticks || fill.priceTicks || fallback)) : []
   const scalar = isFutureMarket(market)
   const min = scalar ? Number(market?.min_price_ticks ?? market?.minPriceTicks ?? 0) : 0
   const max = scalar ? Number(market?.max_price_ticks ?? market?.maxPriceTicks ?? Math.max(fallback * 1.2, fallback + 10)) : 100
-  const wave = scalar ? Math.max(1, Math.round((max - min) * 0.015)) : 7
-  const values = source.length ? source : Array.from({ length: 28 }, (_, i) => Math.max(min + 1, Math.min(max - 1, fallback + Math.sin(i / 3) * wave + i * (scalar ? 0.2 : 0.3))))
+  const wave = scalar ? Math.max(1, Math.round((max - min) * 0.02)) : 7
+  let seed = [...String(market?.ticker || 'sarvex')].reduce((sum, char) => ((sum * 31) + char.charCodeAt(0)) >>> 0, 7)
+  const values = source.length ? source : Array.from({ length: 34 }, (_, i) => {
+    seed = (seed * 1664525 + 1013904223) >>> 0
+    const jitter = ((seed % 1000) / 1000 - 0.5) * wave * 1.8
+    const swing = Math.sin(i / 2.7) * wave * 1.15 + Math.sin(i / 6.5) * wave * 1.7
+    const drift = i * (scalar ? 0.12 : 0.22)
+    return Math.max(min + 1, Math.min(max - 1, fallback + swing + jitter + drift))
+  })
   const points = values.map((value, index) => {
     const x = (index / Math.max(1, values.length - 1)) * 720
-    const y = 248 - ((value - min) / (max - min)) * 220
+    const y = chartY(value, min, max)
     return [x, y]
   })
   const line = points.map(([x, y], index) => `${index === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`).join(' ')
