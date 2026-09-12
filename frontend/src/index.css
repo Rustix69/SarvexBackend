@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Merriweather:ital,wght@0,400;0,500;0,600;0,700;0,800;0,900;1,400;1,700&display=swap');
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
@@ -17,8 +17,8 @@
   --social-bg: rgba(244, 243, 236, 0.5);
   --shadow: 1px 1px 16px -2px hsl(0 63% 18% / 0.12), 1px 1px 2px -3px hsl(0 63% 18% / 0.12);
 
-  --sans: "Times New Roman", Times, serif;
-  --heading: "Instrument Serif", "Times New Roman", Times, serif;
+  --sans: "Merriweather", Georgia, serif;
+  --heading: "Merriweather", Georgia, serif;
   --mono: ui-monospace, Consolas, monospace;
 
   font: 18px/145% var(--sans);
@@ -97,9 +97,9 @@
 
   --destructive-foreground: oklch(1.0000 0 0);
 
-  --font-sans: "Times New Roman", Times, serif;
+  --font-sans: "Merriweather", Georgia, serif;
 
-  --font-serif: "Instrument Serif", "Times New Roman", Times, serif;
+  --font-serif: "Merriweather", Georgia, serif;
 
   --font-mono: IBM Plex Mono, monospace;
 
@@ -217,7 +217,7 @@ code {
 
 @theme inline {
   --font-heading: var(--heading);
-  --font-sans: "Times New Roman", Times, serif;
+  --font-sans: "Merriweather", Georgia, serif;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -257,7 +257,7 @@ code {
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
   --font-mono: IBM Plex Mono, monospace;
-  --font-serif: "Instrument Serif", "Times New Roman", Times, serif;
+  --font-serif: "Merriweather", Georgia, serif;
   --radius: 0.375rem;
   --tracking-tighter: calc(var(--tracking-normal) - 0.05em);
   --tracking-tight: calc(var(--tracking-normal) - 0.025em);
@@ -318,8 +318,8 @@ code {
   --sidebar-ring: oklch(0.5054 0.1905 27.5181);
   --destructive-foreground: oklch(1.0000 0 0);
   --radius: 0.375rem;
-  --font-sans: "Times New Roman", Times, serif;
-  --font-serif: "Instrument Serif", "Times New Roman", Times, serif;
+  --font-sans: "Merriweather", Georgia, serif;
+  --font-serif: "Merriweather", Georgia, serif;
   --font-mono: IBM Plex Mono, monospace;
   --shadow-color: hsl(0 63% 18%);
   --shadow-opacity: 0.12;

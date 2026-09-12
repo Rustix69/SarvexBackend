@@ -21,8 +21,34 @@ import {
   List,
   Search,
 } from 'lucide-react'
+import { dispose as disposeKlineChart, init as initKlineChart, registerStyles } from 'klinecharts'
 import { contractsCatalog } from './contractsCatalog'
 import './App.css'
+
+registerStyles('sarvexKlineTheme', {
+  grid: {
+    show: true,
+    horizontal: { color: '#292b32', style: 'dashed', dashedValue: [2, 2] },
+    vertical: { color: '#24262c', style: 'dashed', dashedValue: [2, 2] },
+  },
+  candle: {
+    type: 'candle_solid',
+    bar: {
+      upColor: '#167f72',
+      upBorderColor: '#3fd0c2',
+      upWickColor: '#3fd0c2',
+      downColor: '#bb3f72',
+      downBorderColor: '#ef72a6',
+      downWickColor: '#ef72a6',
+      noChangeColor: '#8f8d97',
+      noChangeBorderColor: '#8f8d97',
+      noChangeWickColor: '#8f8d97',
+    },
+  },
+  xAxis: { axisLine: { color: '#383a42' }, tickText: { color: '#777681' } },
+  yAxis: { axisLine: { color: '#383a42' }, tickText: { color: '#aaa9b1' } },
+  separator: { color: '#292b32' },
+})
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api'
 const DEMO_MAX_ORDER_CENTS = 10000
@@ -815,7 +841,6 @@ function FutureDetail({ market, watchlist, onSelect, orderbook, fills, position,
   const bestBid = Number(orderbook?.bids?.[0]?.price_ticks || orderbook?.bids?.[0]?.priceTicks || 0)
   const bestAsk = Number(orderbook?.asks?.[0]?.price_ticks || orderbook?.asks?.[0]?.priceTicks || 0)
   const last = Number(fills?.[fills.length - 1]?.price_ticks || fills?.[fills.length - 1]?.priceTicks || midpoint(bestBid, bestAsk) || futureFallbackTicks(market))
-  const candles = useMemo(() => buildCandles(fills, last, market), [fills, last, market])
   const multiplier = Number(market.multiplier_micro_usdc ?? market.multiplierMicroUsdc ?? 0)
 
   return (
@@ -844,17 +869,7 @@ function FutureDetail({ market, watchlist, onSelect, orderbook, fills, position,
             <div><span>Candlestick · Market price</span><strong>{formatFuturePrice(market, last)}</strong></div>
             <span className="powered">Linear USDC-settled demo future</span>
           </div>
-          <svg className="price-chart futures-candle-chart" viewBox="0 0 720 360" role="img" aria-label="Futures candlestick price chart">
-            {[0, 1, 2, 3, 4, 5].map((line) => <line key={line} x1="0" x2="720" y1={30 + line * 58} y2={30 + line * 58} stroke="#292b32" />)}
-            <g className="futures-candles">
-              {candles.map((candle) => (
-                <g key={candle.key} className={candle.close >= candle.open ? 'candle-up' : 'candle-down'}>
-                  <line x1={candle.x} x2={candle.x} y1={candle.highY} y2={candle.lowY} />
-                  <rect x={candle.x - candle.width / 2} y={Math.min(candle.openY, candle.closeY)} width={candle.width} height={Math.max(2, Math.abs(candle.closeY - candle.openY))} />
-                </g>
-              ))}
-            </g>
-          </svg>
+          <KlineFutureChart fills={fills} fallback={last} market={market} />
         </section>
 
         <OracleDetails market={market} />
@@ -909,6 +924,60 @@ function ContractRow({ title, price, side, onClick }) {
       <em className={side === 'yes' ? 'yes' : 'no'}>Buy {title} {Math.max(1, Math.min(99, price))}¢</em>
     </button>
   )
+}
+
+function KlineFutureChart({ fills, fallback, market }) {
+  const containerRef = useRef(null)
+  const chartRef = useRef(null)
+  const bars = useMemo(() => buildKlineBars(fills, fallback, market), [fills, fallback, market])
+  const barsRef = useRef(bars)
+
+  useEffect(() => {
+    barsRef.current = bars
+  }, [bars])
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return undefined
+
+    const chart = initKlineChart(container, {
+      styles: 'sarvexKlineTheme',
+      timezone: 'America/New_York',
+      layout: { yAxis: { position: 'right' } },
+    })
+    if (!chart) return undefined
+
+    chart.setDataLoader({
+      getBars: ({ callback }) => callback(barsRef.current),
+    })
+    chart.setSymbol({ ticker: market.ticker, pricePrecision: 2, volumePrecision: 0 })
+    chart.setPeriod({ span: 1, type: 'minute' })
+    chart.resetData()
+    chart.resize()
+    chartRef.current = chart
+
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(() => chart.resize())
+    resizeObserver?.observe(container)
+
+    return () => {
+      resizeObserver?.disconnect()
+      disposeKlineChart(chart)
+      chartRef.current = null
+    }
+  }, [market.ticker])
+
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    chart.setDataLoader({
+      getBars: ({ callback }) => callback(barsRef.current),
+    })
+    chart.resetData()
+  }, [bars])
+
+  return <div className="kline-chart-container" ref={containerRef} role="img" aria-label="Futures candlestick price chart" />
 }
 
 function OracleDetails({ market }) {
@@ -1681,6 +1750,43 @@ function spread(book) {
   const ask = Number(book?.asks?.[0]?.price_ticks || book?.asks?.[0]?.priceTicks || 0)
   if (!bid || !ask) return '--'
   return Math.max(0, ask - bid)
+}
+
+function buildKlineBars(fills, fallback, market) {
+  const source = fills
+    .map((fill, index) => ({
+      price: Number(fill.price_ticks ?? fill.priceTicks),
+      timestamp: fillTimestamp(fill, index, fills.length),
+      volume: Number(fill.count || 0),
+    }))
+    .filter((item) => Number.isFinite(item.price) && item.timestamp > 0)
+    .slice(-36)
+  const visualCandles = buildCandles(fills, fallback, market)
+  const latestTimestamp = source.length
+    ? Math.max(...source.map((item) => item.timestamp))
+    : Date.parse(market?.open_at || market?.openAt || '2026-01-01T00:00:00Z')
+  const interval = 60 * 1000
+  const volume = source.reduce((total, item) => total + Math.max(0, item.volume), 0)
+
+  return visualCandles.map((candle, index) => ({
+    timestamp: latestTimestamp - ((visualCandles.length - 1 - index) * interval),
+    open: candle.open,
+    high: candle.high,
+    low: candle.low,
+    close: candle.close,
+    volume: volume / Math.max(1, visualCandles.length),
+  }))
+}
+
+function fillTimestamp(fill, index, total) {
+  const value = fill?.ts || fill?.timestamp
+  if (value?.seconds !== undefined) {
+    return Number(value.seconds) * 1000 + Number(value.nanos || 0) / 1_000_000
+  }
+  if (typeof value === 'number') return value > 1e12 ? value : value * 1000
+  const parsed = Date.parse(value || '')
+  if (Number.isFinite(parsed)) return parsed
+  return Date.parse('2026-01-01T00:00:00Z') + (index * 60 * 1000)
 }
 
 function buildCandles(fills, fallback, market) {
