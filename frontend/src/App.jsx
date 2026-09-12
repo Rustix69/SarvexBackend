@@ -656,7 +656,7 @@ function MarketCard({ market, fills, index, onClick }) {
     <button className="market-card" type="button" onClick={onClick} style={{ animationDelay: `${index * 35}ms` }}>
       <div className="card-topline">
         <MarketImage market={market} index={index} />
-        <h3>{market.question || market.underlying || market.ticker}</h3>
+      <h3>{cardMarketTitle(market)}</h3>
       </div>
       <div className="outcome-list">
         {options.map((option) => (
@@ -708,7 +708,7 @@ function FutureCard({ market, fills, index, onClick }) {
     <button className="market-card future-card" type="button" onClick={onClick} style={{ animationDelay: `${index * 35}ms` }}>
       <div className="card-topline">
         <MarketImage market={market} index={index} />
-        <h3>{market.question || market.underlying || market.ticker}</h3>
+        <h3>{cardMarketTitle(market)}</h3>
       </div>
       <div className="outcome-list future-list">
         <div className="outcome-row future-current-price">
@@ -1374,6 +1374,11 @@ function catalogMarket(contract) {
     launch_priority: contract.priority,
     catalogOnly: true,
   }
+}
+
+function cardMarketTitle(market) {
+  const title = market?.question || market?.underlying || market?.ticker || 'Untitled market'
+  return String(title).replace(/\s*\([^)]*\)/g, '').replace(/\s{2,}/g, ' ').trim()
 }
 
 function contractSection(market) {
