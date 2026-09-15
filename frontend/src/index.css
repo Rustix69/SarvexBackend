@@ -1,4 +1,5 @@
 @import url('https://fonts.googleapis.com/css2?family=Merriweather:ital,wght@0,400;0,500;0,600;0,700;0,800;0,900;1,400;1,700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Geist+Mono:ital,wght@0,100..900;1,100..900&display=swap');
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
@@ -19,7 +20,7 @@
 
   --sans: "Merriweather", Georgia, serif;
   --heading: "Merriweather", Georgia, serif;
-  --mono: ui-monospace, Consolas, monospace;
+  --mono: "Geist Mono", ui-monospace, Consolas, monospace;
 
   font: 18px/145% var(--sans);
   letter-spacing: 0;
@@ -101,7 +102,7 @@
 
   --font-serif: "Merriweather", Georgia, serif;
 
-  --font-mono: IBM Plex Mono, monospace;
+  --font-mono: "Geist Mono", ui-monospace, Consolas, monospace;
 
   --shadow-color: hsl(0 63% 18%);
 
@@ -256,7 +257,7 @@ code {
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
-  --font-mono: IBM Plex Mono, monospace;
+  --font-mono: "Geist Mono", ui-monospace, Consolas, monospace;
   --font-serif: "Merriweather", Georgia, serif;
   --radius: 0.375rem;
   --tracking-tighter: calc(var(--tracking-normal) - 0.05em);
@@ -320,7 +321,7 @@ code {
   --radius: 0.375rem;
   --font-sans: "Merriweather", Georgia, serif;
   --font-serif: "Merriweather", Georgia, serif;
-  --font-mono: IBM Plex Mono, monospace;
+  --font-mono: "Geist Mono", ui-monospace, Consolas, monospace;
   --shadow-color: hsl(0 63% 18%);
   --shadow-opacity: 0.12;
   --shadow-blur: 16px;

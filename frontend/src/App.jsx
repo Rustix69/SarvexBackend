@@ -57,6 +57,7 @@ const LIVE_PAGE_REFRESH_MS = 6000
 const MARKET_LIST_REFRESH_MS = 30000
 const FILL_PAGE_LIMIT = 40
 const SCALAR_KIND = 2
+const MARKET_SECTIONS = ['All', 'Economics', 'Finance', 'Crypto', 'Commodities', 'Elections', 'Climate', 'Geopolitics / Shipping']
 const HIDDEN_DEMO_MARKET_TICKERS = new Set([
   'DEMO-INDIA-GDP-Q2-26-7PCT',
   'RBI-JUN26-CUT25',
@@ -94,6 +95,7 @@ function App() {
   const [markets, setMarkets] = useState([])
   const [futures, setFutures] = useState([])
   const [selectedTicker, setSelectedTicker] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
   const [orderbook, setOrderbook] = useState(null)
   const [fills, setFills] = useState([])
   const [balance, setBalance] = useState(null)
@@ -210,9 +212,10 @@ function App() {
       const catalogContracts = contractsCatalog.map(catalogMarket)
       const liveByTicker = new Map(liveContracts.map((market) => [market.ticker, market]))
       const mergedContracts = catalogContracts.map((market) => ({ ...market, ...(liveByTicker.get(market.ticker) || {}), catalogOnly: !liveByTicker.has(market.ticker) }))
-      nextMarkets = mergedContracts
+      const nonSportsContracts = mergedContracts.filter((market) => !isSportsMarket(market))
+      nextMarkets = nonSportsContracts
         .filter((market) => !isFutureMarket(market) && !HIDDEN_DEMO_MARKET_TICKERS.has(market.ticker))
-      nextFutures = mergedContracts.filter((market) => isFutureMarket(market))
+      nextFutures = nonSportsContracts.filter((market) => isFutureMarket(market))
       marketsRef.current = nextMarkets
       futuresRef.current = nextFutures
       lastMarketListRefreshRef.current = Date.now()
@@ -424,6 +427,18 @@ function App() {
         busy={busy}
         onLogin={login}
         onMarkets={handleMarketsNav}
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
+        searchMarkets={[...markets, ...futures]}
+        onSelectMarket={(ticker) => {
+          setSearchQuery('')
+          handleMarketSelect(ticker)
+        }}
+        onTerminal={() => {
+          const ticker = selectedTickerRef.current || marketsRef.current[0]?.ticker || futuresRef.current[0]?.ticker
+          if (ticker) handleMarketSelect(ticker)
+          else handleMarketsNav()
+        }}
         onNavigateView={handleViewNav}
         activeView={activeView}
       />
@@ -512,7 +527,7 @@ function App() {
           futures={futures}
           fills={fills}
           onSelect={handleMarketSelect}
-          onRefresh={refreshAll}
+          searchQuery={searchQuery}
         />
       ) : (
         <MarketDashboard
@@ -521,13 +536,24 @@ function App() {
           fills={fills}
           onSelect={handleMarketSelect}
           onRefresh={refreshAll}
+          searchQuery={searchQuery}
         />
       )}
     </div>
   )
 }
 
-function TopNav({ selectedUser, token, busy, onLogin, onMarkets, onNavigateView, activeView }) {
+function TopNav({ selectedUser, token, busy, onLogin, onMarkets, onTerminal, onNavigateView, activeView, searchQuery, onSearchChange, searchMarkets, onSelectMarket }) {
+  const normalizedQuery = searchQuery.trim().toLowerCase()
+  const searchResults = normalizedQuery
+    ? searchMarkets.filter((market) => marketMatchesSearch(market, normalizedQuery)).slice(0, 6)
+    : []
+
+  const handleSearchKeyDown = (event) => {
+    if (event.key === 'Escape') onSearchChange('')
+    if (event.key === 'Enter' && searchResults[0]) onSelectMarket(searchResults[0].ticker)
+  }
+
   return (
     <header className="topbar">
       <button className="brand" type="button" onClick={onMarkets}>
@@ -535,11 +561,23 @@ function TopNav({ selectedUser, token, busy, onLogin, onMarkets, onNavigateView,
         <span>Sarvaex</span>
       </button>
       <div className="topbar-center">
-        <label className="global-search"><Search size={15} /><input placeholder="Search" aria-label="Search markets" /><kbd>/</kbd></label>
+        <div className="global-search-wrap">
+          <label className="global-search"><Search size={15} /><input value={searchQuery} onChange={(event) => onSearchChange(event.target.value)} onKeyDown={handleSearchKeyDown} placeholder="Search" aria-label="Search markets" /><kbd>/</kbd></label>
+          {normalizedQuery ? (
+            <div className="search-results" role="listbox" aria-label="Search results">
+              {searchResults.length ? searchResults.map((market) => (
+                <button className="search-result" type="button" key={market.ticker} onClick={() => onSelectMarket(market.ticker)}>
+                  <span>{market.question || market.underlying || market.ticker}</span>
+                  <small>{market.ticker}</small>
+                </button>
+              )) : <div className="search-empty">No markets found</div>}
+            </div>
+          ) : null}
+        </div>
         <nav className="main-nav">
           <button className={activeView === 'markets' ? 'nav-link active' : 'nav-link'} type="button" onClick={onMarkets}>Discover</button>
           <button className={activeView === 'futures' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => onNavigateView('futures')}>Futures</button>
-          <button className="nav-link" type="button" onClick={onMarkets}>Terminal</button>
+          <button className={activeView === 'trade' ? 'nav-link active' : 'nav-link'} type="button" onClick={onTerminal}>Terminal</button>
           <button className={activeView === 'portfolio' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => onNavigateView('portfolio')}>Portfolio</button>
         </nav>
       </div>
@@ -632,14 +670,15 @@ function HealthPage({ api }) {
   )
 }
 
-function MarketDashboard({ loading, markets, fills, onSelect, onRefresh }) {
+function MarketDashboard({ loading, markets, fills, onSelect, onRefresh, searchQuery }) {
   const [section, setSection] = useState('All')
-  const sections = ['All', 'Economics', 'Finance', 'Crypto', 'Commodities', 'Elections', 'Sports', 'Climate', 'Geopolitics / Shipping']
-  const rows = markets.filter((market) => section === 'All' || contractSection(market) === section)
+  const rows = markets
+    .filter((market) => section === 'All' || contractSection(market) === section)
+    .filter((market) => marketMatchesSearch(market, searchQuery))
   return (
     <main className="dashboard-page">
       <nav className="category-nav" aria-label="Market categories">
-        {sections.map((item) => <button className={section === item ? 'category-link active' : 'category-link'} type="button" key={item} onClick={() => setSection(item)}>{item}</button>)}
+        {MARKET_SECTIONS.map((item) => <button className={section === item ? 'category-link active' : 'category-link'} type="button" key={item} onClick={() => setSection(item)}>{item}</button>)}
       </nav>
       <section className="dashboard-hero">
         <div className="promo-banner">
@@ -655,7 +694,7 @@ function MarketDashboard({ loading, markets, fills, onSelect, onRefresh }) {
       <div className="market-toolbar"><label><Search size={15} /> Search loaded markets</label><div><span>All Platforms <ChevronDown size={14} /></span><span>1h Vol <ChevronDown size={14} /></span><button title="Grid view"><Grid2X2 size={16} /></button><button title="List view"><List size={16} /></button><button title="Date filter"><CalendarDays size={16} /></button><button title="Filters"><SlidersHorizontal size={16} /></button></div></div>
       {loading ? (
         <div className="loading-panel"><Loader2 className="spin" /> Loading Sarvaex markets...</div>
-      ) : (
+      ) : rows.length ? (
         <section className="market-grid">
           {rows.map((market, index) => (
             <MarketCard
@@ -667,7 +706,7 @@ function MarketDashboard({ loading, markets, fills, onSelect, onRefresh }) {
             />
           ))}
         </section>
-      )}
+      ) : <div className="loading-panel">No markets match your search.</div>}
     </main>
   )
 }
@@ -696,16 +735,16 @@ function MarketCard({ market, fills, index, onClick }) {
   )
 }
 
-function FuturesDashboard({ loading, futures, fills, onSelect, onRefresh }) {
-  const rows = futures.length ? futures : []
+function FuturesDashboard({ loading, futures, fills, onSelect, searchQuery }) {
+  const [section, setSection] = useState('All')
+  const rows = futures
+    .filter((market) => section === 'All' || contractSection(market) === section)
+    .filter((market) => marketMatchesSearch(market, searchQuery))
   return (
     <main className="dashboard-page">
-      <section className="dashboard-hero">
-        <div>
-          <h1>Trade the number the world will print.</h1>
-        </div>
-        <button className="secondary-btn refresh-btn" type="button" onClick={onRefresh}><RefreshCw size={16} /> Refresh futures</button>
-      </section>
+      <nav className="category-nav" aria-label="Futures categories">
+        {MARKET_SECTIONS.map((item) => <button className={section === item ? 'category-link active' : 'category-link'} type="button" key={item} onClick={() => setSection(item)}>{item}</button>)}
+      </nav>
 
       {loading ? (
         <div className="loading-panel"><Loader2 className="spin" /> Loading Sarvaex futures...</div>
@@ -722,7 +761,7 @@ function FuturesDashboard({ loading, futures, fills, onSelect, onRefresh }) {
           ))}
         </section>
       ) : (
-        <div className="loading-panel">No numeric futures are open yet.</div>
+        <div className="loading-panel">{searchQuery.trim() ? 'No futures match your search.' : 'No numeric futures are open yet.'}</div>
       )}
     </main>
   )
@@ -1457,10 +1496,26 @@ function contractSection(market) {
   if (category.startsWith('Crypto')) return 'Crypto'
   if (category.startsWith('Commodities') || category.startsWith('Energy')) return 'Commodities'
   if (category.startsWith('Elections')) return 'Elections'
-  if (category.startsWith('Sports')) return 'Sports'
   if (category.startsWith('Climate')) return 'Climate'
   if (category.startsWith('Geopolitics')) return 'Geopolitics / Shipping'
   return category || 'Other'
+}
+
+function isSportsMarket(market) {
+  return String(market?.category || '').startsWith('Sports')
+}
+
+function marketMatchesSearch(market, query) {
+  const needle = String(query || '').trim().toLowerCase()
+  if (!needle) return true
+  return [
+    market?.ticker,
+    market?.question,
+    market?.underlying,
+    market?.category,
+    market?.subcategory,
+    market?.region,
+  ].some((value) => String(value || '').toLowerCase().includes(needle))
 }
 
 function impliedPrice(market, fills) {
