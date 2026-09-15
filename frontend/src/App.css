@@ -1234,6 +1234,90 @@ body { background: #111113; }
 .market-card { min-height: 198px; padding: 12px 11px 10px; border: 0; border-radius: 2px; background: #1c1c20; color: #f4f3f6; box-shadow: none; text-align: left; }.market-card:hover { transform: none; background: #242429; border: 0; box-shadow: none; }.card-topline { grid-template-columns: 38px 1fr; gap: 9px; }.market-avatar { width: 30px; height: 30px; border-radius: 50%; background: #292930; color: #dddce4; font-size: 10px; }.market-image { width: 34px; height: 34px; overflow: hidden; border-radius: 9px; background: #292930; }.market-image img { display: block; width: 100%; height: 100%; object-fit: cover; }.market-card h3 { font: 700 12px/1.25 "Merriweather", Georgia, serif; color: #eeedf1; }.outcome-list { gap: 5px; margin: 12px 0 0; }.outcome-row { min-height: 30px; padding: 0 8px; border-radius: 2px; background: transparent; color: #b8b7bf; font-size: 11px; }.outcome-row:first-child { background: #1d3737; color: #d8f4ef; }.outcome-row:nth-child(2) { background: #35242e; color: #f5cfdf; }.outcome-row strong { color: inherit; font: 800 12px "Merriweather", Georgia, serif; }.future-card .future-current-price, .future-card .outcome-row:nth-child(2) { background: #1d3737; color: #d8f4ef; }
 .detail-page, .portfolio-page, .health-page { max-width: 1500px; color: #f4f3f6; font-family: "Merriweather", Georgia, serif; }.detail-page { padding-top: 24px; }.detail-heading h1, .portfolio-hero h1, .health-hero h1 { color: #f6f5f8; font-family: "Merriweather", Georgia, serif; font-style: normal; font-weight: 700; }.crumb, .metric-row, .portfolio-kicker, .panel-head span, .portfolio-metrics span { color: #88878f; }.chart-card, .book-card, .trades-card, .ticket, .position-card, .portfolio-panel, .portfolio-metrics div, .health-panel, .health-summary div { border-color: #2d2d33; border-radius: 3px; background: #1a1a1e; box-shadow: none; }.panel-head, .portfolio-row, .health-row, .contracts-table { border-color: #2d2d33; }.panel-head h2, .book-card h3, .trades-card h3, .portfolio-metrics strong, .contract-row, .position-stat-grid strong { color: #f1eff5; }.position-stat-grid div, .ticket-summary.market-estimate, .ticket-note, .order-type-toggle, .spread-row, .empty-state { background: #242429; color: #aaa9b1; }.primary-btn, .trade-btn, .fund-btn { background: #7653d8; }.trade-btn.long-submit { background: #167f72; }.trade-btn.short-submit { background: #bb3f72; }.secondary-btn, .quick-amounts button { background: #242429; border-color: #38383f; color: #dedce5; }.amount-input input { color: #eeeef2; background: transparent; }.outcome-toggle .yes { background: #194b48; color: #9de0d6; }.outcome-toggle .no { background: #4b2439; color: #f1a8c5; }.outcome-toggle .yes.active { background: #168276; }.outcome-toggle .no.active { background: #bb3f72; }.pnl-positive { color: #5fd4c5 !important; }.pnl-negative { color: #ff80ac !important; }
 .loading-panel { border-color: #2d2d33; border-radius: 3px; background: #1a1a1e; color: #9c9aa4; }
+
+/* Health view contrast: keep operational data readable on the dark shell. */
+.health-page {
+  color: #e7e5ec;
+}
+.health-page .portfolio-kicker {
+  color: #8e8b98;
+}
+.health-page .health-hero h1 {
+  color: #f4f2f7;
+  font-size: 34px;
+  font-weight: 700;
+  line-height: 1.15;
+}
+.health-page .health-summary div,
+.health-page .health-panel {
+  border-color: #2d2d33;
+  background: #1a1a1e;
+  box-shadow: none;
+}
+.health-page .health-summary div {
+  min-height: 88px;
+}
+.health-page .health-summary span {
+  color: #aaa7b2;
+  font-size: 12px;
+  font-weight: 600;
+}
+.health-page .health-summary strong {
+  color: #f1eff5;
+  font-size: 26px;
+  font-weight: 600;
+}
+.health-page .health-summary strong.pnl-flat {
+  color: #f1eff5 !important;
+}
+.health-page .health-panel .panel-head {
+  border-color: #2d2d33;
+}
+.health-page .health-panel .panel-head h2 {
+  color: #f1eff5;
+  font-size: 16px;
+  font-weight: 600;
+}
+.health-page .health-panel .panel-head span {
+  color: #8e8b98;
+  font-size: 11px;
+}
+.health-page .health-row {
+  border-color: #2d2d33;
+  color: #e4e1e9;
+  font-size: 13px;
+}
+.health-page .health-row.health-header {
+  color: #9996a3;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.health-page .health-row span:last-child {
+  color: #aaa7b2;
+}
+.health-page .health-status.running {
+  color: #64d7c4;
+  font-weight: 600;
+}
+.health-page .health-status.running i {
+  background: #36c8b2;
+  box-shadow: 0 0 0 4px rgba(54, 200, 178, 0.14);
+}
+.health-page .health-status.down {
+  color: #ff80ac;
+  font-weight: 600;
+}
+.health-page .health-status.down i {
+  background: #ed5f91;
+  box-shadow: 0 0 0 4px rgba(237, 95, 145, 0.14);
+}
+.health-page .loading-panel {
+  border-color: #2d2d33;
+  background: #1a1a1e;
+  color: #aaa7b2;
+}
 @media (max-width: 1100px) { .topbar { grid-template-columns: auto 1fr; }.topbar-center { order: 3; grid-column: 1 / -1; }.user-cluster { justify-self: end; }.market-grid { grid-template-columns: repeat(3, minmax(180px, 1fr)); } }
 @media (max-width: 760px) { .topbar { height: auto; padding: 10px 12px; }.main-nav { overflow-x: auto; }.user-cluster .nav-link, .user-dot, .user-menu { display: none; }.dashboard-page { padding: 0 10px 32px; }.category-nav { justify-content: flex-start; gap: 17px; }.category-link::after { margin-left: 17px; }.dashboard-hero { grid-template-columns: 1fr; }.promo-banner { min-height: 190px; padding: 18px; }.promo-banner strong { font-size: 31px; }.live-panel { display: none; }.market-toolbar { align-items: flex-start; flex-direction: column; gap: 10px; }.market-toolbar > div { width: 100%; justify-content: space-between; gap: 8px; }.market-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }.market-card { min-height: 174px; padding: 10px 8px; }.market-card h3 { font-size: 11px; }.outcome-row { min-height: 28px; padding: 0 6px; } }
 @media (max-width: 420px) { .global-search { max-width: none; }.topbar-center { display: grid; gap: 8px; }.market-grid { grid-template-columns: 1fr; } }

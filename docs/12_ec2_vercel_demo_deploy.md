@@ -158,3 +158,22 @@ curl https://api.sarvaex.in/v1/health/overview | jq '.summary'
 - Keep raw backend ports closed in the EC2 security group.
 - The current demo auth is simple demo-token auth, so do not present this as production security.
 - The simulators intentionally create market activity. Keep them running during the demo.
+
+## 9. Demo Database Retention Cleanup
+
+The simulators intentionally generate orders and fills. To prevent those demo trade tables from consuming the entire disk, install the repository's demo-only cleanup timer on EC2:
+
+```bash
+sudo cp deploy/systemd/sarvex-demo-db-cleanup.service /etc/systemd/system/
+sudo cp deploy/systemd/sarvex-demo-db-cleanup.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now sarvex-demo-db-cleanup.timer
+```
+
+The timer runs every six hours and retains the latest 24 hours. Before enabling it, inspect candidates without deleting anything:
+
+```bash
+./scripts/cleanup-demo-db.sh
+```
+
+The cleanup requires `DEMO_CLEANUP_ENABLED=true` and removes only old terminal simulator orders, already-posted simulator fills, completed fill-outbox rows, closed simulator holds, and audit events whose payload belongs to simulator users. It never deletes ledger transactions or entries, current positions, refdata, oracle records, or settlement history. This is for the public demo database only; production retention requires archival and partitioning instead of deletion.

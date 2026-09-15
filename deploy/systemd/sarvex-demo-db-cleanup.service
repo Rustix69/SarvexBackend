@@ -1,0 +1,12 @@
+[Unit]
+Description=Sarvex demo PostgreSQL trade-data cleanup
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/SarvaexBackend
+Environment=DEMO_CLEANUP_ENABLED=true
+Environment=DEMO_CLEANUP_RETENTION_HOURS=24
+ExecStart=/home/ubuntu/SarvaexBackend/scripts/cleanup-demo-db.sh --apply
