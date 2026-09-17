@@ -5,8 +5,15 @@ export function futureMeta(market = {}) {
   const text = `${ticker} ${market.underlying || ''} ${market.question || ''}`.toUpperCase()
   if (/BTC|BITCOIN|ETHEREUM|\bETH\b|SXF-ETHD/.test(text)) return { divider: 1, decimals: 0, prefix: '$', compactThousands: true }
   if (/^FUT-(INDIA-GDP|AI-MCAP)-/.test(ticker)) return { divider: 100, decimals: 2, prefix: '$', suffix: 'T' }
-  if (text.includes('NIFTY')) return { divider: 1, decimals: 0 }
+  if (/NIFTY|NDX|SPX|N225/.test(text)) return { divider: 1, decimals: 0 }
   if (/USDINR|USD\/INR/.test(text)) return { divider: 100, decimals: 2 }
+  if (/EURUSD|EUR\/USD/.test(text)) return { divider: 10000, decimals: 4 }
+  if (/AAAGAS|GASOLINE/.test(text)) return { divider: 1000, decimals: 3, prefix: '$' }
+  if (/WTI|BRENT/.test(text)) return { divider: 100, decimals: 2, prefix: '$' }
+  if (/XAU|GOLD/.test(text)) return { divider: 10, decimals: 1, prefix: '$' }
+  if (/HIGHNY|HIGHDXB|HIGHTYO/.test(text)) return { divider: 10, decimals: 1 }
+  if (/BTC|BITCOIN/.test(text)) return { divider: 1, decimals: 0, prefix: '$', compactThousands: true }
+  if (/ETH|ETHEREUM/.test(text)) return { divider: 1, decimals: 0, prefix: '$', compactThousands: true }
   if (/FFUB/.test(text)) return { divider: 200, decimals: 3, suffix: '%' }
   if (/CPI|UNEMPLOYMENT|FED|RBIREPO|UST10Y|BOJRATE|LPR1Y|ECBDFR|EZHICP|CBUAE/.test(text)) return { divider: 100, decimals: 2, suffix: '%' }
   return { divider: 100, decimals: 2 }
