@@ -229,7 +229,7 @@ button:disabled {
 
 .market-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(230px, 1fr));
+  grid-template-columns: repeat(4, minmax(220px, 1fr));
   gap: 14px;
 }
 
@@ -290,6 +290,10 @@ button:disabled {
   display: grid;
   gap: 8px;
   margin: 14px 0;
+}
+
+.binary-outcomes {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .outcome-row {
@@ -447,8 +451,17 @@ button:disabled {
   font-weight: 400;
 }
 
+.chart-legend { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; margin-right: 14px; color: #8e8c98; font-size: 11px; font-weight: 500; }
+.chart-legend i { width: 8px; height: 8px; display: inline-block; border-radius: 50%; background: #4f46e5; box-shadow: 0 0 0 2px rgba(79, 70, 229, .2); }
 .powered { font-size: 13px; }
-.price-chart { width: 100%; height: 290px; display: block; }
+.price-chart { width: 100%; height: 290px; display: block; cursor: crosshair; }
+.chart-crosshair { stroke: #8b86c9; stroke-width: 1; stroke-dasharray: 4 4; opacity: .8; pointer-events: none; }
+.chart-latest-point { fill: #4f46e5; stroke: #fff; stroke-width: 2; pointer-events: none; }
+.chart-latest-label rect { fill: #4f46e5; stroke: #8b86c9; stroke-width: 1; }
+.chart-latest-label text { fill: #fff; font: 600 11px "Geist Mono", monospace; }
+.chart-point { fill: #fff; stroke: #4f46e5; stroke-width: 3; pointer-events: none; }
+.chart-tooltip rect { fill: #27243a; stroke: #6059a0; stroke-width: 1; }
+.chart-tooltip text { fill: #f5f3ff; font: 600 12px "Geist Mono", monospace; }
 
 .contracts-table {
   margin-top: 20px;
@@ -1255,8 +1268,8 @@ body { background: #111113; }
 .live-panel-head { display: flex; justify-content: space-between; padding: 0 5px 10px; color: #9e9da5; font-size: 11px; font-weight: 700; }.live-panel-head span:first-child { color: #ed8ab1; }.live-panel-head i { display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: #ed5b99; }
 .live-market { width: 100%; min-width: 0; display: grid; grid-template-columns: 29px minmax(0,1fr) auto; align-items: center; gap: 8px; border: 0; border-top: 1px solid #29292f; padding: 8px 5px; background: transparent; color: #f3f2f6; text-align: left; }.live-market:hover { background: #232328; }.live-market > span:nth-child(2) { min-width: 0; display: grid; gap: 2px; }.live-market small { overflow: hidden; color: #797981; font-size: 10px; white-space: nowrap; text-overflow: ellipsis; }.live-market b { overflow: hidden; font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }.live-market strong { color: #dddce3; font-size: 12px; }.live-avatar { display: grid; place-items: center; width: 27px; height: 27px; border-radius: 50%; background: #303035; color: #fff; font-size: 10px; font-weight: 800; }.avatar-1 { background: #265b9a; }.avatar-2 { background: #923d54; }.avatar-3 { background: #237e70; }.avatar-4 { background: #46448d; }
 .market-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 18px; padding: 0 2px 12px; color: #7f7e87; font-size: 12px; }.market-toolbar > label { display: flex; align-items: center; gap: 8px; }.market-toolbar > div { display: flex; align-items: center; gap: 21px; }.market-toolbar > div span { display: inline-flex; align-items: center; gap: 5px; }.market-toolbar button { display: grid; place-items: center; width: 26px; height: 26px; border: 0; background: transparent; color: #818089; }.market-toolbar button:first-of-type { color: #f1edf8; background: #27232f; border-radius: 3px; }
-.market-grid { grid-template-columns: repeat(5, minmax(180px, 1fr)); gap: 8px; }
-.market-card { min-height: 198px; padding: 12px 11px 10px; border: 0; border-radius: 2px; background: #1c1c20; color: #f4f3f6; box-shadow: none; text-align: left; }.market-card:hover { transform: none; background: #242429; border: 0; box-shadow: none; }.card-topline { grid-template-columns: 38px 1fr; gap: 9px; }.market-avatar { width: 30px; height: 30px; border-radius: 50%; background: #292930; color: #dddce4; font-size: 10px; }.market-image { width: 34px; height: 34px; overflow: hidden; border-radius: 9px; background: #292930; }.market-image img { display: block; width: 100%; height: 100%; object-fit: cover; }.market-card h3 { font: 400 12px/1.25 "Merriweather", Georgia, serif; color: #eeedf1; }.outcome-list { gap: 5px; margin: 12px 0 0; }.outcome-row { min-height: 30px; padding: 0 8px; border-radius: 2px; background: transparent; color: #b8b7bf; font-size: 11px; }.outcome-row:first-child { background: #1d3737; color: #d8f4ef; }.outcome-row:nth-child(2) { background: #35242e; color: #f5cfdf; }.outcome-row strong { color: inherit; font: 400 12px "Merriweather", Georgia, serif; }.future-card .future-current-price, .future-card .outcome-row:nth-child(2) { background: #1d3737; color: #d8f4ef; }
+.market-grid { grid-template-columns: repeat(4, minmax(220px, 1fr)); gap: 10px; }
+.market-card { min-height: 176px; padding: 12px 11px 10px; border: 0; border-radius: 2px; background: #1c1c20; color: #f4f3f6; box-shadow: none; text-align: left; }.market-card:hover { transform: none; background: #242429; border: 0; box-shadow: none; }.card-topline { grid-template-columns: 38px 1fr; gap: 9px; }.market-avatar { width: 30px; height: 30px; border-radius: 50%; background: #292930; color: #dddce4; font-size: 10px; }.market-image { width: 34px; height: 34px; overflow: hidden; border-radius: 9px; background: #292930; }.market-image img { display: block; width: 100%; height: 100%; object-fit: cover; }.market-card h3 { font: 400 12px/1.25 "Merriweather", Georgia, serif; color: #eeedf1; }.outcome-list { gap: 5px; margin: 10px 0 0; }.binary-outcomes { grid-template-columns: repeat(2, minmax(0, 1fr)); }.outcome-row { min-height: 30px; padding: 0 8px; border-radius: 2px; background: transparent; color: #b8b7bf; font-size: 11px; }.outcome-row:first-child { background: #1d3737; color: #d8f4ef; }.outcome-row:nth-child(2) { background: #35242e; color: #f5cfdf; }.outcome-row strong { color: inherit; font: 400 12px "Merriweather", Georgia, serif; }.future-card .future-current-price, .future-card .outcome-row:nth-child(2) { background: #1d3737; color: #d8f4ef; }
 .detail-page, .portfolio-page, .health-page { max-width: 1500px; color: #f4f3f6; font-family: "Merriweather", Georgia, serif; }.detail-page { padding-top: 24px; }.detail-heading h1, .portfolio-hero h1, .health-hero h1 { color: #f6f5f8; font-family: "Merriweather", Georgia, serif; font-style: normal; font-weight: 700; }.crumb, .metric-row, .portfolio-kicker, .panel-head span, .portfolio-metrics span { color: #88878f; }.chart-card, .book-card, .trades-card, .ticket, .position-card, .portfolio-panel, .portfolio-metrics div, .health-panel, .health-summary div { border-color: #2d2d33; border-radius: 3px; background: #1a1a1e; box-shadow: none; }.panel-head, .portfolio-row, .health-row, .contracts-table { border-color: #2d2d33; }.panel-head h2, .book-card h3, .trades-card h3, .portfolio-metrics strong, .contract-row, .position-stat-grid strong { color: #f1eff5; }.position-stat-grid div, .ticket-summary.market-estimate, .ticket-note, .order-type-toggle, .spread-row, .empty-state { background: #242429; color: #aaa9b1; }.primary-btn, .trade-btn, .fund-btn { background: #7653d8; }.trade-btn.long-submit { background: #167f72; }.trade-btn.short-submit { background: #bb3f72; }.secondary-btn, .quick-amounts button { background: #242429; border-color: #38383f; color: #dedce5; }.amount-input input { color: #eeeef2; background: transparent; }.outcome-toggle .yes { background: #194b48; color: #9de0d6; }.outcome-toggle .no { background: #4b2439; color: #f1a8c5; }.outcome-toggle .yes.active { background: #168276; }.outcome-toggle .no.active { background: #bb3f72; }.pnl-positive { color: #5fd4c5 !important; }.pnl-negative { color: #ff80ac !important; }
 .loading-panel { border-color: #2d2d33; border-radius: 3px; background: #1a1a1e; color: #9c9aa4; }
 

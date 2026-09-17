@@ -742,7 +742,7 @@ function MarketCard({ market, fills, index, onClick }) {
         <MarketImage market={market} index={index} />
       <h3>{cardMarketTitle(market)}</h3>
       </div>
-      <div className="outcome-list">
+      <div className="outcome-list binary-outcomes">
         {options.map((option) => (
           <div className="outcome-row" key={option.label}>
             <span>{option.label}</span>
@@ -853,20 +853,11 @@ function MarketDetail({ market, watchlist, onSelect, orderbook, fills, position,
 
         <section className="chart-card">
           <div className="chart-header">
-            <div><span>Implied chance</span><strong>{last}%</strong></div>
-          <span className="powered">Powered by Sarvaex ME</span>
+            <div><span>Mid price</span><strong>{last}%</strong></div>
+            <span className="chart-legend"><i /> Mid price</span>
+          <span className="powered">Powered by Sarvaex</span>
           </div>
-          <svg className="price-chart" viewBox="0 0 720 360" role="img" aria-label="Market price chart">
-            <defs>
-              <linearGradient id="priceFill" x1="0" x2="0" y1="0" y2="1">
-                <stop offset="0%" stopColor="#4f46e5" stopOpacity="0.22" />
-                <stop offset="100%" stopColor="#4f46e5" stopOpacity="0" />
-              </linearGradient>
-            </defs>
-            <path d={`${chartPoints.area} L 720 348 L 0 348 Z`} fill="url(#priceFill)" />
-            <path d={chartPoints.line} fill="none" stroke="#4f46e5" strokeWidth="3" strokeLinecap="round" />
-            {[0, 1, 2, 3, 4, 5].map((line) => <line key={line} x1="0" x2="720" y1={30 + line * 58} y2={30 + line * 58} stroke="#292b32" />)}
-          </svg>
+          <BinaryPriceChart chartPoints={chartPoints} />
         </section>
 
         <OracleDetails market={market} />
@@ -894,6 +885,48 @@ function MarketDetail({ market, watchlist, onSelect, orderbook, fills, position,
         <PositionSnapshot position={position} mark={last} market={market} authed={authed} />
       </aside>
     </main>
+  )
+}
+
+function BinaryPriceChart({ chartPoints }) {
+  const [hoveredIndex, setHoveredIndex] = useState(null)
+  const hoveredPoint = hoveredIndex === null ? null : chartPoints.points[hoveredIndex]
+  const latestPoint = chartPoints.points[chartPoints.points.length - 1]
+
+  const handlePointerMove = (event) => {
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const ratio = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width))
+    const index = Math.round(ratio * Math.max(0, chartPoints.points.length - 1))
+    setHoveredIndex(index)
+  }
+
+  return (
+    <svg className="price-chart" viewBox="0 0 720 360" role="img" aria-label="Binary market mid-price chart" onPointerMove={handlePointerMove} onPointerLeave={() => setHoveredIndex(null)}>
+            <defs>
+              <linearGradient id="priceFill" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0%" stopColor="#4f46e5" stopOpacity="0.22" />
+                <stop offset="100%" stopColor="#4f46e5" stopOpacity="0" />
+              </linearGradient>
+            </defs>
+            <path d={`${chartPoints.area} L 720 348 L 0 348 Z`} fill="url(#priceFill)" />
+            <path d={chartPoints.line} fill="none" stroke="#4f46e5" strokeWidth="3" strokeLinecap="round" />
+            {[0, 1, 2, 3, 4, 5].map((line) => <line key={line} x1="0" x2="720" y1={30 + line * 58} y2={30 + line * 58} stroke="#292b32" />)}
+            <circle className="chart-latest-point" cx={latestPoint.x} cy={latestPoint.y} r="4" />
+            <g className="chart-latest-label" transform={`translate(${Math.max(8, latestPoint.x - 68)} ${Math.max(18, latestPoint.y - 28)})`}>
+              <rect width="62" height="24" rx="3" />
+              <text x="31" y="16" textAnchor="middle">{Math.round(latestPoint.value)}%</text>
+            </g>
+            {hoveredPoint ? (
+              <>
+                <line className="chart-crosshair" x1={hoveredPoint.x} x2={hoveredPoint.x} y1="18" y2="300" />
+                <circle className="chart-point" cx={hoveredPoint.x} cy={hoveredPoint.y} r="5" />
+                <g className="chart-tooltip" transform={`translate(${Math.min(hoveredPoint.x + 10, 620)} ${Math.max(24, hoveredPoint.y - 40)})`}>
+                  <rect width="88" height="29" rx="3" />
+                  <text x="8" y="19">{Math.round(hoveredPoint.value)}%</text>
+                </g>
+              </>
+            ) : null}
+          </svg>
   )
 }
 
@@ -1845,7 +1878,7 @@ function buildChartPoints(fills, fallback, market) {
     return [x, y]
   })
   const line = points.map(([x, y], index) => `${index === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`).join(' ')
-  return { line, area: line }
+  return { line, area: line, points: points.map(([x, y], index) => ({ x, y, value: values[index] })) }
 }
 
 export default App
