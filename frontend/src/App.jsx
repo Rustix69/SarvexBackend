@@ -23,6 +23,7 @@ import {
 } from 'lucide-react'
 import { dispose as disposeKlineChart, init as initKlineChart, registerStyles } from 'klinecharts'
 import { contractsCatalog } from './contractsCatalog'
+import { buildKlineBars, futureMeta, futureConfigurationIssue, futureLimitPriceIssue, parseFutureInput } from './futures'
 import './App.css'
 
 registerStyles('sarvexKlineTheme', {
@@ -449,6 +450,7 @@ function App() {
         <FutureDetail
           market={selectedMarket}
           watchlist={futures}
+          watchlistFills={fills}
           onSelect={handleMarketSelect}
           orderbook={orderbook}
           fills={selectedFills}
@@ -682,8 +684,7 @@ function MarketDashboard({ loading, markets, fills, onSelect, onRefresh, searchQ
       </nav>
       <section className="dashboard-hero">
         <div className="promo-banner">
-          <img src="/logo.png" alt="" aria-hidden="true" />
-          <div><span>Powered by Sarvaex</span><strong>Trade what happens next.</strong><small>Event markets with live prices and transparent settlement.</small></div>
+          <div className="promo-copy"><span>Powered by Sarvaex</span><strong>Trade what happens next.</strong><small>Event markets with live prices and transparent settlement.</small></div>
         </div>
         <aside className="live-panel">
           <div className="live-panel-head"><span><i /> Live markets</span><span>1 / 11 <ChevronDown size={13} /></span></div>
@@ -789,14 +790,16 @@ function FutureCard({ market, fills, index, onClick }) {
   )
 }
 
-function TerminalWatchlist({ markets, selectedTicker, onSelect }) {
+function TerminalWatchlist({ markets, selectedTicker, onSelect, fills = [] }) {
   return (
     <aside className="terminal-watchlist">
       <div className="terminal-watchlist-head"><span>Markets</span><span><RefreshCw size={12} /></span></div>
       <div className="terminal-watchlist-list">
         {markets.slice(0, 14).map((item, index) => <button className={item.ticker === selectedTicker ? 'watch-item active' : 'watch-item'} type="button" key={item.ticker} onClick={() => onSelect(item.ticker)}>
           <span className={`watch-icon watch-${index % 5}`}>{avatarText(item)}</span>
-          <span><b>{item.question || item.ticker}</b><small>{Math.max(1, Math.min(99, impliedPrice(item, [])))}¢ <em>{100 - Math.max(1, Math.min(99, impliedPrice(item, [])))}¢</em></small></span>
+          <span><b>{item.question || item.ticker}</b>{isFutureMarket(item)
+            ? <small>{fills.some((fill) => fill.ticker === item.ticker) ? formatFuturePrice(item, impliedPrice(item, fills)) : '--'}</small>
+            : <small>{Math.max(1, Math.min(99, impliedPrice(item, fills)))}¢ <em>{100 - Math.max(1, Math.min(99, impliedPrice(item, fills)))}¢</em></small>}</span>
         </button>)}
       </div>
       {!markets.length && <div className="watch-empty">No markets loaded</div>}
@@ -876,7 +879,7 @@ function MarketDetail({ market, watchlist, onSelect, orderbook, fills, position,
   )
 }
 
-function FutureDetail({ market, watchlist, onSelect, orderbook, fills, position, authed, busy, onBack, onTrade }) {
+function FutureDetail({ market, watchlist, watchlistFills, onSelect, orderbook, fills, position, authed, busy, onBack, onTrade }) {
   const bestBid = Number(orderbook?.bids?.[0]?.price_ticks || orderbook?.bids?.[0]?.priceTicks || 0)
   const bestAsk = Number(orderbook?.asks?.[0]?.price_ticks || orderbook?.asks?.[0]?.priceTicks || 0)
   const last = Number(fills?.[fills.length - 1]?.price_ticks || fills?.[fills.length - 1]?.priceTicks || midpoint(bestBid, bestAsk) || futureFallbackTicks(market))
@@ -884,7 +887,7 @@ function FutureDetail({ market, watchlist, onSelect, orderbook, fills, position,
 
   return (
     <main className="detail-page terminal-page">
-      <TerminalWatchlist markets={watchlist} selectedTicker={market.ticker} onSelect={onSelect} />
+      <TerminalWatchlist markets={watchlist} fills={watchlistFills} selectedTicker={market.ticker} onSelect={onSelect} />
       <section className="market-main">
         <button className="back-btn" type="button" onClick={onBack}><ArrowLeft size={16} /> All futures</button>
         <div className="detail-heading">
@@ -908,7 +911,7 @@ function FutureDetail({ market, watchlist, onSelect, orderbook, fills, position,
             <div><span>Candlestick · Market price</span><strong>{formatFuturePrice(market, last)}</strong></div>
             <span className="powered">Linear USDC-settled demo future</span>
           </div>
-          <KlineFutureChart fills={fills} fallback={last} market={market} />
+          <KlineFutureChart fills={fills} market={market} />
         </section>
 
         <OracleDetails market={market} />
@@ -934,6 +937,7 @@ function FutureDetail({ market, watchlist, onSelect, orderbook, fills, position,
       <aside className="trade-side">
         <OrderBook book={orderbook} market={market} />
         <FutureTradeTicket
+          key={market.ticker}
           market={market}
           bestBid={bestBid}
           bestAsk={bestAsk}
@@ -965,10 +969,11 @@ function ContractRow({ title, price, side, onClick }) {
   )
 }
 
-function KlineFutureChart({ fills, fallback, market }) {
+function KlineFutureChart({ fills, market }) {
   const containerRef = useRef(null)
   const chartRef = useRef(null)
-  const bars = useMemo(() => buildKlineBars(fills, fallback, market), [fills, fallback, market])
+  const bars = useMemo(() => buildKlineBars(fills, market), [fills, market])
+  const pricePrecision = futureMeta(market).decimals
   const barsRef = useRef(bars)
 
   useEffect(() => {
@@ -989,7 +994,7 @@ function KlineFutureChart({ fills, fallback, market }) {
     chart.setDataLoader({
       getBars: ({ callback }) => callback(barsRef.current),
     })
-    chart.setSymbol({ ticker: market.ticker, pricePrecision: 2, volumePrecision: 0 })
+    chart.setSymbol({ ticker: market.ticker, pricePrecision, volumePrecision: 0 })
     chart.setPeriod({ span: 1, type: 'minute' })
     chart.resetData()
     chart.resize()
@@ -1005,7 +1010,7 @@ function KlineFutureChart({ fills, fallback, market }) {
       disposeKlineChart(chart)
       chartRef.current = null
     }
-  }, [market.ticker])
+  }, [market.ticker, pricePrecision])
 
   useEffect(() => {
     const chart = chartRef.current
@@ -1016,7 +1021,10 @@ function KlineFutureChart({ fills, fallback, market }) {
     chart.resetData()
   }, [bars])
 
-  return <div className="kline-chart-container" ref={containerRef} role="img" aria-label="Futures candlestick price chart" />
+  return <div className="future-chart">
+    <div className="kline-chart-container" ref={containerRef} role="img" aria-label="Futures candlestick price chart" />
+    {!bars.length && <div className="future-chart-empty">No trades yet</div>}
+  </div>
 }
 
 function OracleDetails({ market }) {
@@ -1168,11 +1176,15 @@ function FutureTradeTicket({ market, bestBid, bestAsk, mark, authed, busy, onTra
   const [priceInput, setPriceInput] = useState(() => formatFutureInput(market, bestAsk || bestBid || mark))
   const [size, setSize] = useState('5')
   const parsedPrice = parseFutureInput(market, priceInput)
-  const priceTicks = parsedPrice > 0 ? clampFutureTicks(market, parsedPrice) : 0
+  const priceTicks = Number.isFinite(parsedPrice) ? parsedPrice : 0
   const marketPriceTicks = tab === 'buy' ? (bestAsk || mark || bestBid || futureFallbackTicks(market)) : (bestBid || mark || bestAsk || futureFallbackTicks(market))
   const executionTicks = orderType === 'market' ? marketSweepTicks(market, tab === 'buy' ? 'BUY' : 'SELL') : priceTicks
   const contracts = Math.max(0, Math.floor(Number(size || 0)))
   const hold = computeFutureHoldMicro(market, tab, executionTicks, contracts)
+  const orderIssue = futureConfigurationIssue(market)
+    || (orderType === 'limit' ? futureLimitPriceIssue(market, parsedPrice) : '')
+    || (!Number.isSafeInteger(contracts) || contracts <= 0 ? 'Enter a positive whole number of contracts.' : '')
+    || (contracts > Number(market.max_order_size ?? market.maxOrderSize ?? Infinity) ? 'Quantity exceeds the contract order limit.' : '')
   const payoffNote = tab === 'buy'
     ? 'Final payoff: (final value - entry) x contracts x multiplier.'
     : 'Final payoff: (entry - final value) x contracts x multiplier.'
@@ -1183,7 +1195,7 @@ function FutureTradeTicket({ market, bestBid, bestAsk, mark, authed, busy, onTra
   }
 
   const submit = () => {
-    if (!contracts || (orderType === 'limit' && !priceTicks)) return
+    if (orderIssue) return
     const id = `fut-${Date.now()}-${Math.random().toString(16).slice(2)}`
     onTrade({
       client_order_id: id,
@@ -1210,23 +1222,24 @@ function FutureTradeTicket({ market, bestBid, bestAsk, mark, authed, busy, onTra
       </div>
       {orderType === 'limit' ? (
         <label className="amount-input future-price-input">
-          <span>Entry price</span>
-          <input value={priceInput} onChange={(event) => setPriceInput(event.target.value.replace(/[^\d.]/g, ''))} inputMode="decimal" />
+          <span>Entry price{futureMeta(market).suffix ? ` (${futureMeta(market).suffix})` : ''}</span>
+          <input value={priceInput} onChange={(event) => setPriceInput(event.target.value)} inputMode="decimal" />
         </label>
       ) : (
         <div className="ticket-summary market-estimate"><span>Market estimate</span><strong>{formatFuturePrice(market, marketPriceTicks)}</strong></div>
       )}
       <label className="amount-input future-size-input">
         <span>Contracts</span>
-        <input value={size} onChange={(event) => setSize(event.target.value.replace(/[^\d]/g, ''))} inputMode="numeric" />
+        <input value={size} onChange={(event) => { if (/^\d*$/.test(event.target.value)) setSize(event.target.value) }} inputMode="numeric" />
       </label>
       <div className="quick-amounts">
         {[1, 5, 10, 25].map((value) => <button type="button" key={value} onClick={() => setSize(String(Math.max(0, Number(size || 0)) + value))}>+{value}</button>)}
       </div>
       <div className="ticket-summary"><span>{orderType === 'market' ? 'Est. entry' : 'Entry'}</span><strong>{formatFuturePrice(market, orderType === 'market' ? marketPriceTicks : priceTicks)}</strong></div>
-      <div className="ticket-summary muted"><span>Demo hold</span><strong>{formatUSDC(hold)}</strong></div>
+      <div className="ticket-summary muted"><span>{orderType === 'market' ? 'Max. collateral' : 'Required collateral'}</span><strong>{formatUSDC(hold)}</strong></div>
       <div className="ticket-note">{payoffNote}</div>
-      <button className={tab === 'buy' ? 'trade-btn long-submit' : 'trade-btn short-submit'} type="button" disabled={!authed || busy || !contracts || (orderType === 'limit' && !priceTicks)} onClick={submit}>
+      {orderIssue && <div className="ticket-validation" role="alert">{orderIssue}</div>}
+      <button className={tab === 'buy' ? 'trade-btn long-submit' : 'trade-btn short-submit'} type="button" disabled={!authed || busy || Boolean(orderIssue)} onClick={submit}>
         {busy ? <Loader2 className="spin" size={17} /> : <CircleDollarSign size={17} />} {authed ? `${orderType === 'market' ? 'Market' : 'Limit'} ${tab === 'buy' ? 'buy' : 'sell'} ${contracts}` : 'Login to trade'}
       </button>
       <p>Numeric futures are demo USDC-settled contracts.</p>
@@ -1529,18 +1542,6 @@ function isFutureMarket(market) {
   return Number(market?.kind || 0) === SCALAR_KIND
 }
 
-function futureMeta(market = {}) {
-  const ticker = market.ticker || ''
-  const text = `${ticker} ${market.underlying || ''} ${market.question || ''}`.toUpperCase()
-  if (text.includes('BTC')) return { divider: 1, decimals: 0, prefix: '$', compactThousands: true }
-  if (text.includes('ETH')) return { divider: 1, decimals: 0, prefix: '$', compactThousands: true }
-  if (text.includes('GDP') || text.includes('AI')) return { divider: 100, decimals: 2, prefix: '$', suffix: 'T' }
-  if (text.includes('NIFTY')) return { divider: 1, decimals: 0, prefix: '' }
-  if (text.includes('USDINR') || text.includes('USD/INR')) return { divider: 100, decimals: 2, prefix: '' }
-  if (text.includes('CPI') || text.includes('UNEMPLOYMENT') || text.includes('FED')) return { divider: 100, decimals: 2, suffix: '%' }
-  return { divider: 100, decimals: 2 }
-}
-
 function formatFuturePrice(market, ticks) {
   const meta = futureMeta(market)
   const raw = Number(ticks || 0)
@@ -1558,11 +1559,6 @@ function formatFutureInput(market, ticks) {
   const meta = futureMeta(market)
   const value = Number(ticks || futureFallbackTicks(market)) / meta.divider
   return value.toFixed(meta.decimals)
-}
-
-function parseFutureInput(market, value) {
-  const meta = futureMeta(market)
-  return Math.round(Number(value || 0) * meta.divider)
 }
 
 function formatFutureRange(market) {
@@ -1805,91 +1801,6 @@ function spread(book) {
   const ask = Number(book?.asks?.[0]?.price_ticks || book?.asks?.[0]?.priceTicks || 0)
   if (!bid || !ask) return '--'
   return Math.max(0, ask - bid)
-}
-
-function buildKlineBars(fills, fallback, market) {
-  const source = fills
-    .map((fill, index) => ({
-      price: Number(fill.price_ticks ?? fill.priceTicks),
-      timestamp: fillTimestamp(fill, index, fills.length),
-      volume: Number(fill.count || 0),
-    }))
-    .filter((item) => Number.isFinite(item.price) && item.timestamp > 0)
-    .slice(-36)
-  const visualCandles = buildCandles(fills, fallback, market)
-  const latestTimestamp = source.length
-    ? Math.max(...source.map((item) => item.timestamp))
-    : Date.parse(market?.open_at || market?.openAt || '2026-01-01T00:00:00Z')
-  const interval = 60 * 1000
-  const volume = source.reduce((total, item) => total + Math.max(0, item.volume), 0)
-
-  return visualCandles.map((candle, index) => ({
-    timestamp: latestTimestamp - ((visualCandles.length - 1 - index) * interval),
-    open: candle.open,
-    high: candle.high,
-    low: candle.low,
-    close: candle.close,
-    volume: volume / Math.max(1, visualCandles.length),
-  }))
-}
-
-function fillTimestamp(fill, index, total) {
-  const value = fill?.ts || fill?.timestamp
-  if (value?.seconds !== undefined) {
-    return Number(value.seconds) * 1000 + Number(value.nanos || 0) / 1_000_000
-  }
-  if (typeof value === 'number') return value > 1e12 ? value : value * 1000
-  const parsed = Date.parse(value || '')
-  if (Number.isFinite(parsed)) return parsed
-  return Date.parse('2026-01-01T00:00:00Z') + (index * 60 * 1000)
-}
-
-function buildCandles(fills, fallback, market) {
-  const min = Number(market?.min_price_ticks ?? market?.minPriceTicks ?? 0)
-  const maxCandidate = Number(market?.max_price_ticks ?? market?.maxPriceTicks ?? Math.max(fallback * 1.2, fallback + 10))
-  const max = maxCandidate > min ? maxCandidate : min + 1
-  const source = fills
-    .map((fill) => Number(fill.price_ticks ?? fill.priceTicks))
-    .filter((value) => Number.isFinite(value))
-    .slice(-36)
-
-  let values = source
-  if (!values.length) {
-    let seed = [...String(market?.ticker || 'sarvaex')].reduce((sum, char) => ((sum * 31) + char.charCodeAt(0)) >>> 0, 7)
-    const wave = Math.max(1, Math.round((max - min) * 0.025))
-    values = Array.from({ length: 36 }, (_, index) => {
-      seed = (seed * 1664525 + 1013904223) >>> 0
-      const jitter = ((seed % 1000) / 1000 - 0.5) * wave * 1.8
-      const swing = Math.sin(index / 2.4) * wave * 1.8 + Math.sin(index / 5.6) * wave * 1.2
-      return Math.max(min, Math.min(max, fallback + swing + jitter))
-    })
-  }
-
-  const groupSize = Math.max(1, Math.ceil(values.length / 12))
-  const groups = []
-  for (let index = 0; index < values.length; index += groupSize) {
-    const group = values.slice(index, index + groupSize)
-    if (!group.length) continue
-    const open = group[0]
-    const close = group[group.length - 1]
-    groups.push({
-      key: `${index}-${open}-${close}`,
-      open,
-      close,
-      high: Math.max(...group),
-      low: Math.min(...group),
-    })
-  }
-
-  return groups.map((candle, index) => ({
-    ...candle,
-    x: ((index + 0.5) / groups.length) * 720,
-    width: Math.max(7, Math.min(24, 540 / groups.length)),
-    openY: chartY(candle.open, min, max),
-    closeY: chartY(candle.close, min, max),
-    highY: chartY(candle.high, min, max),
-    lowY: chartY(candle.low, min, max),
-  }))
 }
 
 function chartY(value, min, max) {
