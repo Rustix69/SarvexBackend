@@ -3,9 +3,9 @@
 This is the simple public-demo setup:
 
 - EC2 runs Docker Compose backend services plus both demo simulators.
-- Nginx on EC2 exposes only `https://api.sarvaex.in`.
+- Nginx on EC2 exposes only `https://api.sarvaex.com`.
 - Vercel hosts the Vite frontend.
-- Vercel builds the frontend with `VITE_API_BASE_URL=https://api.sarvaex.in`.
+- Vercel builds the frontend with `VITE_API_BASE_URL=https://api.sarvaex.com`.
 
 This is not the full production target from `docs/10_production_phase.md`; it is a public demo deployment.
 
@@ -58,7 +58,7 @@ Change at least:
 Use the final Vercel domain in `ALLOWED_ORIGINS`. During first setup you can include both:
 
 ```env
-ALLOWED_ORIGINS=https://sarvaex.in,https://www.sarvaex.in,https://YOUR_PROJECT.vercel.app
+ALLOWED_ORIGINS=https://sarvaex.com,https://www.sarvaex.com,https://YOUR_PROJECT.vercel.app
 ```
 
 ## 4. Start Backend And Simulators
@@ -79,7 +79,7 @@ Check locally on EC2:
 curl http://127.0.0.1:18080/v1/health/overview | jq '.summary'
 ```
 
-## 5. Nginx For `api.sarvaex.in`
+## 5. Nginx For `api.sarvaex.com`
 
 Copy the example config:
 
@@ -92,19 +92,19 @@ sudo systemctl reload nginx
 
 Point DNS:
 
-- `api.sarvaex.in` A record -> EC2 public IP
+- `api.sarvaex.com` A record -> EC2 public IP
 
 Then enable HTTPS:
 
 ```bash
-sudo certbot --nginx -d api.sarvaex.in
+sudo certbot --nginx -d api.sarvaex.com
 ```
 
 Verify:
 
 ```bash
-curl https://api.sarvaex.in/readyz
-curl https://api.sarvaex.in/v1/health/overview | jq '.summary'
+curl https://api.sarvaex.com/readyz
+curl https://api.sarvaex.com/v1/health/overview | jq '.summary'
 ```
 
 ## 6. Vercel Frontend
@@ -119,7 +119,7 @@ In Vercel:
 Set environment variable:
 
 ```env
-VITE_API_BASE_URL=https://api.sarvaex.in
+VITE_API_BASE_URL=https://api.sarvaex.com
 ```
 
 Deploy. After deployment, add the Vercel production URL to EC2 `.env` `ALLOWED_ORIGINS`, then restart backend:
@@ -148,7 +148,7 @@ pkill -f 'sarvex-demo-sim|cmd/demo-sim' || true
 Health:
 
 ```bash
-curl https://api.sarvaex.in/v1/health/overview | jq '.summary'
+curl https://api.sarvaex.com/v1/health/overview | jq '.summary'
 ```
 
 ## 8. Important Demo Notes
