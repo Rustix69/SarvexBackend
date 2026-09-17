@@ -20,6 +20,7 @@ import {
   SlidersHorizontal,
   List,
   Search,
+  UserRound,
 } from 'lucide-react'
 import { dispose as disposeKlineChart, init as initKlineChart, registerStyles } from 'klinecharts'
 import { contractsCatalog } from './contractsCatalog'
@@ -186,6 +187,15 @@ function App() {
     },
     [],
   )
+
+  const logout = useCallback(() => {
+    localStorage.removeItem('sarvex_token')
+    localStorage.removeItem('sarvex_user_id')
+    setToken('')
+    setBalance(null)
+    setPositions([])
+    setOrders([])
+  }, [])
 
   const fetchMarketFills = useCallback(async (ticker) => {
     let cursor = fillCursorRef.current[ticker] || ''
@@ -427,6 +437,7 @@ function App() {
         token={token}
         busy={busy}
         onLogin={login}
+        onLogout={logout}
         onMarkets={handleMarketsNav}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
@@ -545,7 +556,7 @@ function App() {
   )
 }
 
-function TopNav({ selectedUser, token, busy, onLogin, onMarkets, onTerminal, onNavigateView, activeView, searchQuery, onSearchChange, searchMarkets, onSelectMarket }) {
+function TopNav({ selectedUser, token, busy, onLogin, onLogout, onMarkets, onTerminal, onNavigateView, activeView, searchQuery, onSearchChange, searchMarkets, onSelectMarket }) {
   const normalizedQuery = searchQuery.trim().toLowerCase()
   const searchResults = normalizedQuery
     ? searchMarkets.filter((market) => marketMatchesSearch(market, normalizedQuery)).slice(0, 6)
@@ -584,9 +595,16 @@ function TopNav({ selectedUser, token, busy, onLogin, onMarkets, onTerminal, onN
         </nav>
       </div>
       <div className="user-cluster">
-        <button className="demo-login-btn" type="button" onClick={onLogin} disabled={busy}>
-          {busy ? <Loader2 className="spin" size={15} /> : null}{token ? selectedUser.label : 'Log in demo'}
-        </button>
+        {token ? (
+          <>
+            <span className="account-icon" title={`${selectedUser.label} account`} aria-label={`${selectedUser.label} account`}><UserRound size={17} /></span>
+            <button className="logout-btn" type="button" onClick={onLogout}><LogOut size={15} /> Log out</button>
+          </>
+        ) : (
+          <button className="demo-login-btn" type="button" onClick={onLogin} disabled={busy}>
+            {busy ? <Loader2 className="spin" size={15} /> : null}Log in demo
+          </button>
+        )}
       </div>
     </header>
   )
