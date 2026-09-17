@@ -61,8 +61,15 @@ function timestampMs(value) {
   return typeof value === 'string' ? Date.parse(value) : NaN
 }
 
-export function buildKlineBars(fills, market) {
+export function buildKlineBars(fills, market, period = '1h') {
   const divider = futureMeta(market).divider
+  const bucketMs = period === '1m'
+    ? 60_000
+    : period === '5m'
+      ? 5 * 60_000
+      : period === '1D'
+        ? 24 * 60 * 60_000
+        : 60 * 60_000
   const seen = new Set()
   const trades = fills.flatMap((fill) => {
     if (fill.ticker && fill.ticker !== market.ticker) return []
@@ -78,7 +85,7 @@ export function buildKlineBars(fills, market) {
 
   const bars = []
   for (const trade of trades) {
-    const timestamp = Math.floor(trade.timestamp / 60_000) * 60_000
+    const timestamp = Math.floor(trade.timestamp / bucketMs) * bucketMs
     const last = bars[bars.length - 1]
     if (!last || last.timestamp !== timestamp) {
       bars.push({ timestamp, open: trade.price, high: trade.price, low: trade.price, close: trade.price, volume: trade.volume })

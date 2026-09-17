@@ -911,6 +911,7 @@ function BinaryCleanChart({ fills, bestBid, bestAsk, market, fallback }) {
 }
 
 function FutureDetail({ market, watchlist, watchlistFills, onSelect, orderbook, fills, position, authed, busy, onBack, onTrade }) {
+  const [chartPeriod, setChartPeriod] = useState('1h')
   const bestBid = Number(orderbook?.bids?.[0]?.price_ticks || orderbook?.bids?.[0]?.priceTicks || 0)
   const bestAsk = Number(orderbook?.asks?.[0]?.price_ticks || orderbook?.asks?.[0]?.priceTicks || 0)
   const last = Number(fills?.[fills.length - 1]?.price_ticks || fills?.[fills.length - 1]?.priceTicks || midpoint(bestBid, bestAsk) || futureFallbackTicks(market))
@@ -945,8 +946,8 @@ function FutureDetail({ market, watchlist, watchlistFills, onSelect, orderbook, 
               <span>Candlestick</span>
             </div>
             <div className="future-chart-periods" aria-label="Chart timeframe">
-              {['1m', '5m', '1h', '1D'].map((period, index) => (
-                <button className={index === 2 ? 'active' : ''} key={period} type="button">{period}</button>
+              {['1m', '5m', '1h', '1D'].map((period) => (
+                <button className={chartPeriod === period ? 'active' : ''} key={period} type="button" onClick={() => setChartPeriod(period)}>{period}</button>
               ))}
               <button type="button" aria-label="Chart settings"><SlidersHorizontal size={14} /></button>
             </div>
@@ -956,7 +957,7 @@ function FutureDetail({ market, watchlist, watchlistFills, onSelect, orderbook, 
             <span>{fills.length} recent fills</span>
             <span>Linear USDC-settled demo future</span>
           </div>
-          <KlineFutureChart fills={fills} market={market} />
+          <KlineFutureChart fills={fills} market={market} period={chartPeriod} />
         </section>
 
         <OracleDetails market={market} />
@@ -1014,10 +1015,17 @@ function ContractRow({ title, price, side, onClick }) {
   )
 }
 
-function KlineFutureChart({ fills, market }) {
+function chartPeriodConfig(period) {
+  if (period === '1m') return { span: 1, type: 'minute' }
+  if (period === '5m') return { span: 5, type: 'minute' }
+  if (period === '1D') return { span: 1, type: 'day' }
+  return { span: 1, type: 'hour' }
+}
+
+function KlineFutureChart({ fills, market, period }) {
   const containerRef = useRef(null)
   const chartRef = useRef(null)
-  const bars = useMemo(() => buildKlineBars(fills, market), [fills, market])
+  const bars = useMemo(() => buildKlineBars(fills, market, period), [fills, market, period])
   const pricePrecision = futureMeta(market).decimals
   const barsRef = useRef(bars)
 
@@ -1040,7 +1048,7 @@ function KlineFutureChart({ fills, market }) {
       getBars: ({ callback }) => callback(barsRef.current),
     })
     chart.setSymbol({ ticker: market.ticker, pricePrecision, volumePrecision: 0 })
-    chart.setPeriod({ span: 1, type: 'minute' })
+    chart.setPeriod(chartPeriodConfig(period))
     chart.resetData()
     chart.resize()
     chartRef.current = chart
@@ -1055,7 +1063,7 @@ function KlineFutureChart({ fills, market }) {
       disposeKlineChart(chart)
       chartRef.current = null
     }
-  }, [market.ticker, pricePrecision])
+  }, [market.ticker, period, pricePrecision])
 
   useEffect(() => {
     const chart = chartRef.current
