@@ -25,6 +25,11 @@ import {
 import { dispose as disposeKlineChart, init as initKlineChart, registerStyles } from 'klinecharts'
 import { contractsCatalog } from './contractsCatalog'
 import { buildKlineBars, futureMeta, futureConfigurationIssue, futureLimitPriceIssue, parseFutureInput } from './futures'
+import MatrixBackdrop from '../test/MatrixBackdrop'
+import MidPriceChart from '../test/chart desin 1/MidPriceChart'
+import { BinaryCard } from '../test/binary card design/BinaryMarkets'
+import { BINARY_CSS } from '../test/binary card design/binary-core'
+import { CARD_CSS } from '../test/futures card design/cards-core'
 import './App.css'
 
 registerStyles('sarvexKlineTheme', {
@@ -592,6 +597,7 @@ function TopNav({ selectedUser, token, busy, onLogin, onLogout, onMarkets, onTer
           <button className={activeView === 'futures' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => onNavigateView('futures')}>Futures</button>
           <button className={activeView === 'trade' ? 'nav-link active' : 'nav-link'} type="button" onClick={onTerminal}>Terminal</button>
           <button className={activeView === 'portfolio' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => onNavigateView('portfolio')}>Portfolio</button>
+          <button className={activeView === 'health' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => onNavigateView('health')}>Health</button>
         </nav>
       </div>
       <div className="user-cluster">
@@ -697,12 +703,17 @@ function MarketDashboard({ loading, markets, fills, onSelect, onRefresh, searchQ
     .filter((market) => marketMatchesSearch(market, searchQuery))
   return (
     <main className="dashboard-page">
+      <style>{BINARY_CSS}</style>
       <nav className="category-nav" aria-label="Market categories">
         {MARKET_SECTIONS.map((item) => <button className={section === item ? 'category-link active' : 'category-link'} type="button" key={item} onClick={() => setSection(item)}>{item}</button>)}
       </nav>
       <section className="dashboard-hero">
         <div className="promo-banner">
-          <div className="promo-copy"><span>Powered by Sarvaex</span><strong>Trade what happens next.</strong><small>Event markets with live prices and transparent settlement.</small></div>
+          <MatrixBackdrop
+            focus="34% 55%"
+            options={{ market: 'SARVAEX LIVE MARKETS' }}
+          />
+          <div className="matrix-hero-copy"><span>Powered by Sarvaex</span><strong>Trade What Happens Next</strong></div>
         </div>
         <aside className="live-panel">
           <div className="live-panel-head"><span><i /> Live markets</span><span>1 / 11 <ChevronDown size={13} /></span></div>
@@ -730,28 +741,20 @@ function MarketDashboard({ loading, markets, fills, onSelect, onRefresh, searchQ
   )
 }
 
-function MarketCard({ market, fills, index, onClick }) {
+function MarketCard({ market, fills, onClick }) {
   const price = impliedPrice(market, fills)
-  const options = [
-    { label: 'Yes', price },
-    { label: 'No', price: 100 - price },
-  ]
-  return (
-    <button className="market-card" type="button" onClick={onClick} style={{ animationDelay: `${index * 35}ms` }}>
-      <div className="card-topline">
-        <MarketImage market={market} index={index} />
-      <h3>{cardMarketTitle(market)}</h3>
-      </div>
-      <div className="outcome-list binary-outcomes">
-        {options.map((option) => (
-          <div className="outcome-row" key={option.label}>
-            <span>{option.label}</span>
-            <strong key={`${option.label}-${option.price}`}>{option.price}%</strong>
-          </div>
-        ))}
-      </div>
-    </button>
-  )
+  const cardMarket = {
+    id: market.ticker,
+    question: cardMarketTitle(market),
+    category: binaryCardCategory(market),
+    yes: price,
+    change: 0,
+    yesAsk: price,
+    noAsk: 100 - price,
+    settle: marketSettlement(market),
+    traded: !market.catalogOnly,
+  }
+  return <BinaryCard market={cardMarket} onBuy={onClick} onOpen={onClick} />
 }
 
 function FuturesDashboard({ loading, futures, fills, onSelect, searchQuery }) {
@@ -761,6 +764,7 @@ function FuturesDashboard({ loading, futures, fills, onSelect, searchQuery }) {
     .filter((market) => marketMatchesSearch(market, searchQuery))
   return (
     <main className="dashboard-page">
+      <style>{CARD_CSS}</style>
       <nav className="category-nav" aria-label="Futures categories">
         {MARKET_SECTIONS.map((item) => <button className={section === item ? 'category-link active' : 'category-link'} type="button" key={item} onClick={() => setSection(item)}>{item}</button>)}
       </nav>
@@ -786,25 +790,22 @@ function FuturesDashboard({ loading, futures, fills, onSelect, searchQuery }) {
   )
 }
 
-function FutureCard({ market, fills, index, onClick }) {
+function FutureCard({ market, fills, onClick }) {
   const price = impliedPrice(market, fills)
+  const min = Number(market.min_price_ticks ?? market.minPriceTicks ?? 0)
+  const max = Number(market.max_price_ticks ?? market.maxPriceTicks ?? Math.max(price, 1))
+  const position = max > min ? Math.max(0, Math.min(100, ((price - min) / (max - min)) * 100)) : 50
   return (
-    <button className="market-card future-card" type="button" onClick={onClick} style={{ animationDelay: `${index * 35}ms` }}>
-      <div className="card-topline">
-        <MarketImage market={market} index={index} />
-        <h3>{cardMarketTitle(market)}</h3>
+    <article className="smc" role="button" tabIndex="0" onClick={onClick} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onClick() } }}>
+      <div className="smc-top">
+        <div className="smc-title"><span className="smc-dot" style={{ '--c': scalarCardColor(market) }} aria-hidden="true" /><span>{cardMarketTitle(market)}</span></div>
+        <span className="smc-exp">{formatDate(market.close_at || market.closeAt || market.expected_resolution_at)}</span>
       </div>
-      <div className="outcome-list future-list">
-        <div className="outcome-row future-current-price">
-          <span>Current price</span>
-          <strong key={price}>{formatFuturePrice(market, price)}</strong>
-        </div>
-        <div className="outcome-row">
-          <span>Range</span>
-          <strong>{formatFutureRange(market)}</strong>
-        </div>
-      </div>
-    </button>
+      <div className="smc-sub">{market.underlying || market.question || market.ticker}</div>
+      <div className="smc-val"><b>{formatFuturePrice(market, price)}</b></div>
+      <div className="smc-track"><div className="smc-fill" style={{ width: `${position}%` }} /><div className="smc-mark" style={{ left: `${position}%` }} /></div>
+      <div className="smc-ends"><span>{formatFuturePrice(market, min)}</span><span>{formatFuturePrice(market, max)}</span></div>
+    </article>
   )
 }
 
@@ -829,7 +830,6 @@ function MarketDetail({ market, watchlist, onSelect, orderbook, fills, position,
   const bestBid = Number(orderbook?.bids?.[0]?.price_ticks || orderbook?.bids?.[0]?.priceTicks || 0)
   const bestAsk = Number(orderbook?.asks?.[0]?.price_ticks || orderbook?.asks?.[0]?.priceTicks || 0)
   const last = Number(fills?.[fills.length - 1]?.price_ticks || fills?.[fills.length - 1]?.priceTicks || bestAsk || bestBid || 50)
-  const chartPoints = useMemo(() => buildChartPoints(fills, last), [fills, last])
 
   return (
     <main className="detail-page terminal-page">
@@ -851,13 +851,8 @@ function MarketDetail({ market, watchlist, onSelect, orderbook, fills, position,
           <span><Activity size={15} /> {fills.length} recent fills</span>
         </div>
 
-        <section className="chart-card">
-          <div className="chart-header">
-            <div><span>Mid price</span><strong>{last}%</strong></div>
-            <span className="chart-legend"><i /> Mid price</span>
-          <span className="powered">Powered by Sarvaex</span>
-          </div>
-          <BinaryPriceChart chartPoints={chartPoints} />
+        <section className="binary-chart-shell">
+          <BinaryCleanChart fills={fills} bestBid={bestBid} bestAsk={bestAsk} market={market} fallback={last} />
         </section>
 
         <OracleDetails market={market} />
@@ -888,46 +883,31 @@ function MarketDetail({ market, watchlist, onSelect, orderbook, fills, position,
   )
 }
 
-function BinaryPriceChart({ chartPoints }) {
-  const [hoveredIndex, setHoveredIndex] = useState(null)
-  const hoveredPoint = hoveredIndex === null ? null : chartPoints.points[hoveredIndex]
-  const latestPoint = chartPoints.points[chartPoints.points.length - 1]
+function BinaryCleanChart({ fills, bestBid, bestAsk, market, fallback }) {
+  const getData = useCallback(async (range) => {
+    const now = Date.now()
+    const rangeMs = { '1H': 3600000, '6H': 21600000, '1D': 86400000, '1W': 604800000, '1M': 2592000000, ALL: Infinity }[range] || 86400000
+    const source = fills
+      .map((fill, index) => {
+        const price = Number(fill.price_ticks || fill.priceTicks || fallback)
+        return { fill, index, price: Math.max(1, Math.min(99, price)), t: fillTimestamp(fill, index, fills.length, now) }
+      })
+      .filter((item) => item.t >= now - rangeMs)
+      .sort((a, b) => a.t - b.t)
+    const mid = Math.max(1, Math.min(99, midpoint(bestBid, bestAsk) || fallback || 50))
+    const points = source.length >= 3
+      ? source.map((item) => ({ t: item.t, bid: Math.max(1, item.price - 1), ask: Math.min(99, item.price + 1) }))
+      : Array.from({ length: 3 }, (_, index) => ({ t: now - (2 - index) * 3600000, bid: Math.max(1, mid - 1), ask: Math.min(99, mid + 1) }))
+    return {
+      points,
+      fills: source.map((item) => ({ t: item.t, price: item.price, qty: Number(item.fill.count || item.fill.qty || 1), side: item.fill.side || 'buy' })),
+      events: [],
+      last: source.at(-1)?.price || mid,
+      closeLabel: formatDate(market.close_at || market.closeAt || market.expected_resolution_at),
+    }
+  }, [bestAsk, bestBid, fallback, fills, market])
 
-  const handlePointerMove = (event) => {
-    const bounds = event.currentTarget.getBoundingClientRect()
-    const ratio = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width))
-    const index = Math.round(ratio * Math.max(0, chartPoints.points.length - 1))
-    setHoveredIndex(index)
-  }
-
-  return (
-    <svg className="price-chart" viewBox="0 0 720 360" role="img" aria-label="Binary market mid-price chart" onPointerMove={handlePointerMove} onPointerLeave={() => setHoveredIndex(null)}>
-            <defs>
-              <linearGradient id="priceFill" x1="0" x2="0" y1="0" y2="1">
-                <stop offset="0%" stopColor="#4f46e5" stopOpacity="0.22" />
-                <stop offset="100%" stopColor="#4f46e5" stopOpacity="0" />
-              </linearGradient>
-            </defs>
-            <path d={`${chartPoints.area} L 720 348 L 0 348 Z`} fill="url(#priceFill)" />
-            <path d={chartPoints.line} fill="none" stroke="#4f46e5" strokeWidth="3" strokeLinecap="round" />
-            {[0, 1, 2, 3, 4, 5].map((line) => <line key={line} x1="0" x2="720" y1={30 + line * 58} y2={30 + line * 58} stroke="#292b32" />)}
-            <circle className="chart-latest-point" cx={latestPoint.x} cy={latestPoint.y} r="4" />
-            <g className="chart-latest-label" transform={`translate(${Math.max(8, latestPoint.x - 68)} ${Math.max(18, latestPoint.y - 28)})`}>
-              <rect width="62" height="24" rx="3" />
-              <text x="31" y="16" textAnchor="middle">{Math.round(latestPoint.value)}%</text>
-            </g>
-            {hoveredPoint ? (
-              <>
-                <line className="chart-crosshair" x1={hoveredPoint.x} x2={hoveredPoint.x} y1="18" y2="300" />
-                <circle className="chart-point" cx={hoveredPoint.x} cy={hoveredPoint.y} r="5" />
-                <g className="chart-tooltip" transform={`translate(${Math.min(hoveredPoint.x + 10, 620)} ${Math.max(24, hoveredPoint.y - 40)})`}>
-                  <rect width="88" height="29" rx="3" />
-                  <text x="8" y="19">{Math.round(hoveredPoint.value)}%</text>
-                </g>
-              </>
-            ) : null}
-          </svg>
-  )
+  return <MidPriceChart key={`${market.ticker}-${fills.length}`} getData={getData} initialRange="1D" height={300} />
 }
 
 function FutureDetail({ market, watchlist, watchlistFills, onSelect, orderbook, fills, position, authed, busy, onBack, onTrade }) {
@@ -1565,6 +1545,30 @@ function contractSection(market) {
   return category || 'Other'
 }
 
+function binaryCardCategory(market) {
+  const section = contractSection(market)
+  return ({
+    Economics: 'rates',
+    Finance: 'equities',
+    Crypto: 'crypto',
+    Commodities: 'energy',
+    Elections: 'rates',
+    Climate: 'jobs',
+    'Geopolitics / Shipping': 'energy',
+  })[section] || 'rates'
+}
+
+function scalarCardColor(market) {
+  return ({
+    Economics: '#8b7ff0',
+    Finance: '#2bb3a0',
+    Crypto: '#d9c04a',
+    Commodities: '#d0496a',
+    Climate: '#5b94d6',
+    'Geopolitics / Shipping': '#4fb6d6',
+  })[contractSection(market)] || '#6d5ce8'
+}
+
 function isSportsMarket(market) {
   return String(market?.category || '').startsWith('Sports')
 }
@@ -1835,6 +1839,44 @@ function formatTime(value) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return '--'
   return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+
+function fillTimestamp(fill, index, total, now = Date.now()) {
+  const raw = fill?.ts || fill?.timestamp || fill?.created_at || fill?.createdAt
+  if (raw && typeof raw === 'object' && raw.seconds != null) {
+    return Number(raw.seconds) * 1000 + Math.round(Number(raw.nanos || 0) / 1e6)
+  }
+  const numeric = Number(raw)
+  if (Number.isFinite(numeric) && numeric > 0) return numeric < 1e12 ? numeric * 1000 : numeric
+  const parsed = raw ? Date.parse(raw) : NaN
+  return Number.isFinite(parsed) ? parsed : now - (total - index) * 3600000
+}
+
+function marketSettlement(market) {
+  const question = String(market?.question || market?.underlying || '')
+  const month = '(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)(?:ember|uary|rch|il|e|y|ne|ly|ust|tember|ober)?'
+  const dayFirst = question.match(new RegExp(`(?:\\b|on |after |before |by |at )([0-9]{1,2})(?:\\s*[–-]\\s*[0-9]{1,2})?\\s+${month}\\s+([0-9]{4})`, 'i'))
+  const monthFirst = question.match(new RegExp(`\\b${month}\\s+([0-9]{1,2}),?\\s+([0-9]{4})`, 'i'))
+  if (dayFirst) return dateOnlyUtc(dayFirst[3], dayFirst[2], dayFirst[1])
+  if (monthFirst) return dateOnlyUtc(monthFirst[3], monthFirst[1], monthFirst[2])
+  const raw = market?.close_at || market?.closeAt || market?.expected_resolution_at || market?.expectedResolutionAt
+  if (!raw) return 'recurring'
+  if (typeof raw === 'object' && raw.seconds != null) {
+    const ms = Number(raw.seconds) * 1000 + Math.round(Number(raw.nanos || 0) / 1e6)
+    return Number.isFinite(ms) ? new Date(ms).toISOString().slice(0, 10) : 'recurring'
+  }
+  const numeric = Number(raw)
+  if (Number.isFinite(numeric) && numeric > 0) {
+    const ms = numeric < 1e12 ? numeric * 1000 : numeric
+    return new Date(ms).toISOString().slice(0, 10)
+  }
+  const parsed = Date.parse(raw)
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString().slice(0, 10) : 'recurring'
+}
+
+function dateOnlyUtc(year, month, day) {
+  const date = new Date(`${month} ${day}, ${year} UTC`)
+  return Number.isNaN(date.getTime()) ? 'recurring' : date.toISOString().slice(0, 10)
 }
 
 function formatUSDC(value = 0) {

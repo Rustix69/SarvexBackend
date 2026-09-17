@@ -431,6 +431,9 @@ button:disabled {
   padding: 18px 20px 12px;
 }
 
+.binary-chart-shell { min-width: 0; border: 0; background: transparent; }
+.binary-chart-shell .mpc { width: 100%; min-height: 430px; }
+
 .chart-header {
   display: flex;
   align-items: center;
@@ -1258,12 +1261,10 @@ body { background: #111113; }
 .category-link::after { content: ''; display: inline-block; width: 3px; height: 3px; margin: 0 0 2px 20px; border-radius: 50%; background: #57575d; }
 .category-link:last-child::after { display: none; }.category-link.active { color: #fff; }
 .dashboard-hero { display: grid; grid-template-columns: minmax(0, 1fr) 380px; align-items: stretch; gap: 14px; margin: 0 0 20px; }
-.promo-banner { min-height: 280px; display: flex; align-items: center; justify-content: center; gap: 18px; overflow: hidden; position: relative; padding: 24px; background: #090b0d; isolation: isolate; }
-.promo-banner::before { content: ''; position: absolute; inset: 0; z-index: -1; background: linear-gradient(rgba(123, 142, 151, .045) 1px, transparent 1px), linear-gradient(90deg, rgba(123, 142, 151, .045) 1px, transparent 1px), radial-gradient(ellipse 70% 45% at 30% 48%, rgba(42, 130, 119, .12), transparent 72%), radial-gradient(ellipse 62% 42% at 78% 36%, rgba(159, 48, 97, .1), transparent 74%); background-size: 44px 36px, 44px 36px, auto, auto; opacity: .85; }
-.promo-banner::after { content: ''; position: absolute; inset: -12%; z-index: -1; background: linear-gradient(155deg, transparent 0 31%, rgba(39, 169, 145, .14) 31.2% 31.65%, transparent 31.9% 43%, rgba(187, 57, 112, .13) 43.2% 43.6%, transparent 43.9% 56%, rgba(39, 169, 145, .1) 56.2% 56.55%, transparent 56.9%), linear-gradient(18deg, transparent 0 48%, rgba(187, 57, 112, .09) 48.2% 48.55%, transparent 48.9%); filter: blur(1px); opacity: .8; pointer-events: none; }
-.promo-banner div { position: relative; z-index: 1; display: grid; gap: 7px; }.promo-banner span { color: #aba6c5; font-size: 11px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; }.promo-banner strong { color: #f5f4fb; font-size: clamp(30px, 4vw, 54px); line-height: .98; letter-spacing: -.03em; }.promo-banner small { color: #9d9baa; font-size: 13px; }
-.promo-banner .promo-copy { position: relative; z-index: 2; display: grid; gap: 7px; max-width: 700px; }
-.promo-copy span { color: #aaa7bd; font-size: 10px; letter-spacing: .14em; }.promo-copy strong { color: #f0eff4; font-size: clamp(26px, 3.2vw, 42px); line-height: 1.05; letter-spacing: 0; }.promo-copy small { color: #9897a3; font-size: 12px; }
+.promo-banner { min-height: 280px; display: flex; align-items: stretch; justify-content: stretch; overflow: hidden; position: relative; padding: 0; background: #0c0d11; isolation: isolate; }
+.matrix-hero-copy { position: absolute; top: 50%; left: 28px; z-index: 3; display: grid; gap: 1px; max-width: calc(100% - 56px); transform: translateY(-50%); pointer-events: none; }
+.matrix-hero-copy span { color: #8b8898; font: 500 10px/1.2 "Geist Mono", ui-monospace, monospace; letter-spacing: .16em; text-transform: uppercase; }
+.matrix-hero-copy strong { color: #f0eff4; font: 600 clamp(38px, 5vw, 66px)/.98 "Caveat", "Segoe Print", cursive; letter-spacing: .01em; text-shadow: 0 2px 18px rgba(0, 0, 0, .7); }
 .live-panel { min-width: 0; border: 1px solid #3a3a41; background: #18181b; padding: 13px 10px 9px; }
 .live-panel-head { display: flex; justify-content: space-between; padding: 0 5px 10px; color: #9e9da5; font-size: 11px; font-weight: 700; }.live-panel-head span:first-child { color: #ed8ab1; }.live-panel-head i { display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: #ed5b99; }
 .live-market { width: 100%; min-width: 0; display: grid; grid-template-columns: 29px minmax(0,1fr) auto; align-items: center; gap: 8px; border: 0; border-top: 1px solid #29292f; padding: 8px 5px; background: transparent; color: #f3f2f6; text-align: left; }.live-market:hover { background: #232328; }.live-market > span:nth-child(2) { min-width: 0; display: grid; gap: 2px; }.live-market small { overflow: hidden; color: #797981; font-size: 10px; white-space: nowrap; text-overflow: ellipsis; }.live-market b { overflow: hidden; font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }.live-market strong { color: #dddce3; font-size: 12px; }.live-avatar { display: grid; place-items: center; width: 27px; height: 27px; border-radius: 50%; background: #303035; color: #fff; font-size: 10px; font-weight: 800; }.avatar-1 { background: #265b9a; }.avatar-2 { background: #923d54; }.avatar-3 { background: #237e70; }.avatar-4 { background: #46448d; }
