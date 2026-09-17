@@ -938,9 +938,23 @@ function FutureDetail({ market, watchlist, watchlistFills, onSelect, orderbook, 
         </div>
 
         <section className="chart-card">
-          <div className="chart-header">
-            <div><span>Candlestick · Market price</span><strong>{formatFuturePrice(market, last)}</strong></div>
-            <span className="powered">Linear USDC-settled demo future</span>
+          <div className="future-chart-topline">
+            <div className="future-chart-title">
+              <BarChart3 size={15} />
+              <strong>Market price</strong>
+              <span>Candlestick</span>
+            </div>
+            <div className="future-chart-periods" aria-label="Chart timeframe">
+              {['1m', '5m', '1h', '1D'].map((period, index) => (
+                <button className={index === 2 ? 'active' : ''} key={period} type="button">{period}</button>
+              ))}
+              <button type="button" aria-label="Chart settings"><SlidersHorizontal size={14} /></button>
+            </div>
+          </div>
+          <div className="future-chart-meta">
+            <strong>{formatFuturePrice(market, last)}</strong>
+            <span>{fills.length} recent fills</span>
+            <span>Linear USDC-settled demo future</span>
           </div>
           <KlineFutureChart fills={fills} market={market} />
         </section>
@@ -1052,7 +1066,16 @@ function KlineFutureChart({ fills, market }) {
     chart.resetData()
   }, [bars])
 
+  const latest = bars.at(-1)
+
   return <div className="future-chart">
+    <div className="future-ohlc" aria-label="Latest candle values">
+      <span>O <b>{latest ? latest.open.toFixed(pricePrecision) : '--'}</b></span>
+      <span>H <b>{latest ? latest.high.toFixed(pricePrecision) : '--'}</b></span>
+      <span>L <b>{latest ? latest.low.toFixed(pricePrecision) : '--'}</b></span>
+      <span>C <b>{latest ? latest.close.toFixed(pricePrecision) : '--'}</b></span>
+      <span>V <b>{latest ? latest.volume : '--'}</b></span>
+    </div>
     <div className="kline-chart-container" ref={containerRef} role="img" aria-label="Futures candlestick price chart" />
     {!bars.length && <div className="future-chart-empty">No trades yet</div>}
   </div>
