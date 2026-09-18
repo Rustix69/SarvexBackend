@@ -1,5 +1,17 @@
 # Milestone Updates
 
+## Phase 01 (Rust Backend Workspace and Refdata Foundation) - In Progress
+- Archived the existing Go/C++ backend under `backend-old/` with Git moves; `frontend/` was left in place and unchanged.
+- Moved the legacy backend services, protobufs, Liquibook source, database migrations/seeds, deployment files, scripts, and root backend configuration into `backend-old/`.
+- Created the new Rust workspace under `services/` with shared crates for protobuf contracts, domain types, PostgreSQL access, events, and service runtime health endpoints.
+- Added compilable Rust service boundaries for `gw-rest`, `gw-ws`, `order-router`, `risk-svc`, `position-svc`, `refdata-svc`, `oracle-svc`, `settlement-svc`, `audit-svc`, `admin-svc`, and `me-core-adapter`.
+- Added Rust protobuf generation sourced from the archived `backend-old/proto` files without changing protobuf semantics.
+- Implemented SQLx-backed `refdata-svc` gRPC listing, lookup, state filtering, cursor pagination, event lookup, and transactional state transition support.
+- Implemented the Phase 01 Axum REST gateway endpoints `GET /v1/markets` and `GET /v1/markets/:ticker`.
+- Added clean Phase 01 refdata migration and deterministic seed data with resolved TASI, Nikkei, TTF, and 2028 nominee values.
+- Added a Phase 01 Docker Compose stack for PostgreSQL, refdata migration/seed, refdata service, and REST gateway.
+- Native Rust/protobuf verification is pending because this environment currently has no `cargo`, `rustc`, or `protoc`; Docker verification was attempted but the current user cannot access `/var/run/docker.sock`.
+
 ## Milestone 0 (Repo Bootstrap) - Completed
 - Created monorepo foundation directories: `services/`, `proto/`, `db/`, `scripts/`, `pkg/`, `web/`, `.github/workflows/`.
 - Added root bootstrap files: `.env.example`, `docker-compose.yml`, `Makefile`, `ROADMAP.md`.

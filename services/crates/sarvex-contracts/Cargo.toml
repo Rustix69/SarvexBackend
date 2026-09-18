@@ -1,0 +1,13 @@
+[package]
+name = "sarvex-contracts"
+version.workspace = true
+edition.workspace = true
+build = "build.rs"
+
+[dependencies]
+prost.workspace = true
+prost-types.workspace = true
+tonic.workspace = true
+
+[build-dependencies]
+tonic-build.workspace = true

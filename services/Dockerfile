@@ -7,13 +7,14 @@ RUN apt-get update \
 WORKDIR /app
 COPY services ./services
 COPY backend-old/proto ./backend-old/proto
-
-RUN cargo build --manifest-path services/Cargo.toml --release -p refdata-svc
+ARG SERVICE
+RUN test -n "$SERVICE"
+RUN cargo build --manifest-path services/Cargo.toml --release -p "$SERVICE"
 
 FROM debian:bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app/services/target/release/refdata-svc /usr/local/bin/refdata-svc
-EXPOSE 50051 8080
-ENTRYPOINT ["/usr/local/bin/refdata-svc"]
+ARG SERVICE
+COPY --from=builder /app/services/target/release/${SERVICE} /usr/local/bin/service
+ENTRYPOINT ["/usr/local/bin/service"]

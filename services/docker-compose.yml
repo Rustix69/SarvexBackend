@@ -1,0 +1,70 @@
+name: sarvex-rust-phase01
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sarvex
+      POSTGRES_PASSWORD: sarvex
+      POSTGRES_DB: sarvex
+    ports:
+      - "15432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sarvex -d sarvex"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - phase01_postgres:/var/lib/postgresql/data
+
+  refdata-migrate:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: sarvex
+    volumes:
+      - ./migrations:/migrations:ro
+      - ./seeds:/seeds:ro
+    entrypoint: ["/bin/sh", "-lc"]
+    command: >-
+      psql -h postgres -U sarvex -d sarvex -v ON_ERROR_STOP=1
+      -f /migrations/000001_refdata.up.sql
+      && psql -h postgres -U sarvex -d sarvex -v ON_ERROR_STOP=1
+      -f /seeds/000001_refdata.sql
+
+  refdata-svc:
+    build:
+      context: ..
+      dockerfile: services/refdata-svc/Dockerfile
+    environment:
+      POSTGRES_URL: postgres://sarvex:sarvex@postgres:5432/sarvex
+      GRPC_PORT: 50051
+      HTTP_PORT: 8080
+      RUST_LOG: info
+    depends_on:
+      refdata-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "15051:50051"
+      - "18061:8080"
+
+  gw-rest:
+    build:
+      context: ..
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE: gw-rest
+    environment:
+      REFDATA_ADDR: http://refdata-svc:50051
+      HTTP_PORT: 18080
+      RUST_LOG: info
+    depends_on:
+      refdata-svc:
+        condition: service_started
+    ports:
+      - "18080:18080"
+
+volumes:
+  phase01_postgres:

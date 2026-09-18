@@ -1,0 +1,45 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/sarvex-contracts",
+  "crates/sarvex-db",
+  "crates/sarvex-domain",
+  "crates/sarvex-events",
+  "crates/sarvex-runtime",
+  "gw-rest",
+  "gw-ws",
+  "order-router",
+  "risk-svc",
+  "position-svc",
+  "refdata-svc",
+  "oracle-svc",
+  "settlement-svc",
+  "audit-svc",
+  "admin-svc",
+  "me-core-adapter",
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "UNLICENSED"
+
+[workspace.dependencies]
+anyhow = "1.0"
+async-trait = "0.1"
+axum = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
+prost = "0.13"
+prost-types = "0.13"
+redis = { version = "0.27", features = ["tokio-comp", "streams"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "chrono", "json", "uuid", "migrate"] }
+thiserror = "2.0"
+tokio = { version = "1.43", features = ["full"] }
+tonic = { version = "0.12", features = ["transport"] }
+tonic-build = "0.12"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid = { version = "1.11", features = ["v4", "serde"] }

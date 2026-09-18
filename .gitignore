@@ -10,5 +10,8 @@ frontend/.env.*
 frontend/node_modules/
 frontend/dist/
 
+services/target/
+services/.env
+
 *.pem
 AWS/
