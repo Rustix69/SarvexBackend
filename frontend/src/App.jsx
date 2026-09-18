@@ -6,9 +6,7 @@ import {
   BarChart3,
   Bookmark,
   CircleDollarSign,
-  CalendarDays,
   ChevronDown,
-  Grid2X2,
   Clock3,
   Gift,
   Hexagon,
@@ -18,7 +16,6 @@ import {
   RefreshCw,
   Share2,
   SlidersHorizontal,
-  List,
   Search,
   UserRound,
 } from 'lucide-react'
@@ -743,7 +740,6 @@ function MarketDashboard({ loading, markets, fills, onSelect, onRefresh, searchQ
         </aside>
       </section>
 
-      <div className="market-toolbar"><label><Search size={15} /> Search loaded markets</label><div><span>All Platforms <ChevronDown size={14} /></span><span>1h Vol <ChevronDown size={14} /></span><button title="Grid view"><Grid2X2 size={16} /></button><button title="List view"><List size={16} /></button><button title="Date filter"><CalendarDays size={16} /></button><button title="Filters"><SlidersHorizontal size={16} /></button></div></div>
       {loading ? (
         <div className="loading-panel"><Loader2 className="spin" /> Loading Sarvaex markets...</div>
       ) : rows.length ? (
@@ -1099,16 +1095,7 @@ function KlineFutureChart({ fills, market, period }) {
     chart.resetData()
   }, [bars])
 
-  const latest = bars.at(-1)
-
   return <div className="future-chart">
-    <div className="future-ohlc" aria-label="Latest candle values">
-      <span>O <b>{latest ? latest.open.toFixed(pricePrecision) : '--'}</b></span>
-      <span>H <b>{latest ? latest.high.toFixed(pricePrecision) : '--'}</b></span>
-      <span>L <b>{latest ? latest.low.toFixed(pricePrecision) : '--'}</b></span>
-      <span>C <b>{latest ? latest.close.toFixed(pricePrecision) : '--'}</b></span>
-      <span>V <b>{latest ? latest.volume : '--'}</b></span>
-    </div>
     <div className="kline-chart-container" ref={containerRef} role="img" aria-label="Futures candlestick price chart" />
     {!bars.length && <div className="future-chart-empty">No trades yet</div>}
   </div>
@@ -1408,11 +1395,6 @@ function PortfolioPage({ balance, authed, busy, positions, orders, marketPrices,
         </aside>
       </section>
 
-      <nav className="portfolio-subnav" aria-label="Portfolio sections">
-        {['Positions', 'Activity', 'Rewards', 'Copy Trading', 'Advanced Analytics', 'Competitions'].map((tab, index) => <button className={index === 0 ? 'active' : ''} type="button" key={tab}>{tab}</button>)}
-        <span className="portfolio-subnav-spacer" /><button type="button">Hide history</button><button type="button">Status⌄</button><button type="button">Category⌄</button><button type="button">Search markets...</button>
-      </nav>
-
       <section className="portfolio-grid-page portfolio-data-panels">
         <div className="portfolio-panel">
           <div className="panel-head"><h2>Positions</h2><span>{positions.length} total</span></div>
@@ -1590,14 +1572,16 @@ function cardMarketTitle(market) {
 }
 
 function contractSection(market) {
-  const category = String(market?.category || '')
-  if (category.startsWith('Economics')) return 'Economics'
-  if (category.startsWith('Finance') || category.startsWith('FX') || category.startsWith('Local equities')) return 'Finance'
-  if (category.startsWith('Crypto')) return 'Crypto'
-  if (category.startsWith('Commodities') || category.startsWith('Energy')) return 'Commodities'
-  if (category.startsWith('Elections')) return 'Elections'
-  if (category.startsWith('Climate')) return 'Climate'
-  if (category.startsWith('Geopolitics')) return 'Geopolitics / Shipping'
+  const category = String(market?.category || '').trim()
+  const normalized = category.toLowerCase()
+  const identity = `${market?.ticker || ''} ${market?.question || ''} ${market?.underlying || ''}`.toLowerCase()
+  if (normalized.startsWith('economics')) return 'Economics'
+  if (normalized.startsWith('finance') || normalized.startsWith('fx') || normalized.startsWith('local equities')) return 'Finance'
+  if (normalized.startsWith('crypto') || /\b(crypto|bitcoin|btc|ethereum|eth)\b/.test(identity)) return 'Crypto'
+  if (normalized.startsWith('commodities') || normalized.startsWith('energy')) return 'Commodities'
+  if (normalized.startsWith('elections')) return 'Elections'
+  if (normalized.startsWith('climate')) return 'Climate'
+  if (normalized.startsWith('geopolitics')) return 'Geopolitics / Shipping'
   return category || 'Other'
 }
 
