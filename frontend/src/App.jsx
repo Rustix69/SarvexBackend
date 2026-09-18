@@ -248,7 +248,9 @@ function App() {
       liveContracts = marketBody?.contracts || []
       const catalogContracts = contractsCatalog.map(catalogMarket)
       const liveByTicker = new Map(liveContracts.map((market) => [market.ticker, market]))
-      const mergedContracts = catalogContracts.map((market) => ({ ...market, ...(liveByTicker.get(market.ticker) || {}), catalogOnly: !liveByTicker.has(market.ticker) }))
+      const mergedContracts = catalogContracts
+        .map((market) => ({ ...market, ...(liveByTicker.get(market.ticker) || {}), catalogOnly: !liveByTicker.has(market.ticker) }))
+        .map(resolveDemoContractQuestion)
       const nonSportsContracts = mergedContracts.filter((market) => !isSportsMarket(market))
       nextMarkets = nonSportsContracts
         .filter((market) => !isFutureMarket(market) && !HIDDEN_DEMO_MARKET_TICKERS.has(market.ticker))
@@ -1571,6 +1573,16 @@ function catalogMarket(contract) {
     launch_priority: contract.priority,
     catalogOnly: true,
   }
+}
+
+function resolveDemoContractQuestion(market) {
+  const assumedQuestion = DEMO_CONTRACT_ASSUMPTIONS[market?.ticker]
+  if (!assumedQuestion) return market
+
+  const question = String(market?.question || '')
+  return /<K>|<candidate>/i.test(question) || !question
+    ? { ...market, question: assumedQuestion }
+    : market
 }
 
 function cardMarketTitle(market) {
