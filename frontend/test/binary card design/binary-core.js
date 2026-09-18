@@ -142,7 +142,7 @@ export function binaryView(m) {
     chgText: !traded || Math.abs(d) < 0.5 ? '' : (d > 0 ? '▲ ' : '▼ ') + Math.round(Math.abs(d)),
     width: traded ? Math.max(0, Math.min(100, m.yes)) : 0,
     st: settleText(m.settle),
-    cat: CATEGORIES[m.category],
+    cat: CATEGORIES[m.category] || CATEGORIES.Other,
   };
 }
 

@@ -1577,7 +1577,10 @@ function contractSection(market) {
 }
 
 function binaryCardCategory(market) {
-  return contractSection(market)
+  const section = contractSection(market)
+  return ['Economics', 'Finance', 'Crypto', 'Commodities', 'Elections', 'Climate', 'Geopolitics / Shipping'].includes(section)
+    ? section
+    : 'Other'
 }
 
 function scalarCardColor(market) {
