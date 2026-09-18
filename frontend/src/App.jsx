@@ -66,6 +66,12 @@ const HIDDEN_DEMO_MARKET_TICKERS = new Set([
   'DEMO-INDIA-GDP-Q2-26-7PCT',
   'RBI-JUN26-CUT25',
 ])
+const DEMO_CONTRACT_ASSUMPTIONS = {
+  'SX-PRESNOMD-28-{CAND}': 'Will Gavin Newsom be the 2028 Democratic presidential nominee?',
+  'SX-TASI-26OCT29-ATM': 'TASI above 11,500 on 29 Oct 2026?',
+  'SX-N225-26OCT30-ATM': 'Nikkei above 42,000 on 30 Oct 2026?',
+  'SX-TTF-26OCT30-ATM': 'EU gas (TTF) above EUR 35 end-Oct?',
+}
 const DEMO_USERS = [
   { id: 'u_retail_1', label: 'Demo Retail', badge: 'Retail' },
   { id: 'u_mm_1', label: 'Market Maker', badge: 'MM' },
@@ -1555,7 +1561,7 @@ function catalogMarket(contract) {
   return {
     ticker: contract.ticker,
     kind: future ? SCALAR_KIND : 1,
-    question: future ? '' : contract.title,
+    question: future ? '' : DEMO_CONTRACT_ASSUMPTIONS[contract.ticker] || contract.title,
     underlying: future ? contract.title : '',
     category: contract.category,
     subcategory: contract.subcategory,
