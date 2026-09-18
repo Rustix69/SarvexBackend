@@ -1,5 +1,14 @@
 # Milestone Updates
 
+## Phase 03 (Risk and Pre-Trade Foundation) - Completed
+- Added risk persistence for user limits, per-contract position limits, working-order summaries, and the position read model used by pre-trade checks.
+- Implemented Rust `risk-svc` over the frozen protobuf contract with `PreTradeCheck`, `GetUserLimits`, and transactional `UpdateUserLimits`.
+- Risk now obtains contract state and limits through `refdata-svc` gRPC, preserving service ownership boundaries.
+- Added validation for contract state, side/action combinations, positive limit prices, price bounds, tick alignment, maximum order size, binary/scalar hold requirements, user notional limits, and projected position limits.
+- Added deterministic devnet risk-limit seeds and Compose migration/service wiring.
+- Added unit coverage for binary buy/sell hold formulas, signed position deltas, and invalid side/action combinations.
+- Rust formatting, compilation, strict Clippy, and workspace tests pass. PostgreSQL integration and Docker bring-up remain environment-blocked by unavailable local PostgreSQL/Docker daemon access.
+
 ## Phase 02 (Ledger and Hold Lifecycle Foundation) - Completed
 - Added the `ledger` PostgreSQL migration with accounts, transactions, append-only entries, deferred balanced-transaction enforcement, event outbox, holds, hold operations, and the user-balance view.
 - Implemented the Rust `ledger-svc` gRPC service for `PostTransaction`, `PlaceHold`, `ReleaseHold`, `CommitHold`, `GetBalance`, `GetAccountHistory`, and demo `AdminCreditDeposit`.

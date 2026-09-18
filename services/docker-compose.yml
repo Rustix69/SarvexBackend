@@ -34,7 +34,11 @@ services:
       && psql -h postgres -U sarvex -d sarvex -v ON_ERROR_STOP=1
       -f /migrations/000002_ledger.up.sql
       && psql -h postgres -U sarvex -d sarvex -v ON_ERROR_STOP=1
+      -f /migrations/000003_risk.up.sql
+      && psql -h postgres -U sarvex -d sarvex -v ON_ERROR_STOP=1
       -f /seeds/000001_refdata.sql
+      && psql -h postgres -U sarvex -d sarvex -v ON_ERROR_STOP=1
+      -f /seeds/000002_risk.sql
 
   refdata-svc:
     build:
@@ -69,6 +73,27 @@ services:
     ports:
       - "15052:50052"
       - "18062:8081"
+
+  risk-svc:
+    build:
+      context: ..
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE: risk-svc
+    environment:
+      POSTGRES_URL: postgres://sarvex:sarvex@postgres:5432/sarvex
+      REFDATA_ADDR: http://refdata-svc:50051
+      GRPC_PORT: 50053
+      HTTP_PORT: 8082
+      RUST_LOG: info
+    depends_on:
+      refdata-svc:
+        condition: service_started
+      refdata-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "15053:50053"
+      - "18063:8082"
 
   gw-rest:
     build:

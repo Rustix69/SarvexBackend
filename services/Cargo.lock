@@ -1616,8 +1616,17 @@ name = "risk-svc"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum 0.8.9",
+ "prost-types",
+ "sarvex-contracts",
+ "sarvex-db",
  "sarvex-runtime",
+ "serde_json",
+ "sqlx",
  "tokio",
+ "tonic",
+ "tower-http",
+ "tracing",
 ]
 
 [[package]]
