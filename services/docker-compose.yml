@@ -32,6 +32,8 @@ services:
       psql -h postgres -U sarvex -d sarvex -v ON_ERROR_STOP=1
       -f /migrations/000001_refdata.up.sql
       && psql -h postgres -U sarvex -d sarvex -v ON_ERROR_STOP=1
+      -f /migrations/000002_ledger.up.sql
+      && psql -h postgres -U sarvex -d sarvex -v ON_ERROR_STOP=1
       -f /seeds/000001_refdata.sql
 
   refdata-svc:
@@ -50,6 +52,24 @@ services:
       - "15051:50051"
       - "18061:8080"
 
+  ledger-svc:
+    build:
+      context: ..
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE: ledger-svc
+    environment:
+      POSTGRES_URL: postgres://sarvex:sarvex@postgres:5432/sarvex
+      GRPC_PORT: 50052
+      HTTP_PORT: 8081
+      RUST_LOG: info
+    depends_on:
+      refdata-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "15052:50052"
+      - "18062:8081"
+
   gw-rest:
     build:
       context: ..
@@ -62,6 +82,8 @@ services:
       RUST_LOG: info
     depends_on:
       refdata-svc:
+        condition: service_started
+      ledger-svc:
         condition: service_started
     ports:
       - "18080:18080"

@@ -1,5 +1,14 @@
 # Milestone Updates
 
+## Phase 02 (Ledger and Hold Lifecycle Foundation) - Completed
+- Added the `ledger` PostgreSQL migration with accounts, transactions, append-only entries, deferred balanced-transaction enforcement, event outbox, holds, hold operations, and the user-balance view.
+- Implemented the Rust `ledger-svc` gRPC service for `PostTransaction`, `PlaceHold`, `ReleaseHold`, `CommitHold`, `GetBalance`, `GetAccountHistory`, and demo `AdminCreditDeposit`.
+- Enforced idempotency at transaction and hold-operation boundaries using the frozen protobuf request fields.
+- Added deterministic account locking order, non-negative user cash/holds enforcement, hold remaining-amount checks, atomic ledger/outbox writes, and graceful gRPC/HTTP health startup.
+- Added the ledger migration to the Rust Compose bring-up and exposed ledger gRPC/health ports for local integration.
+- Added unit coverage for balanced entries, invalid entries, non-negative account classification, and pre-database rejection of unbalanced transactions.
+- Rust formatting, compilation, strict Clippy, and workspace tests pass. PostgreSQL integration and Docker bring-up remain environment-blocked by unavailable local PostgreSQL/Docker daemon access.
+
 ## Phase 01 (Rust Backend Workspace and Refdata Foundation) - Completed
 - Archived the existing Go/C++ backend under `backend-old/` with Git moves; `frontend/` was left in place and unchanged.
 - Moved the legacy backend services, protobufs, Liquibook source, database migrations/seeds, deployment files, scripts, and root backend configuration into `backend-old/`.

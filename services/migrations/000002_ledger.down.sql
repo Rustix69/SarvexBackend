@@ -1,0 +1,14 @@
+DROP VIEW IF EXISTS ledger.user_balances;
+DROP TABLE IF EXISTS ledger.hold_operations;
+DROP TABLE IF EXISTS ledger.holds;
+DROP TABLE IF EXISTS ledger.ledger_event_outbox;
+DROP TRIGGER IF EXISTS trg_reject_entry_update ON ledger.entries;
+DROP TRIGGER IF EXISTS trg_reject_entry_delete ON ledger.entries;
+DROP TRIGGER IF EXISTS trg_assert_tx_balanced ON ledger.entries;
+DROP FUNCTION IF EXISTS ledger.reject_entry_mutation();
+DROP FUNCTION IF EXISTS ledger.assert_tx_balanced();
+DROP TABLE IF EXISTS ledger.entries;
+DROP TABLE IF EXISTS ledger.transactions;
+DROP TABLE IF EXISTS ledger.accounts;
+DROP TYPE IF EXISTS ledger.account_type;
+DROP SCHEMA IF EXISTS ledger;
