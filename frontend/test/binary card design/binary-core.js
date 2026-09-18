@@ -131,6 +131,13 @@ export const EVENT_CARD_CSS = `
 const escB = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 const cents = (v) => (v == null ? '' : Math.round(v) + '¢');
 
+function categoryKey(m) {
+  const raw = String(m.category || '').trim();
+  const identity = `${m.id || ''} ${m.question || ''}`.toLowerCase();
+  if (raw.toLowerCase().startsWith('crypto') || /\b(crypto|bitcoin|btc|ethereum|eth)\b/.test(identity)) return 'Crypto';
+  return raw;
+}
+
 export function binaryView(m) {
   const traded = m.traded !== false;
   const d = m.change || 0;
@@ -142,7 +149,7 @@ export function binaryView(m) {
     chgText: !traded || Math.abs(d) < 0.5 ? '' : (d > 0 ? '▲ ' : '▼ ') + Math.round(Math.abs(d)),
     width: traded ? Math.max(0, Math.min(100, m.yes)) : 0,
     st: settleText(m.settle),
-    cat: CATEGORIES[m.category] || CATEGORIES.Other,
+    cat: CATEGORIES[categoryKey(m)] || CATEGORIES.Other,
   };
 }
 
