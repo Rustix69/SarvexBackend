@@ -70,6 +70,7 @@ export const CATEGORIES = {
   Elections: { label: 'Elections', color: '#c26a9a' },
   Climate: { label: 'Climate', color: '#5b94d6' },
   'Geopolitics / Shipping': { label: 'Geopolitics / Shipping', color: '#4fb6d6' },
+  Crypto: { label: 'Crypto', color: '#d9c04a' },
   Other: { label: 'Other', color: '#8b8894' },
 };
 
