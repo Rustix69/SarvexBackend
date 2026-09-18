@@ -1577,16 +1577,7 @@ function contractSection(market) {
 }
 
 function binaryCardCategory(market) {
-  const section = contractSection(market)
-  return ({
-    Economics: 'rates',
-    Finance: 'equities',
-    Crypto: 'crypto',
-    Commodities: 'energy',
-    Elections: 'rates',
-    Climate: 'jobs',
-    'Geopolitics / Shipping': 'energy',
-  })[section] || 'rates'
+  return contractSection(market)
 }
 
 function scalarCardColor(market) {

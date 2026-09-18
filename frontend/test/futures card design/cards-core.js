@@ -64,6 +64,13 @@ export const CATEGORIES = {
   crypto:    { label: 'Crypto',    color: '#d9c04a' },
   energy:    { label: 'Energy',    color: '#d0496a' },
   fx:        { label: 'FX',        color: '#4fb6d6' },
+  Economics: { label: 'Economics', color: '#8b7ff0' },
+  Finance: { label: 'Finance', color: '#2bb3a0' },
+  Commodities: { label: 'Commodities', color: '#d0496a' },
+  Elections: { label: 'Elections', color: '#c26a9a' },
+  Climate: { label: 'Climate', color: '#5b94d6' },
+  'Geopolitics / Shipping': { label: 'Geopolitics / Shipping', color: '#4fb6d6' },
+  Other: { label: 'Other', color: '#8b8894' },
 };
 
 // value formatting per unit
