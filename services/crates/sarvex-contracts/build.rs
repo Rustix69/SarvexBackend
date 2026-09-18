@@ -1,6 +1,8 @@
 use std::{env, path::PathBuf};
 
 fn main() {
+    let protoc = protoc_bin_vendored::protoc_bin_path().expect("protoc binary");
+    std::env::set_var("PROTOC", protoc);
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
     let proto_root = manifest_dir.join("../../../backend-old/proto");
     let files = [
@@ -20,7 +22,7 @@ fn main() {
     tonic_build::configure()
         .build_client(true)
         .build_server(true)
-        .compile(&paths, &[proto_root])
+        .compile_protos(&paths, std::slice::from_ref(&proto_root))
         .expect("protobuf generation failed");
     println!("cargo:rerun-if-changed={}", proto_root.display());
 }

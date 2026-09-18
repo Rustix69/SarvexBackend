@@ -6,7 +6,9 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
-use sarvex_contracts::sarvex::v1::{ref_data_client::RefDataClient, ContractState, GetContractRequest, ListContractsRequest};
+use sarvex_contracts::sarvex::v1::{
+    ref_data_client::RefDataClient, ContractState, GetContractRequest, ListContractsRequest,
+};
 use serde::{Deserialize, Serialize};
 use std::{env, net::SocketAddr};
 use tonic::transport::{Channel, Endpoint};
@@ -48,7 +50,7 @@ struct ContractResponse {
     expected_resolution_at: Option<String>,
     settlement_source: String,
     oracle_policy: String,
-    settlement_rule: Option<prost_types::Struct>,
+    settlement_rule: Option<serde_json::Value>,
     close_global_seq: u64,
 }
 
@@ -60,10 +62,15 @@ struct ListResponse {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let _ = tracing_subscriber::fmt().with_env_filter(env::var("RUST_LOG").unwrap_or_else(|_| "info".to_owned())).with_target(false).try_init();
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(env::var("RUST_LOG").unwrap_or_else(|_| "info".to_owned()))
+        .with_target(false)
+        .try_init();
     let address = env::var("REFDATA_ADDR").unwrap_or_else(|_| "http://127.0.0.1:50061".to_owned());
     let channel = Endpoint::from_shared(address)?.connect_lazy();
-    let state = AppState { refdata: RefDataClient::new(channel) };
+    let state = AppState {
+        refdata: RefDataClient::new(channel),
+    };
     let port = env::var("HTTP_PORT").unwrap_or_else(|_| "18080".to_owned());
     let addr: SocketAddr = format!("0.0.0.0:{port}").parse()?;
     let cors = CorsLayer::permissive();
@@ -80,10 +87,23 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn healthz() -> impl IntoResponse { (StatusCode::OK, Json(serde_json::json!({ "status": "ok", "service": "gw-rest" }))) }
-async fn readyz() -> impl IntoResponse { (StatusCode::OK, Json(serde_json::json!({ "status": "ready", "service": "gw-rest" }))) }
+async fn healthz() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "status": "ok", "service": "gw-rest" })),
+    )
+}
+async fn readyz() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "status": "ready", "service": "gw-rest" })),
+    )
+}
 
-async fn list_markets(State(state): State<AppState>, Query(query): Query<MarketQuery>) -> impl IntoResponse {
+async fn list_markets(
+    State(state): State<AppState>,
+    Query(query): Query<MarketQuery>,
+) -> impl IntoResponse {
     let mut client = state.refdata.clone();
     let request = ListContractsRequest {
         state: query.state.as_deref().and_then(state_value).unwrap_or(0),
@@ -92,12 +112,24 @@ async fn list_markets(State(state): State<AppState>, Query(query): Query<MarketQ
         cursor: query.cursor.unwrap_or_default(),
     };
     match client.list_contracts(request).await {
-        Ok(response) => Json(ListResponse { contracts: response.get_ref().contracts.iter().map(contract_response).collect(), next_cursor: response.get_ref().next_cursor.clone() }).into_response(),
+        Ok(response) => Json(ListResponse {
+            contracts: response
+                .get_ref()
+                .contracts
+                .iter()
+                .map(contract_response)
+                .collect(),
+            next_cursor: response.get_ref().next_cursor.clone(),
+        })
+        .into_response(),
         Err(error) => grpc_error(error.code().to_string(), error.message()),
     }
 }
 
-async fn get_market(State(state): State<AppState>, Path(ticker): Path<String>) -> impl IntoResponse {
+async fn get_market(
+    State(state): State<AppState>,
+    Path(ticker): Path<String>,
+) -> impl IntoResponse {
     let mut client = state.refdata.clone();
     match client.get_contract(GetContractRequest { ticker }).await {
         Ok(response) => Json(contract_response(response.get_ref())).into_response(),
@@ -121,19 +153,72 @@ fn state_value(value: &str) -> Option<i32> {
 
 fn contract_response(contract: &sarvex_contracts::sarvex::v1::Contract) -> ContractResponse {
     ContractResponse {
-        ticker: contract.ticker.clone(), event_ticker: contract.event_ticker.clone(), series_ticker: contract.series_ticker.clone(), kind: contract.kind,
-        question: contract.question.clone(), underlying: contract.underlying.clone(), tick_size: contract.tick_size, min_price_ticks: contract.min_price_ticks, max_price_ticks: contract.max_price_ticks,
-        lower_bound_ticks: contract.lower_bound_ticks, upper_bound_ticks: contract.upper_bound_ticks, multiplier_micro_usdc: contract.multiplier_micro_usdc, max_order_size: contract.max_order_size,
-        position_limit_per_user: contract.position_limit_per_user, state: contract.state, listed_at: format_timestamp(contract.listed_at.as_ref()), open_at: format_timestamp(contract.open_at.as_ref()), close_at: format_timestamp(contract.close_at.as_ref()), expected_resolution_at: format_timestamp(contract.expected_resolution_at.as_ref()),
-        settlement_source: contract.settlement_source.clone(), oracle_policy: contract.oracle_policy.clone(), settlement_rule: contract.settlement_rule.clone(), close_global_seq: contract.close_global_seq,
+        ticker: contract.ticker.clone(),
+        event_ticker: contract.event_ticker.clone(),
+        series_ticker: contract.series_ticker.clone(),
+        kind: contract.kind,
+        question: contract.question.clone(),
+        underlying: contract.underlying.clone(),
+        tick_size: contract.tick_size,
+        min_price_ticks: contract.min_price_ticks,
+        max_price_ticks: contract.max_price_ticks,
+        lower_bound_ticks: contract.lower_bound_ticks,
+        upper_bound_ticks: contract.upper_bound_ticks,
+        multiplier_micro_usdc: contract.multiplier_micro_usdc,
+        max_order_size: contract.max_order_size,
+        position_limit_per_user: contract.position_limit_per_user,
+        state: contract.state,
+        listed_at: format_timestamp(contract.listed_at.as_ref()),
+        open_at: format_timestamp(contract.open_at.as_ref()),
+        close_at: format_timestamp(contract.close_at.as_ref()),
+        expected_resolution_at: format_timestamp(contract.expected_resolution_at.as_ref()),
+        settlement_source: contract.settlement_source.clone(),
+        oracle_policy: contract.oracle_policy.clone(),
+        settlement_rule: contract.settlement_rule.as_ref().map(struct_to_json),
+        close_global_seq: contract.close_global_seq,
     }
 }
 
 fn format_timestamp(value: Option<&prost_types::Timestamp>) -> Option<String> {
-    value.and_then(|value| DateTime::<Utc>::from_timestamp(value.seconds, value.nanos as u32)).map(|value| value.to_rfc3339())
+    value
+        .and_then(|value| DateTime::<Utc>::from_timestamp(value.seconds, value.nanos as u32))
+        .map(|value| value.to_rfc3339())
+}
+
+fn struct_to_json(value: &prost_types::Struct) -> serde_json::Value {
+    serde_json::Value::Object(
+        value
+            .fields
+            .iter()
+            .map(|(key, value)| (key.clone(), value_to_json(value)))
+            .collect(),
+    )
+}
+
+fn value_to_json(value: &prost_types::Value) -> serde_json::Value {
+    match value.kind.as_ref() {
+        Some(prost_types::value::Kind::NullValue(_)) | None => serde_json::Value::Null,
+        Some(prost_types::value::Kind::NumberValue(value)) => serde_json::json!(value),
+        Some(prost_types::value::Kind::StringValue(value)) => {
+            serde_json::Value::String(value.clone())
+        }
+        Some(prost_types::value::Kind::BoolValue(value)) => serde_json::Value::Bool(*value),
+        Some(prost_types::value::Kind::StructValue(value)) => struct_to_json(value),
+        Some(prost_types::value::Kind::ListValue(value)) => {
+            serde_json::Value::Array(value.values.iter().map(value_to_json).collect())
+        }
+    }
 }
 
 fn grpc_error(code: String, message: &str) -> axum::response::Response {
-    let status = if code == "not_found" { StatusCode::NOT_FOUND } else { StatusCode::BAD_GATEWAY };
-    (status, Json(serde_json::json!({ "error": { "code": code, "message": message } }))).into_response()
+    let status = if code == "not_found" {
+        StatusCode::NOT_FOUND
+    } else {
+        StatusCode::BAD_GATEWAY
+    };
+    (
+        status,
+        Json(serde_json::json!({ "error": { "code": code, "message": message } })),
+    )
+        .into_response()
 }

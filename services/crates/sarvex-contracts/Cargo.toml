@@ -10,4 +10,5 @@ prost-types.workspace = true
 tonic.workspace = true
 
 [build-dependencies]
+protoc-bin-vendored = "3"
 tonic-build.workspace = true

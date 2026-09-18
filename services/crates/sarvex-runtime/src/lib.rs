@@ -13,7 +13,10 @@ struct HealthState {
 
 pub fn init_tracing(service: &str) {
     let filter = env::var("RUST_LOG").unwrap_or_else(|_| "info".to_owned());
-    let _ = tracing_subscriber::fmt().with_env_filter(filter).with_target(false).try_init();
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .try_init();
     tracing::info!(service, "service_starting");
 }
 
@@ -21,7 +24,10 @@ pub async fn run_health_service(service: &str) -> Result<()> {
     init_tracing(service);
     let port = env::var("HTTP_PORT").unwrap_or_else(|_| "8080".to_owned());
     let require_db = env::var("REQUIRE_DB").map(|v| v == "true").unwrap_or(false);
-    let state = HealthState { service: Arc::from(service.to_owned()), require_db };
+    let state = HealthState {
+        service: Arc::from(service.to_owned()),
+        require_db,
+    };
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
@@ -29,27 +35,42 @@ pub async fn run_health_service(service: &str) -> Result<()> {
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());
     let listener = TcpListener::bind(format!("0.0.0.0:{port}")).await?;
-    axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
     Ok(())
 }
 
 async fn healthz(State(state): State<HealthState>) -> impl IntoResponse {
-    (StatusCode::OK, axum::Json(json!({ "status": "ok", "service": state.service })))
+    (
+        StatusCode::OK,
+        axum::Json(json!({ "status": "ok", "service": state.service })),
+    )
 }
 
 async fn readyz(State(state): State<HealthState>) -> impl IntoResponse {
     if state.require_db {
         // Domain services override this endpoint with a real database probe.
-        return (StatusCode::SERVICE_UNAVAILABLE, axum::Json(json!({ "status": "not_ready", "reason": "database_probe_required" })));
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(json!({ "status": "not_ready", "reason": "database_probe_required" })),
+        );
     }
-    (StatusCode::OK, axum::Json(json!({ "status": "ready", "service": state.service })))
+    (
+        StatusCode::OK,
+        axum::Json(json!({ "status": "ready", "service": state.service })),
+    )
 }
 
 async fn shutdown_signal() {
-    let ctrl_c = async { let _ = tokio::signal::ctrl_c().await; };
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
     #[cfg(unix)]
     let terminate = async {
-        if let Ok(mut signal) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+        if let Ok(mut signal) =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
             signal.recv().await;
         }
     };

@@ -11,7 +11,9 @@ pub fn database_url() -> Result<String> {
             let host = env::var("POSTGRES_HOST").unwrap_or_else(|_| "127.0.0.1".to_owned());
             let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5432".to_owned());
             let db = env::var("POSTGRES_DB").unwrap_or_else(|_| "sarvex".to_owned());
-            Ok(format!("postgres://{user}:{password}@{host}:{port}/{db}"))
+            Ok::<String, std::env::VarError>(format!(
+                "postgres://{user}:{password}@{host}:{port}/{db}"
+            ))
         })
         .context("database configuration is unavailable")
 }
@@ -19,7 +21,12 @@ pub fn database_url() -> Result<String> {
 pub async fn connect() -> Result<PgPool> {
     let url = database_url()?;
     PgPoolOptions::new()
-        .max_connections(env::var("DB_MAX_CONNECTIONS").ok().and_then(|v| v.parse().ok()).unwrap_or(10))
+        .max_connections(
+            env::var("DB_MAX_CONNECTIONS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(10),
+        )
         .connect(&url)
         .await
         .with_context(|| format!("failed to connect to PostgreSQL at {url}"))

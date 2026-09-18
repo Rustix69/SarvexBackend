@@ -1,6 +1,6 @@
 # Milestone Updates
 
-## Phase 01 (Rust Backend Workspace and Refdata Foundation) - In Progress
+## Phase 01 (Rust Backend Workspace and Refdata Foundation) - Completed
 - Archived the existing Go/C++ backend under `backend-old/` with Git moves; `frontend/` was left in place and unchanged.
 - Moved the legacy backend services, protobufs, Liquibook source, database migrations/seeds, deployment files, scripts, and root backend configuration into `backend-old/`.
 - Created the new Rust workspace under `services/` with shared crates for protobuf contracts, domain types, PostgreSQL access, events, and service runtime health endpoints.
@@ -10,7 +10,10 @@
 - Implemented the Phase 01 Axum REST gateway endpoints `GET /v1/markets` and `GET /v1/markets/:ticker`.
 - Added clean Phase 01 refdata migration and deterministic seed data with resolved TASI, Nikkei, TTF, and 2028 nominee values.
 - Added a Phase 01 Docker Compose stack for PostgreSQL, refdata migration/seed, refdata service, and REST gateway.
-- Native Rust/protobuf verification is pending because this environment currently has no `cargo`, `rustc`, or `protoc`; Docker verification was attempted but the current user cannot access `/var/run/docker.sock`.
+- Added a vendored `protoc` build dependency so Rust protobuf generation is reproducible without a system compiler.
+- Added the workspace lockfile and completed `cargo fmt --check`, `cargo check --workspace`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, and `cargo test --workspace`.
+- Confirmed `npm run build --prefix frontend` still passes and no frontend source files were modified.
+- Docker image verification remains environment-blocked because this user cannot access `/var/run/docker.sock` and the Docker Compose plugin is unavailable; the Dockerfiles and compose configuration are committed for CI/host execution.
 
 ## Milestone 0 (Repo Bootstrap) - Completed
 - Created monorepo foundation directories: `services/`, `proto/`, `db/`, `scripts/`, `pkg/`, `web/`, `.github/workflows/`.
