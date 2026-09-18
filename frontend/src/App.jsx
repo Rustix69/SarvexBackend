@@ -109,6 +109,14 @@ function App() {
   const [positions, setPositions] = useState([])
   const [orders, setOrders] = useState([])
   const [bookMarks, setBookMarks] = useState({})
+  const [pinnedTickers, setPinnedTickers] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('sarvex_pinned_markets') || '[]')
+      return Array.isArray(saved) ? saved.filter((ticker) => typeof ticker === 'string') : []
+    } catch {
+      return []
+    }
+  })
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -145,6 +153,16 @@ function App() {
   )
 
   const authed = Boolean(token)
+
+  const togglePinnedTicker = useCallback((ticker) => {
+    setPinnedTickers((current) => {
+      const next = current.includes(ticker)
+        ? current.filter((item) => item !== ticker)
+        : [...current, ticker]
+      localStorage.setItem('sarvex_pinned_markets', JSON.stringify(next))
+      return next
+    })
+  }, [])
 
   const api = useCallback(
     async (path, options = {}) => {
@@ -468,6 +486,8 @@ function App() {
           watchlist={futures}
           watchlistFills={fills}
           onSelect={handleMarketSelect}
+          pinnedTickers={pinnedTickers}
+          onTogglePin={togglePinnedTicker}
           orderbook={orderbook}
           fills={selectedFills}
           position={selectedPosition}
@@ -498,6 +518,8 @@ function App() {
           market={selectedMarket}
           watchlist={markets}
           onSelect={handleMarketSelect}
+          pinnedTickers={pinnedTickers}
+          onTogglePin={togglePinnedTicker}
           orderbook={orderbook}
           fills={selectedFills}
           position={selectedPosition}
@@ -809,14 +831,17 @@ function FutureCard({ market, fills, onClick }) {
   )
 }
 
-function TerminalWatchlist({ markets, selectedTicker, onSelect, fills = [] }) {
+function TerminalWatchlist({ markets, selectedTicker, onSelect, fills = [], pinnedTickers = [] }) {
+  const pinned = new Set(pinnedTickers)
+  const orderedMarkets = [...markets].sort((a, b) => Number(pinned.has(b.ticker)) - Number(pinned.has(a.ticker)))
+
   return (
     <aside className="terminal-watchlist">
       <div className="terminal-watchlist-head"><span>Markets</span><span><RefreshCw size={12} /></span></div>
       <div className="terminal-watchlist-list">
-        {markets.slice(0, 14).map((item, index) => <button className={item.ticker === selectedTicker ? 'watch-item active' : 'watch-item'} type="button" key={item.ticker} onClick={() => onSelect(item.ticker)}>
+        {orderedMarkets.slice(0, 14).map((item, index) => <button className={`${item.ticker === selectedTicker ? 'watch-item active' : 'watch-item'}${pinned.has(item.ticker) ? ' pinned' : ''}`} type="button" key={item.ticker} onClick={() => onSelect(item.ticker)}>
           <span className={`watch-icon watch-${index % 5}`}>{avatarText(item)}</span>
-          <span><b>{item.question || item.ticker}</b>{isFutureMarket(item)
+          <span><b>{pinned.has(item.ticker) && <span className="watch-pin" aria-label="Pinned">•</span>}{item.question || item.ticker}</b>{isFutureMarket(item)
             ? <small>{fills.some((fill) => fill.ticker === item.ticker) ? formatFuturePrice(item, impliedPrice(item, fills)) : '--'}</small>
             : <small>{Math.max(1, Math.min(99, impliedPrice(item, fills)))}¢ <em>{100 - Math.max(1, Math.min(99, impliedPrice(item, fills)))}¢</em></small>}</span>
         </button>)}
@@ -826,14 +851,14 @@ function TerminalWatchlist({ markets, selectedTicker, onSelect, fills = [] }) {
   )
 }
 
-function MarketDetail({ market, watchlist, onSelect, orderbook, fills, position, authed, busy, onBack, onTrade }) {
+function MarketDetail({ market, watchlist, onSelect, orderbook, fills, position, authed, busy, onBack, onTrade, pinnedTickers, onTogglePin }) {
   const bestBid = Number(orderbook?.bids?.[0]?.price_ticks || orderbook?.bids?.[0]?.priceTicks || 0)
   const bestAsk = Number(orderbook?.asks?.[0]?.price_ticks || orderbook?.asks?.[0]?.priceTicks || 0)
   const last = Number(fills?.[fills.length - 1]?.price_ticks || fills?.[fills.length - 1]?.priceTicks || bestAsk || bestBid || 50)
 
   return (
     <main className="detail-page terminal-page">
-      <TerminalWatchlist markets={watchlist} selectedTicker={market.ticker} onSelect={onSelect} />
+      <TerminalWatchlist markets={watchlist} selectedTicker={market.ticker} onSelect={onSelect} pinnedTickers={pinnedTickers} />
       <section className="market-main">
         <button className="back-btn" type="button" onClick={onBack}><ArrowLeft size={16} /> All markets</button>
         <div className="detail-heading">
@@ -842,7 +867,7 @@ function MarketDetail({ market, watchlist, onSelect, orderbook, fills, position,
             <p className="crumb">{market.series_ticker || market.seriesTicker || 'Sarvaex'} · {market.kind === 2 ? 'Scalar Future' : 'Binary Contract'}</p>
             <h1>{market.question || market.underlying || market.ticker}</h1>
           </div>
-          <div className="heading-actions"><Share2 size={18} /><Link2 size={18} /><Bookmark size={18} /></div>
+          <div className="heading-actions"><Share2 size={18} /><Link2 size={18} /><button className={pinnedTickers?.includes(market.ticker) ? 'pin-btn active' : 'pin-btn'} type="button" title={pinnedTickers?.includes(market.ticker) ? 'Unpin market' : 'Pin market'} aria-label={pinnedTickers?.includes(market.ticker) ? 'Unpin market' : 'Pin market'} onClick={() => onTogglePin?.(market.ticker)}><Bookmark size={18} /></button></div>
         </div>
 
         <div className="metric-row">
@@ -910,7 +935,7 @@ function BinaryCleanChart({ fills, bestBid, bestAsk, market, fallback }) {
   return <MidPriceChart key={`${market.ticker}-${fills.length}`} getData={getData} initialRange="1D" height={300} />
 }
 
-function FutureDetail({ market, watchlist, watchlistFills, onSelect, orderbook, fills, position, authed, busy, onBack, onTrade }) {
+function FutureDetail({ market, watchlist, watchlistFills, onSelect, orderbook, fills, position, authed, busy, onBack, onTrade, pinnedTickers, onTogglePin }) {
   const [chartPeriod, setChartPeriod] = useState('1h')
   const bestBid = Number(orderbook?.bids?.[0]?.price_ticks || orderbook?.bids?.[0]?.priceTicks || 0)
   const bestAsk = Number(orderbook?.asks?.[0]?.price_ticks || orderbook?.asks?.[0]?.priceTicks || 0)
@@ -919,7 +944,7 @@ function FutureDetail({ market, watchlist, watchlistFills, onSelect, orderbook, 
 
   return (
     <main className="detail-page terminal-page">
-      <TerminalWatchlist markets={watchlist} fills={watchlistFills} selectedTicker={market.ticker} onSelect={onSelect} />
+      <TerminalWatchlist markets={watchlist} fills={watchlistFills} selectedTicker={market.ticker} onSelect={onSelect} pinnedTickers={pinnedTickers} />
       <section className="market-main">
         <button className="back-btn" type="button" onClick={onBack}><ArrowLeft size={16} /> All futures</button>
         <div className="detail-heading">
@@ -928,7 +953,7 @@ function FutureDetail({ market, watchlist, watchlistFills, onSelect, orderbook, 
             <p className="crumb">{market.series_ticker || market.seriesTicker || 'Sarvaex'} · Numeric Future</p>
             <h1>{market.question || market.underlying || market.ticker}</h1>
           </div>
-          <div className="heading-actions"><Share2 size={18} /><Link2 size={18} /><Bookmark size={18} /></div>
+          <div className="heading-actions"><Share2 size={18} /><Link2 size={18} /><button className={pinnedTickers?.includes(market.ticker) ? 'pin-btn active' : 'pin-btn'} type="button" title={pinnedTickers?.includes(market.ticker) ? 'Unpin market' : 'Pin market'} aria-label={pinnedTickers?.includes(market.ticker) ? 'Unpin market' : 'Pin market'} onClick={() => onTogglePin?.(market.ticker)}><Bookmark size={18} /></button></div>
         </div>
 
         <div className="metric-row">
