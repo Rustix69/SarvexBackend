@@ -5,6 +5,7 @@
 - Moved the legacy backend services, protobufs, Liquibook source, database migrations/seeds, deployment files, scripts, and root backend configuration into `backend-old/`.
 - Created the new Rust workspace under `services/` with shared crates for protobuf contracts, domain types, PostgreSQL access, events, and service runtime health endpoints.
 - Added compilable Rust service boundaries for `gw-rest`, `gw-ws`, `order-router`, `risk-svc`, `position-svc`, `refdata-svc`, `oracle-svc`, `settlement-svc`, `audit-svc`, `admin-svc`, and `me-core-adapter`.
+- Added the planned `ledger-svc` health-only service boundary.
 - Added Rust protobuf generation sourced from the archived `backend-old/proto` files without changing protobuf semantics.
 - Implemented SQLx-backed `refdata-svc` gRPC listing, lookup, state filtering, cursor pagination, event lookup, and transactional state transition support.
 - Implemented the Phase 01 Axum REST gateway endpoints `GET /v1/markets` and `GET /v1/markets/:ticker`.
