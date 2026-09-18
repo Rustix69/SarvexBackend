@@ -77,7 +77,7 @@ export function mountMidPriceChart(root, userOpts = {}) {
   root.innerHTML = `
     <div class="mpc-head">
       <div>
-        <div class="mpc-label">Mid price</div>
+        <div class="mpc-label">Implied probability</div>
         <div class="mpc-value"><span class="mpc-big">–</span><span class="mpc-unit">chance</span><span class="mpc-chg"></span><span class="mpc-period"></span></div>
         <div class="mpc-stats"></div>
       </div>
@@ -89,7 +89,7 @@ export function mountMidPriceChart(root, userOpts = {}) {
       <button type="button" class="it" data-k="fills" aria-pressed="true"><i class="mpc-sw fill"></i>Fills</button>
       <button type="button" class="it" data-k="events" aria-pressed="true"><i class="mpc-sw ev"></i>Events</button>
     </div>
-    <div class="mpc-plot" tabindex="0" role="img" aria-label="Mid price chart. Use left and right arrow keys to inspect points.">
+    <div class="mpc-plot" tabindex="0" role="img" aria-label="Implied probability chart. Use left and right arrow keys to inspect points.">
       <canvas></canvas><div class="mpc-live" hidden></div><div class="mpc-tip" hidden></div>
     </div>
     <div class="mpc-volwrap"><canvas></canvas></div>
@@ -148,7 +148,7 @@ export function mountMidPriceChart(root, userOpts = {}) {
     chg.className = 'mpc-chg ' + (d > 0 ? 'up' : d < 0 ? 'down' : 'flat');
     chg.textContent = thin ? '' : (d > 0 ? '▲ ' : d < 0 ? '▼ ' : '') + Math.abs(d).toFixed(1) + ' pts';
     period.textContent = thin ? 'indicative, from quotes only' : idx == null ? RANGE_TEXT[range] || '' : 'since ' + fmtTime(pts[0].t, true);
-    label.textContent = idx == null ? 'Mid price' : fmtTime(pts[i].t, true);
+    label.textContent = idx == null ? 'Implied probability' : fmtTime(pts[i].t, true);
     const lp = pts[pts.length - 1];
     const vol = data.fills.reduce((s, f) => s + (f.qty * f.price) / 100, 0);
     stats.innerHTML =

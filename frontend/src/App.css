@@ -1487,8 +1487,6 @@ body { background: #111113; }
 .terminal-page .future-chart-meta strong { color: #eeeef2; font-size: 14px; font-weight: 500; }
 .terminal-page .future-chart-meta span:last-child { margin-left: auto; }
 .terminal-page .kline-chart-container { width: 100%; height: min(54vh, 460px); background: #151619; }
-.terminal-page .future-ohlc { position: absolute; z-index: 2; top: 70px; left: 16px; display: flex; gap: 12px; color: #777681; font: 9px var(--mono); pointer-events: none; }
-.terminal-page .future-ohlc b { color: #c9c7cf; font-weight: 500; }
 .terminal-page .future-chart-empty { position: absolute; top: 58%; left: 0; right: 0; transform: translateY(-50%); color: #777681; font: 11px var(--mono); text-align: center; pointer-events: none; }
 .terminal-page .book-header { color: #777681; font-weight: 400; }
 .terminal-page .book-row { font-weight: 400; }
