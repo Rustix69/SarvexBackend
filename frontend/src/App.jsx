@@ -750,6 +750,7 @@ function MarketDashboard({ loading, markets, fills, onSelect, onRefresh, searchQ
               market={market}
               fills={fills}
               index={index}
+              section={section}
               onClick={() => onSelect(market.ticker)}
             />
           ))}
@@ -759,12 +760,12 @@ function MarketDashboard({ loading, markets, fills, onSelect, onRefresh, searchQ
   )
 }
 
-function MarketCard({ market, fills, onClick }) {
+function MarketCard({ market, fills, section, onClick }) {
   const price = impliedPrice(market, fills)
   const cardMarket = {
     id: market.ticker,
     question: cardMarketTitle(market),
-    category: binaryCardCategory(market),
+    category: section === 'All' ? binaryCardCategory(market) : section,
     yes: price,
     change: 0,
     yesAsk: price,
