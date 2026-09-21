@@ -23,7 +23,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
-use std::{env, net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    env,
+    net::SocketAddr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use tokio::{net::TcpStream, task::JoinSet, time::timeout};
 use tonic::{
     transport::{Channel, Endpoint},
     Code,
@@ -102,6 +108,17 @@ struct FillQuery {
     cursor: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct HealthItem {
+    name: String,
+    kind: String,
+    status: String,
+    message: String,
+    target: String,
+    latency_ms: u128,
+    checked_at: String,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     sarvex_runtime::init_tracing("gw-rest");
@@ -124,6 +141,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .route("/metrics", get(metrics))
+        .route("/v1/health/overview", get(health_overview))
         .route("/v1/auth/login", post(login))
         .route("/v1/markets", get(list_markets))
         .route("/v1/markets/{ticker}", get(get_market))
@@ -164,6 +182,83 @@ async fn readyz() -> impl IntoResponse {
         StatusCode::OK,
         Json(json!({"status":"ready","service":"gw-rest"})),
     )
+}
+
+async fn health_overview() -> impl IntoResponse {
+    let checked_at = Utc::now().to_rfc3339();
+    let mut items = vec![HealthItem {
+        name: "gw-rest".to_owned(),
+        kind: "backend".to_owned(),
+        status: "running".to_owned(),
+        message: "ready".to_owned(),
+        target: "self".to_owned(),
+        latency_ms: 0,
+        checked_at: checked_at.clone(),
+    }];
+
+    let targets = [
+        ("postgres", "infrastructure", "postgres:5432"),
+        ("nats", "infrastructure", "nats:4222"),
+        ("refdata-svc", "backend", "refdata-svc:8080"),
+        ("ledger-svc", "backend", "ledger-svc:8081"),
+        ("risk-svc", "backend", "risk-svc:8082"),
+        ("me-core", "backend", "me-core:50054"),
+        ("order-router", "backend", "order-router:8085"),
+        ("position-svc", "backend", "position-svc:8086"),
+        ("marketdata-svc", "backend", "marketdata-svc:8087"),
+        ("oracle-svc", "backend", "oracle-svc:8088"),
+        ("settlement-svc", "backend", "settlement-svc:8089"),
+        ("gw-ws", "backend", "gw-ws:8082"),
+    ];
+    let mut checks = JoinSet::new();
+    for (name, kind, target) in targets {
+        checks.spawn(probe_health(
+            name.to_owned(),
+            kind.to_owned(),
+            target.to_owned(),
+            checked_at.clone(),
+        ));
+    }
+    while let Some(result) = checks.join_next().await {
+        if let Ok(item) = result {
+            items.push(item);
+        }
+    }
+    items.sort_by(|left, right| left.name.cmp(&right.name));
+    let running = items.iter().filter(|item| item.status == "running").count();
+    Json(json!({
+        "generated_at": Utc::now().to_rfc3339(),
+        "summary": {
+            "running": running,
+            "total": items.len(),
+            "not_running": items.len() - running,
+        },
+        "items": items,
+    }))
+}
+
+async fn probe_health(
+    name: String,
+    kind: String,
+    target: String,
+    checked_at: String,
+) -> HealthItem {
+    let started = Instant::now();
+    let (status, message) =
+        match timeout(Duration::from_millis(700), TcpStream::connect(&target)).await {
+            Ok(Ok(_)) => ("running".to_owned(), "tcp reachable".to_owned()),
+            Ok(Err(error)) => ("not_running".to_owned(), error.to_string()),
+            Err(_) => ("not_running".to_owned(), "connection timed out".to_owned()),
+        };
+    HealthItem {
+        name,
+        kind,
+        status,
+        message,
+        target,
+        latency_ms: started.elapsed().as_millis(),
+        checked_at,
+    }
 }
 async fn metrics() -> Response {
     ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], "# HELP sarvex_gateway_up Gateway health state.\n# TYPE sarvex_gateway_up gauge\nsarvex_gateway_up{service=\"gw-rest\"} 1\n").into_response()
