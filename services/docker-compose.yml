@@ -1,6 +1,20 @@
-name: sarvex-rust-phase01
+name: sarvex-rust-phase07
 
 services:
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js", "-sd", "/data/jetstream", "-m", "8222"]
+    ports:
+      - "14222:4222"
+      - "18222:8222"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8222/varz"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - phase01_nats:/data/jetstream
+
   postgres:
     image: postgres:16-alpine
     environment:
@@ -35,6 +49,16 @@ services:
       -f /migrations/000002_ledger.up.sql
       && psql -h postgres -U sarvex -d sarvex -v ON_ERROR_STOP=1
       -f /migrations/000003_risk.up.sql
+      && psql -h postgres -U sarvex -d sarvex -v ON_ERROR_STOP=1
+      -f /migrations/000004_orders.up.sql
+      && psql -h postgres -U sarvex -d sarvex -v ON_ERROR_STOP=1
+      -f /migrations/000005_execution_events.up.sql
+      && psql -h postgres -U sarvex -d sarvex -v ON_ERROR_STOP=1
+      -f /migrations/000006_position_consumer.up.sql
+      && psql -h postgres -U sarvex -d sarvex -v ON_ERROR_STOP=1
+      -f /migrations/000007_oracle_settlement.up.sql
+      && psql -h postgres -U sarvex -d sarvex -v ON_ERROR_STOP=1
+      -f /migrations/000008_gateway_idempotency.up.sql
       && psql -h postgres -U sarvex -d sarvex -v ON_ERROR_STOP=1
       -f /seeds/000001_refdata.sql
       && psql -h postgres -U sarvex -d sarvex -v ON_ERROR_STOP=1
@@ -95,6 +119,118 @@ services:
       - "15053:50053"
       - "18063:8082"
 
+  me-core-adapter:
+    build:
+      context: ..
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE: me-core-adapter
+    environment:
+      ME_CORE_ADDR: http://me-core:50054
+      ME_CORE_TIMEOUT_MS: 100
+      NATS_URL: nats://nats:4222
+      HTTP_PORT: 8084
+      RUST_LOG: info
+    depends_on:
+      me-core:
+        condition: service_started
+      risk-svc:
+        condition: service_started
+    ports:
+      - "18064:8084"
+
+  me-core:
+    build:
+      context: ..
+      dockerfile: services/me-core/Dockerfile
+    environment:
+      ME_CORE_LISTEN_ADDR: 0.0.0.0:50054
+      ME_CORE_JOURNAL_PATH: /var/lib/sarvex/me-core/me-core.journal
+      ME_CORE_JOURNAL_FSYNC: "true"
+    ports:
+      - "15054:50054"
+    volumes:
+      - me_core_state:/var/lib/sarvex/me-core
+
+  marketdata-svc:
+    build:
+      context: ..
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE: marketdata-svc
+    environment:
+      ME_CORE_ADDR: http://me-core:50054
+      NATS_URL: nats://nats:4222
+      EVENT_RETENTION: jetstream
+      HTTP_PORT: 8087
+      RUST_LOG: info
+    depends_on:
+      me-core:
+        condition: service_started
+      nats:
+        condition: service_started
+    ports:
+      - "18067:8087"
+
+  order-router:
+    build:
+      context: ..
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE: order-router
+    environment:
+      POSTGRES_URL: postgres://sarvex:sarvex@postgres:5432/sarvex
+      REFDATA_ADDR: http://refdata-svc:50051
+      RISK_ADDR: http://risk-svc:50053
+      LEDGER_ADDR: http://ledger-svc:50052
+      ME_CORE_ADDR: http://me-core:50054
+      ME_CORE_TIMEOUT_MS: 100
+      NATS_URL: nats://nats:4222
+      EVENT_RETENTION: jetstream
+      GRPC_PORT: 50055
+      HTTP_PORT: 8085
+      RUST_LOG: info
+    depends_on:
+      me-core:
+        condition: service_started
+      refdata-svc:
+        condition: service_started
+      risk-svc:
+        condition: service_started
+      ledger-svc:
+        condition: service_started
+      nats:
+        condition: service_started
+      refdata-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "15055:50055"
+      - "18065:8085"
+
+  position-svc:
+    build:
+      context: ..
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE: position-svc
+    environment:
+      POSTGRES_URL: postgres://sarvex:sarvex@postgres:5432/sarvex
+      ORDER_ROUTER_ADDR: http://order-router:50055
+      NATS_URL: nats://nats:4222
+      GRPC_PORT: 50056
+      HTTP_PORT: 8086
+      RUST_LOG: info
+    depends_on:
+      refdata-migrate:
+        condition: service_completed_successfully
+      order-router:
+        condition: service_started
+      nats:
+        condition: service_started
+    ports:
+      - "15056:50056"
+      - "18066:8086"
+
   gw-rest:
     build:
       context: ..
@@ -103,15 +239,105 @@ services:
         SERVICE: gw-rest
     environment:
       REFDATA_ADDR: http://refdata-svc:50051
+      ORDER_ROUTER_ADDR: http://order-router:50055
+      LEDGER_ADDR: http://ledger-svc:50052
+      POSITION_ADDR: http://position-svc:50056
+      DATABASE_URL: postgres://sarvex:sarvex@postgres:5432/sarvex
+      AUTH_MODE: ${AUTH_MODE:-demo}
+      JWT_SECRET: ${JWT_SECRET:-}
+      JWT_ISSUER: ${JWT_ISSUER:-sarvex}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-sarvex-client}
       HTTP_PORT: 18080
       RUST_LOG: info
     depends_on:
       refdata-svc:
         condition: service_started
+      order-router:
+        condition: service_started
       ledger-svc:
+        condition: service_started
+      position-svc:
         condition: service_started
     ports:
       - "18080:18080"
 
+  gw-ws:
+    build:
+      context: ..
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE: gw-ws
+    environment:
+      NATS_URL: nats://nats:4222
+      ME_CORE_ADDR: http://me-core:50054
+      AUTH_MODE: ${AUTH_MODE:-demo}
+      JWT_SECRET: ${JWT_SECRET:-}
+      JWT_ISSUER: ${JWT_ISSUER:-sarvex}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-sarvex-client}
+      HTTP_PORT: 8082
+      RUST_LOG: info
+    depends_on:
+      nats:
+        condition: service_started
+      me-core:
+        condition: service_started
+    ports:
+      - "18082:8082"
+
+  oracle-svc:
+    build:
+      context: ..
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE: oracle-svc
+    environment:
+      POSTGRES_URL: postgres://sarvex:sarvex@postgres:5432/sarvex
+      NATS_URL: nats://nats:4222
+      EVENT_RETENTION: jetstream
+      GRPC_PORT: 50057
+      HTTP_PORT: 8088
+      ORACLE_REQUIRED_QUORUM: 1
+      RUST_LOG: info
+    depends_on:
+      refdata-migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_started
+    ports:
+      - "15057:50057"
+      - "18088:8088"
+
+  settlement-svc:
+    build:
+      context: ..
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE: settlement-svc
+    environment:
+      POSTGRES_URL: postgres://sarvex:sarvex@postgres:5432/sarvex
+      REFDATA_ADDR: http://refdata-svc:50051
+      ORACLE_ADDR: http://oracle-svc:50057
+      POSITION_ADDR: http://position-svc:50056
+      LEDGER_ADDR: http://ledger-svc:50052
+      NATS_URL: nats://nats:4222
+      EVENT_RETENTION: jetstream
+      GRPC_PORT: 50058
+      HTTP_PORT: 8089
+      RUST_LOG: info
+    depends_on:
+      refdata-migrate:
+        condition: service_completed_successfully
+      oracle-svc:
+        condition: service_started
+      position-svc:
+        condition: service_started
+      ledger-svc:
+        condition: service_started
+    ports:
+      - "15058:50058"
+      - "18089:8089"
+
 volumes:
   phase01_postgres:
+  phase01_nats:
+  me_core_state:

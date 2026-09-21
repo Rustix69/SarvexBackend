@@ -321,6 +321,15 @@ impl Ledger for LedgerService {
         }
         let holds = user_account(&hold.user_id, "HOLDS");
         let cash = user_account(&hold.user_id, "CASH");
+        if request.commit_amount_micro_usdc > 0 {
+            ensure_account(
+                &mut tx,
+                &request.destination_account_code,
+                "LIABILITY",
+                None,
+            )
+            .await?;
+        }
         let mut entries = Vec::with_capacity(4 + additional.len());
         if request.commit_amount_micro_usdc > 0 {
             entries.push(EntrySpec {

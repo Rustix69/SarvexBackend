@@ -1,5 +1,87 @@
 # Milestone Updates
 
+## Phase 09 (Rust REST Gateway Foundation) - In Progress
+
+- Replaced the REST gateway health-only implementation with protobuf-backed delegation to refdata, order-router, ledger, and position services.
+- Added demo login tokens using the existing `demo.<base64-user-id>` convention; protected endpoints require a bearer token.
+- Added market listing, contract lookup, fill replay, order submit/list/get/cancel, balance/history, positions, open interest, and demo deposit routes.
+- Added required `Idempotency-Key` enforcement at the REST boundary for order mutations; domain idempotency remains owned by order-router/ledger.
+- Added bounded upstream RPC timeouts and gRPC-to-HTTP error mapping.
+- Added explicit JSON conversion for protobuf enums, timestamps, contracts, orders, fills, balances, positions, and ledger history.
+- Wired all gateway upstream addresses and service dependencies into the Rust Compose stack.
+- WebSocket delivery, orderbook snapshot delegation, persistent gateway idempotency, and production authentication remain deferred.
+
+## Phase 08 (Position Consumer, Gap Replay, and Read Model) - In Progress
+
+- Added migration `000006_position_consumer` for durable consumer offsets, applied-fill deduplication, and position cost/PnL columns.
+- Implemented `position-svc` as a separate gRPC/HTTP service with position, contract-position, and open-interest read APIs.
+- Added NATS execution-fill consumption on `exec.fills.*` with reconnect handling.
+- Added transactional fill application: applied-fill identity, maker/taker position deltas, and consumer offset advance commit together.
+- Added gap detection and cursor-based replay through `order-router.ListFills`, including non-advancing cursor protection.
+- Preserved NATS as a delivery mechanism only; PostgreSQL fill facts remain the replay source of truth.
+- Added unit coverage for position side/action sign mapping and event payload compatibility.
+- Average cost and realized/unrealized PnL remain read-model placeholders until mark/settlement semantics are implemented.
+- Live PostgreSQL/NATS integration and end-to-end matching remain pending because the C++ me-core gRPC server is not yet available in the new compose stack.
+
+## Phase 07 (Durable NATS Execution Event Spine) - In Progress
+- Added `000005_execution_events` with a PostgreSQL-backed execution-event outbox keyed by immutable fill/event ID and ordered by `global_seq`.
+- Fill persistence now writes the execution event envelope in the same transaction as the fill fact, order updates, and fill-posting outbox row.
+- Added a retrying order-router publisher using NATS Core: it publishes `exec.fills.<ticker>` only from committed outbox rows and marks rows posted only after publish plus client flush.
+- Publisher retries transient connection, database, and publish failures without making NATS the source of truth; duplicate delivery remains possible and requires consumer idempotency by event ID.
+- Added a local NATS service with monitoring port to the Rust Compose stack.
+- Added subject and envelope tests in `sarvex-events`.
+- Position consumption and gap replay are implemented in Phase 08; JetStream durability and production event retention remain intentionally deferred.
+
+## Phase 06 (Fill Durability and Event Contract Foundation) - In Progress
+- Added the Rust `orders` migration with order state, immutable fill facts, and a transactional `fill_posting_outbox`.
+- Fill persistence records maker/taker order and user facts, hold IDs, side/action pairs, prices, quantities, fees, and matching sequence metadata.
+- The order-router persists each fill and its posting-outbox row in the same PostgreSQL transaction as order fill counters/status updates.
+- Added replay-oriented `ListFills` support ordered by `global_seq` with optional ticker and sequence-range filters.
+- Replaced the Rust event crate's Redis-style stream names with the architecture's NATS subject contract: execution, ledger, market-data, settlement, audit, user execution, user fills, book, trade, and ticker subjects.
+- Added versioned event envelopes with subject, event ID, global sequence, contract sequence, timestamp, and JSON round-trip tests.
+- Ledger fill posting and NATS publisher workers are intentionally not claimed complete yet; the destination-account seed and live me-core fill integration must be verified before those workers can safely commit holds or publish facts.
+
+## Phase 05 (Rust Order-Router Orchestration Foundation) - In Progress
+- Replaced the health-only Rust `order-router` shell with a tonic `OrderRouter` server for submit, lookup, list-orders, and replay/list-fills paths.
+- Submit flow now inserts `PENDING` before downstream work, enforces `(user_id, client_order_id)` idempotency, validates refdata state, calls risk, places a deterministic ledger hold, and submits through the typed me-core client.
+- Matching `OutcomeUnknown` preserves `PENDING` and the hold for reconciliation; queue-full and explicit matching rejection release the full uncommitted hold before becoming terminal rejection.
+- Added IOC no-fill hold release and persisted maker/taker fill updates through a single database transaction.
+- Cancel now delegates to me-core with unknown-outcome handling, marks terminal state only after engine confirmation, and releases hold remainder through an idempotent worker path.
+- Amend now supports safe price/count changes when required collateral remains unchanged; collateral-changing amendments return `HOLD_RECONCILIATION_REQUIRED` until an atomic hold-adjustment contract exists.
+- Added Compose wiring and `000004_orders` migration for the new service.
+- Full Rust formatting, compilation, strict Clippy, and workspace tests pass; live PostgreSQL and cross-language matching integration remain pending.
+
+## Phase 04 (me-core Boundary and Liquibook Integration Foundation) - In Progress
+- Added the `sarvex-me-client` Rust crate as the typed client boundary for the frozen `MatchingEngine` protobuf service.
+- Implemented typed add-book, submit, cancel, amend, close-book, and book-snapshot calls using tonic without moving matching or state ownership into Rust.
+- Preserved the frozen Liquibook flag mapping for IOC, FOK, post-only, and reduce-only orders.
+- Added explicit timeout semantics: local timeout and unavailable/deadline responses remain `OutcomeUnknown`; they are never treated as terminal order rejection. `RESOURCE_EXHAUSTED` remains distinguishable as a pre-enqueue queue-full rejection.
+- Added client tests for flag mapping, side/action determinism, unknown outcomes, and queue-full classification.
+- Wired `me-core-adapter` to initialize the typed client from `ME_CORE_ADDR` and `ME_CORE_TIMEOUT_MS` while retaining its health endpoint.
+- Added the adapter to `services/docker-compose.yml` without pretending that the archived C++ process already exposes a gRPC server.
+- Fixed the shared Rust health runtime JSON response to serialize its `Arc<str>` service name correctly under the current serde version.
+- Rust formatting, workspace compilation, strict Clippy, and all workspace tests pass.
+- Remaining Phase 04 work: expose the frozen MatchingEngine gRPC server from the preserved C++ Liquibook process, then add cross-language submit/cancel/snapshot integration tests. No matching state, ledger posting, NATS publishing, or replay logic was moved into the adapter.
+
+## Phase 10 (Fill Ledger Posting and Terminal Hold Reconciliation) - In Progress
+
+- Added an order-router fill-posting worker that drains `orders.fill_posting_outbox` after fill persistence.
+- Each maker/taker hold commit uses deterministic `fill:<fill_id>:<party>` idempotency keys and posts collateral to `LIAB:HOUSE:UNSETTLED_TRADES:<ticker>`.
+- Fill posting retries after ledger/refdata/timeouts and marks a fill posted only after both parties commit successfully.
+- Added terminal-order remainder release based on the order hold amount minus all persisted fill collateral requirements.
+- Ledger now creates destination accounts transactionally before commit-hold postings.
+- Remaining work: live ledger/outbox integration tests and production settlement consumption of unsettled-trade accounts.
+
+## Phase 11 (WebSocket Event Gateway) - In Progress
+
+- Replaced the WebSocket health-only shell with an Axum WebSocket gateway backed by NATS.
+- Added public market-trade subscriptions and authenticated private-fill subscriptions.
+- Private events are filtered by user identity and do not expose counterparty IDs or orders.
+- Added connection, subscription, ping/pong, malformed-message, and NATS-unavailable responses.
+- Added bounded per-connection event buffering and subscription task cleanup on disconnect.
+- Wired `gw-ws` into Compose on port `18082`.
+- Snapshot-buffer-replay and book snapshot delegation remain pending until the matching-engine gRPC server is available.
+
 ## Phase 03 (Risk and Pre-Trade Foundation) - Completed
 - Added risk persistence for user limits, per-contract position limits, working-order summaries, and the position read model used by pre-trade checks.
 - Implemented Rust `risk-svc` over the frozen protobuf contract with `PreTradeCheck`, `GetUserLimits`, and transactional `UpdateUserLimits`.
@@ -487,3 +569,91 @@
   - Vite `/api/v1/markets?state=OPEN&limit=2` returned live backend data
   - demo deposit endpoint verified with bearer token
   - simulator repopulated live orderbook with bid/ask depth
+
+## Phase 12: C++ me-core and Market Data Bridge - Implemented
+- Added a new C++ `services/me-core/` target around the preserved Liquibook source.
+- Implemented the frozen `MatchingEngine` gRPC surface:
+  - add/close book
+  - submit/cancel/amend order
+  - book snapshot
+  - replayable execution stream
+- Added `SarvaOrder` with SarvEX-owned order ID, user ID, hold ID, side, action,
+  quantity, and price metadata while Liquibook remains responsible for matching
+  and price-level tracking.
+- Added a single-writer sequencer queue with bounded capacity and explicit
+  `RESOURCE_EXHAUSTED` versus `DEADLINE_EXCEEDED` behavior.
+- Added immutable execution facts for accepted, rejected, fill, cancelled,
+  amended, and book-delta events with global and per-contract sequence values.
+- Added in-memory replay history and live subscribers for `StreamExecutions`.
+- Added Liquibook-backed aggregate snapshots and book delta generation.
+- Added `marketdata-svc`, which reconnects to the C++ execution stream and
+  publishes durable-contract-compatible NATS envelopes to:
+  - `md.trade.<ticker>`
+  - `md.book.<ticker>`
+- Added C++ me-core and market-data services to Docker Compose wiring.
+- Added an ignored cross-language Rust gRPC smoke test that submits maker/taker
+  orders to the C++ server, verifies the fill and snapshot, and replays the fill.
+- Updated order-router to idempotently ensure a matching book exists from
+  refdata before submitting the first order.
+
+### Validation
+- `cargo fmt --all`
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- `cargo check --workspace --all-targets`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Environment limitation
+- The local environment has no Docker daemon and no installed C++ gRPC/protobuf
+  headers, so the C++ compile and live cross-language test remain to be run on
+  the Docker-enabled EC2/build host:
+  - `docker compose -f services/docker-compose.yml build me-core marketdata-svc`
+  - `ME_CORE_TEST_ADDR=http://127.0.0.1:15054 cargo test -p sarvex-me-client --test cross_language_smoke -- --ignored`
+
+## Phase 13-14: Recovery, Settlement, Auth, Retention, and Load Readiness - Implemented
+- Added `sarvex-auth` with an explicit authentication mode:
+  - `AUTH_MODE=demo` preserves the unsigned `demo.<base64url(user_id)>` token for local/demo use.
+  - `AUTH_MODE=jwt` issues and verifies HS256 JWTs with issuer, audience, expiry, and a required `JWT_SECRET` of at least 32 bytes.
+  - JWT login is gated by `AUTH_LOGIN_SECRET` until a real identity provider is connected.
+- Added persistent gateway idempotency migration `000008_gateway_idempotency`.
+  - REST submit, cancel, and demo deposit mutations now replay stored responses.
+  - Reusing a key with a different request hash returns `IDEMPOTENCY_KEY_REUSED`.
+- Added WebSocket market snapshot-buffer-replay:
+  - subscribes to `md.book.<ticker>` before requesting the matching-engine snapshot
+  - buffers deltas during the snapshot call
+  - emits the snapshot, replays ordered deltas newer than the snapshot sequence, then streams live deltas
+- Added demo me-core command journaling and restoration:
+  - `ME_CORE_JOURNAL_PATH` stores length-delimited AddBook/CloseBook/Submit/Cancel/Amend commands
+  - the journal is replayed before accepting requests after restart
+  - Docker Compose persists it in the `me_core_state` volume
+- Added oracle service logic:
+  - attestation upsert
+  - quorum and challenge-window checks
+  - conflicting-attestation detection and DISPUTED state
+  - finalized-resolution event publication
+  - admin force-resolution path with required identity and justification
+- Added settlement service logic:
+  - checks closed/resolving state, close sequence, unposted fills, active orders, and position consumer convergence
+  - creates durable payout intents before ledger calls
+  - uses idempotent ledger payout transactions
+  - computes binary and scalar payouts with checked integer arithmetic
+  - snapshots escrow before posting and performs a deterministic rounding sweep
+  - marks the contract SETTLED only after all payout work completes
+- Added JetStream-capable `EventPublisher` for `md.>`, `exec.>`, `oracle.>`, `settlement.>`, and `ledger.>` subjects.
+  - core NATS remains the default; `EVENT_RETENTION=jetstream` enables file-backed retention
+  - NATS Compose now starts with JetStream enabled
+- Added `/metrics` Prometheus text endpoints to runtime, REST, and WebSocket gateways.
+- Added `services/loadtest`, a concurrent me-core gRPC load harness reporting p50/p95/p99 latency.
+- Added oracle and settlement services to Docker Compose with their service dependencies.
+
+### Validation
+- `cargo fmt --all`
+- `cargo check --workspace --all-targets`
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- `cargo test --workspace`
+- `git diff --check`
+
+### Remaining deployment-only verification
+- Docker Compose build and migration execution on a Docker-enabled host.
+- C++ me-core build and ignored Rust/C++ cross-language smoke test.
+- EC2 load test, JetStream retention inspection, and production metrics scraping.

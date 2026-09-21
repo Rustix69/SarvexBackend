@@ -5,5 +5,16 @@ edition.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+axum.workspace = true
+async-nats.workspace = true
+chrono.workspace = true
+prost-types.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+tonic.workspace = true
+tower-http.workspace = true
+sarvex-contracts = { path = "../crates/sarvex-contracts" }
+sarvex-db = { path = "../crates/sarvex-db" }
+sarvex-events = { path = "../crates/sarvex-events" }
 tokio.workspace = true
 sarvex-runtime = { path = "../crates/sarvex-runtime" }

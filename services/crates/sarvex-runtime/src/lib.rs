@@ -1,5 +1,11 @@
 use anyhow::Result;
-use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::get, Router};
+use axum::{
+    extract::State,
+    http::{header, StatusCode},
+    response::{IntoResponse, Response},
+    routing::get,
+    Router,
+};
 use serde_json::json;
 use std::{env, sync::Arc, time::Duration};
 use tokio::net::TcpListener;
@@ -31,6 +37,7 @@ pub async fn run_health_service(service: &str) -> Result<()> {
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
+        .route("/metrics", get(metrics))
         .with_state(state)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());
@@ -44,7 +51,7 @@ pub async fn run_health_service(service: &str) -> Result<()> {
 async fn healthz(State(state): State<HealthState>) -> impl IntoResponse {
     (
         StatusCode::OK,
-        axum::Json(json!({ "status": "ok", "service": state.service })),
+        axum::Json(json!({ "status": "ok", "service": state.service.as_ref() })),
     )
 }
 
@@ -58,8 +65,13 @@ async fn readyz(State(state): State<HealthState>) -> impl IntoResponse {
     }
     (
         StatusCode::OK,
-        axum::Json(json!({ "status": "ready", "service": state.service })),
+        axum::Json(json!({ "status": "ready", "service": state.service.as_ref() })),
     )
+}
+
+async fn metrics(State(state): State<HealthState>) -> Response {
+    let body = format!("# HELP sarvex_service_up Service health state.\n# TYPE sarvex_service_up gauge\nsarvex_service_up{{service=\"{}\"}} 1\n", state.service);
+    ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], body).into_response()
 }
 
 async fn shutdown_signal() {

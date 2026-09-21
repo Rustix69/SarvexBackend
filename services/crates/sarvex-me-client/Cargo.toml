@@ -1,0 +1,12 @@
+[package]
+name = "sarvex-me-client"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+futures-util.workspace = true
+sarvex-contracts = { path = "../sarvex-contracts" }
+thiserror.workspace = true
+tokio.workspace = true
+tonic.workspace = true
