@@ -20,4 +20,5 @@ tracing-subscriber.workspace = true
 sarvex-contracts = { path = "../crates/sarvex-contracts" }
 sarvex-auth = { path = "../crates/sarvex-auth" }
 sarvex-db = { path = "../crates/sarvex-db" }
+sarvex-me-client = { path = "../crates/sarvex-me-client" }
 sarvex-runtime = { path = "../crates/sarvex-runtime" }

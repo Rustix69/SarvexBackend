@@ -221,6 +221,7 @@ services:
       ORDER_ROUTER_ADDR: http://order-router:50055
       LEDGER_ADDR: http://ledger-svc:50052
       POSITION_ADDR: http://position-svc:50056
+      ME_CORE_ADDR: http://me-core:50054
       DATABASE_URL: postgres://sarvex:sarvex@postgres:5432/sarvex
       AUTH_MODE: ${AUTH_MODE:-demo}
       JWT_SECRET: ${JWT_SECRET:-}
@@ -236,6 +237,8 @@ services:
       ledger-svc:
         condition: service_started
       position-svc:
+        condition: service_started
+      me-core:
         condition: service_started
     ports:
       - "18080:18080"

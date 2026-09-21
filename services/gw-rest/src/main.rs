@@ -12,13 +12,14 @@ use prost_types::Timestamp;
 use sarvex_auth::{AuthMode, Authenticator};
 use sarvex_contracts::sarvex::v1::{
     get_order_request, ledger_client::LedgerClient, order_router_client::OrderRouterClient,
-    position_client::PositionClient, ref_data_client::RefDataClient, Action, Balance,
+    position_client::PositionClient, ref_data_client::RefDataClient, Action, Balance, BookSnapshot,
     CancelOrderRequest, Contract, ContractState, Fill, GetAccountHistoryRequest, GetBalanceRequest,
     GetContractRequest, GetOpenInterestRequest, GetOrderRequest, GetPositionRequest,
     ListContractsRequest, ListFillsRequest, ListOrdersRequest, ListPositionsRequest, Order,
     OrderStatus, SelfTradePreventionType, Side, SubmitOrderRequest, TimeInForce,
 };
 use sarvex_db::connect;
+use sarvex_me_client::{MeCoreClient, MeCoreError};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -44,6 +45,7 @@ struct AppState {
     orders: OrderRouterClient<Channel>,
     ledger: LedgerClient<Channel>,
     positions: PositionClient<Channel>,
+    me: MeCoreClient,
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,6 +110,11 @@ struct FillQuery {
     cursor: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct OrderBookQuery {
+    depth: Option<i32>,
+}
+
 #[derive(Debug, Serialize)]
 struct HealthItem {
     name: String,
@@ -134,6 +141,10 @@ async fn main() -> anyhow::Result<()> {
         )?),
         ledger: LedgerClient::new(grpc_channel("LEDGER_ADDR", "http://127.0.0.1:50052")?),
         positions: PositionClient::new(grpc_channel("POSITION_ADDR", "http://127.0.0.1:50056")?),
+        me: MeCoreClient::connect_lazy(
+            env::var("ME_CORE_ADDR").unwrap_or_else(|_| "http://127.0.0.1:50054".to_owned()),
+            Duration::from_secs(2),
+        )?,
     };
     let port = env::var("HTTP_PORT").unwrap_or_else(|_| "18080".to_owned());
     let addr: SocketAddr = format!("0.0.0.0:{port}").parse()?;
@@ -145,6 +156,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/auth/login", post(login))
         .route("/v1/markets", get(list_markets))
         .route("/v1/markets/{ticker}", get(get_market))
+        .route("/v1/markets/{ticker}/orderbook", get(get_orderbook))
         .route("/v1/markets/{ticker}/fills", get(list_market_fills))
         .route("/v1/orders", get(list_orders).post(submit_order))
         .route("/v1/orders/{order_id}", get(get_order))
@@ -312,6 +324,18 @@ async fn get_market(State(state): State<AppState>, Path(ticker): Path<String>) -
     match rpc(client.get_contract(GetContractRequest { ticker })).await {
         Ok(contract) => Json(contract_json(&contract)).into_response(),
         Err(error) => grpc_error(error),
+    }
+}
+
+async fn get_orderbook(
+    State(state): State<AppState>,
+    Path(ticker): Path<String>,
+    Query(query): Query<OrderBookQuery>,
+) -> Response {
+    let depth = query.depth.unwrap_or(20).clamp(1, 100);
+    match state.me.get_book_snapshot(ticker, depth).await {
+        Ok(snapshot) => Json(book_snapshot_json(&snapshot)).into_response(),
+        Err(error) => me_core_error(error),
     }
 }
 
@@ -902,6 +926,22 @@ fn history_entry_json(entry: &sarvex_contracts::sarvex::v1::LedgerEntryRecord) -
 fn position_json(position: &sarvex_contracts::sarvex::v1::UserPosition) -> Value {
     json!({"user_id":position.user_id,"ticker":position.ticker,"net_qty":position.net_qty,"avg_cost_micro_usdc":position.avg_cost_micro_usdc,"realized_pnl_micro_usdc":position.realized_pnl_micro_usdc,"unrealized_pnl_micro_usdc":position.unrealized_pnl_micro_usdc,"updated_at":timestamp_json(position.updated_at.as_ref()),"last_global_seq":position.last_global_seq})
 }
+fn book_snapshot_json(snapshot: &BookSnapshot) -> Value {
+    json!({
+        "ticker": snapshot.ticker,
+        "seq": snapshot.seq,
+        "ts": timestamp_json(snapshot.ts.as_ref()),
+        "bids": snapshot.bids.iter().map(book_level_json).collect::<Vec<_>>(),
+        "asks": snapshot.asks.iter().map(book_level_json).collect::<Vec<_>>(),
+    })
+}
+fn book_level_json(level: &sarvex_contracts::sarvex::v1::PriceLevel) -> Value {
+    json!({
+        "price_ticks": level.price_ticks,
+        "total_qty": level.total_qty,
+        "order_count": level.order_count,
+    })
+}
 fn enum_name<T: std::fmt::Debug>(value: Option<T>) -> String {
     value
         .map(|value| format!("{value:?}").to_ascii_uppercase())
@@ -949,6 +989,17 @@ fn grpc_error(error: tonic::Status) -> Response {
         &format!("{:?}", error.code()).to_ascii_uppercase(),
         error.message(),
     )
+}
+
+fn me_core_error(error: MeCoreError) -> Response {
+    match error {
+        MeCoreError::Status(status) => grpc_error(*status),
+        MeCoreError::OutcomeUnknown | MeCoreError::Transport(_) => error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "ME_CORE_UNAVAILABLE",
+            &error.to_string(),
+        ),
+    }
 }
 fn error_response(status: StatusCode, code: &str, message: &str) -> Response {
     (

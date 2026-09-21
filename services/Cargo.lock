@@ -764,6 +764,7 @@ dependencies = [
  "sarvex-auth",
  "sarvex-contracts",
  "sarvex-db",
+ "sarvex-me-client",
  "sarvex-runtime",
  "serde",
  "serde_json",
