@@ -132,7 +132,7 @@ impl Position for PositionService {
         if request.user_id.trim().is_empty() || request.ticker.trim().is_empty() {
             return Err(Status::invalid_argument("user_id and ticker are required"));
         }
-        let row = sqlx::query(POSITION_SELECT)
+        let row = sqlx::query(POSITION_SELECT_BY_USER_TICKER)
             .bind(&request.user_id)
             .bind(&request.ticker)
             .fetch_optional(&self.pool)
@@ -207,6 +207,7 @@ impl Position for PositionService {
 }
 
 const POSITION_SELECT: &str = "SELECT user_id, ticker, net_qty, avg_cost_micro_usdc, realized_pnl_micro_usdc, unrealized_pnl_micro_usdc, updated_at, last_global_seq FROM position.positions";
+const POSITION_SELECT_BY_USER_TICKER: &str = "SELECT user_id, ticker, net_qty, avg_cost_micro_usdc, realized_pnl_micro_usdc, unrealized_pnl_micro_usdc, updated_at, last_global_seq FROM position.positions WHERE user_id=$1 AND ticker=$2";
 const POSITION_SELECT_USER: &str = "SELECT user_id, ticker, net_qty, avg_cost_micro_usdc, realized_pnl_micro_usdc, unrealized_pnl_micro_usdc, updated_at, last_global_seq FROM position.positions WHERE user_id=$1 ORDER BY ticker";
 
 fn position_from_row(row: &sqlx::postgres::PgRow) -> UserPosition {
