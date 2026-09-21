@@ -2,7 +2,7 @@ FROM debian:bookworm AS builder
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-       ca-certificates cmake g++ make pkg-config protobuf-compiler \
+       ca-certificates cmake g++ make pkg-config protobuf-compiler protobuf-compiler-grpc \
        libprotobuf-dev libgrpc++-dev \
     && rm -rf /var/lib/apt/lists/*
 
