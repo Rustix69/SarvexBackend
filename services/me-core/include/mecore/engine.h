@@ -85,6 +85,7 @@ struct AddBookResult : CommandMeta {
 struct CloseBookResult : CommandMeta {
   bool closed{false};
   std::string ticker;
+  std::string reject_code;
   uint64_t close_global_seq{0};
   uint64_t close_contract_seq{0};
 };

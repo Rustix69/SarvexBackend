@@ -50,32 +50,34 @@ SarvaOrder::SarvaOrder(std::string order_id, std::string user_id, std::string ho
 
 class Engine::Observer final
     : public liquibook::book::OrderListener<SarvaOrder*>,
-      public liquibook::book::TradeListener<Engine::Book>,
+      public liquibook::book::TradeListener<
+          liquibook::book::OrderBook<SarvaOrder*>>,
       public liquibook::book::DepthListener<Engine::Book> {
  public:
   explicit Observer(Engine* engine) : engine_(engine) {}
 
-  void on_accept(SarvaOrder* order) override { engine_->on_accept(order); }
-  void on_reject(SarvaOrder* order, const char* reason) override {
+  void on_accept(SarvaOrder* const& order) override { engine_->on_accept(order); }
+  void on_reject(SarvaOrder* const& order, const char* reason) override {
     engine_->on_reject(order, reason);
   }
-  void on_fill(SarvaOrder* order, SarvaOrder* matched_order,
+  void on_fill(SarvaOrder* const& order, SarvaOrder* const& matched_order,
                liquibook::book::Quantity quantity,
                liquibook::book::Price price) override {
     engine_->on_fill(order, matched_order, quantity, price);
   }
-  void on_cancel(SarvaOrder* order) override { engine_->on_cancel(order); }
-  void on_cancel_reject(SarvaOrder* order, const char* reason) override {
+  void on_cancel(SarvaOrder* const& order) override { engine_->on_cancel(order); }
+  void on_cancel_reject(SarvaOrder* const& order, const char* reason) override {
     engine_->on_cancel_reject(order, reason);
   }
-  void on_replace(SarvaOrder* order, const int64_t& size_delta,
+  void on_replace(SarvaOrder* const& order, const int64_t& size_delta,
                   liquibook::book::Price new_price) override {
     engine_->on_replace(order, size_delta, new_price);
   }
-  void on_replace_reject(SarvaOrder* order, const char* reason) override {
+  void on_replace_reject(SarvaOrder* const& order, const char* reason) override {
     engine_->on_replace_reject(order, reason);
   }
-  void on_trade(const Engine::Book*, liquibook::book::Quantity,
+  void on_trade(const liquibook::book::OrderBook<SarvaOrder*>*,
+                liquibook::book::Quantity,
                 liquibook::book::Price) override {}
   void on_depth_change(const Engine::Book* book, const Engine::DepthTracker* depth) override {
     engine_->on_depth_change(book, depth);
