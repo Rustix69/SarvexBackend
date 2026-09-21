@@ -32,9 +32,9 @@ add_custom_command(
   OUTPUT ${GENERATED_FILES}
   COMMAND ${CMAKE_COMMAND} -E make_directory "${GENERATED_DIR}/sarvex/v1"
   COMMAND ${Protobuf_PROTOC_EXECUTABLE}
-    --proto_path="${PROTO_ROOT}"
-    --cpp_out="${GENERATED_DIR}"
-    --grpc_out="${GENERATED_DIR}"
+    --proto_path=${PROTO_ROOT}
+    --cpp_out=${GENERATED_DIR}
+    --grpc_out=${GENERATED_DIR}
     --plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>
     ${PROTO_FILES}
   DEPENDS ${PROTO_FILES} gRPC::grpc_cpp_plugin
