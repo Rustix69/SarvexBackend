@@ -41,19 +41,7 @@ services:
     volumes:
       - ./migrations:/migrations:ro
       - ./seeds:/seeds:ro
-    entrypoint: ["/bin/sh", "-lc"]
-    command: |
-      set -e
-      psql -h postgres -U sarvex -d sarvex -v ON_ERROR_STOP=1 -f /migrations/000001_refdata.up.sql
-      psql -h postgres -U sarvex -d sarvex -v ON_ERROR_STOP=1 -f /migrations/000002_ledger.up.sql
-      psql -h postgres -U sarvex -d sarvex -v ON_ERROR_STOP=1 -f /migrations/000003_risk.up.sql
-      psql -h postgres -U sarvex -d sarvex -v ON_ERROR_STOP=1 -f /migrations/000004_orders.up.sql
-      psql -h postgres -U sarvex -d sarvex -v ON_ERROR_STOP=1 -f /migrations/000005_execution_events.up.sql
-      psql -h postgres -U sarvex -d sarvex -v ON_ERROR_STOP=1 -f /migrations/000006_position_consumer.up.sql
-      psql -h postgres -U sarvex -d sarvex -v ON_ERROR_STOP=1 -f /migrations/000007_oracle_settlement.up.sql
-      psql -h postgres -U sarvex -d sarvex -v ON_ERROR_STOP=1 -f /migrations/000008_gateway_idempotency.up.sql
-      psql -h postgres -U sarvex -d sarvex -v ON_ERROR_STOP=1 -f /seeds/000001_refdata.sql
-      psql -h postgres -U sarvex -d sarvex -v ON_ERROR_STOP=1 -f /seeds/000002_risk.sql
+    entrypoint: ["/bin/sh", "/migrations/run.sh"]
 
   refdata-svc:
     build:
