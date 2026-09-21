@@ -111,6 +111,7 @@ function App() {
   const [balance, setBalance] = useState(null)
   const [positions, setPositions] = useState([])
   const [orders, setOrders] = useState([])
+  const [history, setHistory] = useState([])
   const [bookMarks, setBookMarks] = useState({})
   const [pinnedTickers, setPinnedTickers] = useState(() => {
     try {
@@ -221,6 +222,7 @@ function App() {
     setBalance(null)
     setPositions([])
     setOrders([])
+    setHistory([])
   }, [])
 
   const fetchMarketFills = useCallback(async (ticker) => {
@@ -300,16 +302,18 @@ function App() {
 
   const refreshPrivate = useCallback(async () => {
     if (!token) return
-    const [balanceBody, positionsBody, ordersBody] = await Promise.all([
+    const [balanceBody, positionsBody, ordersBody, historyBody] = await Promise.all([
       api('/v1/account/balance'),
-      api('/v1/positions?include_closed=true'),
-      api('/v1/orders?limit=20'),
+      api('/v1/positions?include_closed=false'),
+      api('/v1/orders?limit=500'),
+      api('/v1/account/history?limit=500').catch(() => ({ entries: [] })),
     ])
     const nextPositions = positionsBody?.positions || []
     const nextOrders = ordersBody?.orders || []
     setBalance(balanceBody)
     setPositions(nextPositions)
     setOrders(nextOrders)
+    setHistory(historyBody?.entries || [])
     refreshBookMarks(nextPositions, nextOrders).catch(() => {})
   }, [api, refreshBookMarks, token])
 
@@ -557,6 +561,7 @@ function App() {
           busy={busy}
           positions={positions}
           orders={orders}
+          history={history}
           marketPrices={marketPrices}
           marketByTicker={marketByTicker}
           selectedUser={selectedUser}
@@ -1353,10 +1358,17 @@ function PositionSnapshot({ position, mark, market, authed }) {
   )
 }
 
-function PortfolioPage({ balance, authed, busy, positions, orders, marketPrices, marketByTicker, selectedUser, onDeposit, onRefresh, onExitPosition }) {
+function PortfolioPage({ balance, authed, busy, positions, orders, history, marketPrices, marketByTicker, selectedUser, onDeposit, onRefresh, onExitPosition }) {
   const cash = balance?.cash_micro_usdc ?? balance?.cashMicroUsdc
   const held = balance?.held_micro_usdc ?? balance?.heldMicroUsdc
+  const total = balance?.total_micro_usdc ?? balance?.totalMicroUsdc ?? Number(cash || 0) + Number(held || 0)
+  const openPositions = positions.filter((position) => positionQty(position) !== 0)
   const livePnl = positions.reduce((total, position) => total + livePnlMicro(position, marketPrices[position.ticker] || 0, marketByTicker[position.ticker]), 0)
+  const realizedPnl = positions.reduce((total, position) => total + Number(position.realized_pnl_micro_usdc ?? position.realizedPnlMicroUsdc ?? 0), 0)
+  const openValue = openPositions.reduce((total, position) => total + positionValueMicro(position, marketPrices[position.ticker] || 0, marketByTicker[position.ticker]), 0)
+  const resolvedPositions = positions.filter((position) => Number(position.realized_pnl_micro_usdc ?? position.realizedPnlMicroUsdc ?? 0) !== 0)
+  const winningPositions = resolvedPositions.filter((position) => Number(position.realized_pnl_micro_usdc ?? position.realizedPnlMicroUsdc) > 0).length
+  const winRate = resolvedPositions.length ? `${Math.round((winningPositions / resolvedPositions.length) * 100)}%` : '--'
 
   return (
     <main className="portfolio-page">
@@ -1370,7 +1382,7 @@ function PortfolioPage({ balance, authed, busy, positions, orders, marketPrices,
 
       <section className="portfolio-account-strip">
         <div className="portfolio-account-name"><strong>{selectedUser.label}</strong><span>Demo account</span></div>
-        <PortfolioAccountMetric label="Portfolio" value={authed ? formatUSDC(cash) : '--'} />
+        <PortfolioAccountMetric label="Portfolio" value={authed ? formatUSDC(total) : '--'} />
         <PortfolioAccountMetric label="Positions" value={authed ? formatUSDC(held) : '--'} />
         <PortfolioAccountMetric label="Live PnL" value={authed ? formatSignedUSDC(livePnl) : '--'} tone={pnlClassName(livePnl)} />
         <PortfolioAccountMetric label="Orders" value={orders.length} />
@@ -1380,33 +1392,24 @@ function PortfolioPage({ balance, authed, busy, positions, orders, marketPrices,
       <section className="portfolio-workspace">
         <aside className="portfolio-metrics-rail">
           <div className="workspace-title">Metrics</div>
-          <div className="portfolio-winrate"><strong>0.0%</strong><span>Win Rate</span><em>{authed ? formatUSDC(livePnl) : '--'} <small>OW / OL</small></em></div>
-          <PortfolioRailMetric label="Realized PnL" value={authed ? formatSignedUSDC(0) : '--'} />
+          <div className="portfolio-winrate"><strong>{authed ? winRate : '--'}</strong><span>Win Rate</span><em>{authed ? formatSignedUSDC(livePnl) : '--'} <small>Live PnL</small></em></div>
+          <PortfolioRailMetric label="Realized PnL" value={authed ? formatSignedUSDC(realizedPnl) : '--'} tone={pnlClassName(realizedPnl)} />
           <PortfolioRailMetric label="Unrealized PnL" value={authed ? formatSignedUSDC(livePnl) : '--'} tone={pnlClassName(livePnl)} />
-          <PortfolioRailMetric label="Open Positions" value={positions.length} />
+          <PortfolioRailMetric label="Open Positions" value={openPositions.length} />
           <PortfolioRailMetric label="At Risk" value={authed ? formatUSDC(held) : '--'} />
-          <PortfolioRailMetric label="Open Value" value={authed ? formatUSDC(cash) : '--'} />
-          <PortfolioRailMetric label="Volume" value={orders.length} />
+          <PortfolioRailMetric label="Open Value" value={authed ? formatUSDC(openValue) : '--'} />
+          <PortfolioRailMetric label="Volume" value={orders.reduce((total, order) => total + Number(order.filled_count ?? order.filledCount ?? 0), 0)} />
         </aside>
 
         <section className="portfolio-calendar-panel">
           <div className="workspace-tabs"><button className="active" type="button">Calendar</button><button type="button">Chart</button><div className="workspace-tabs-spacer" /><button className="active" type="button">PnL</button><button type="button">Volume</button></div>
-          <PortfolioCalendar />
+          <PortfolioCalendar history={history} />
         </section>
-
-        <aside className="portfolio-referrals">
-          <div className="referrals-head"><strong>Referrals</strong><button type="button">+ New</button></div>
-          <PortfolioRailMetric label="Active" value="0" />
-          <PortfolioRailMetric label="Joined" value="0" />
-          <PortfolioRailMetric label="Left" value="0" />
-          <p>No invite codes yet.</p>
-          <div className="referral-art" aria-hidden="true" />
-        </aside>
       </section>
 
       <section className="portfolio-grid-page portfolio-data-panels">
         <div className="portfolio-panel">
-          <div className="panel-head"><h2>Positions</h2><span>{positions.length} total</span></div>
+          <div className="panel-head"><h2>Positions</h2><span>{openPositions.length} total</span></div>
           <div className="portfolio-table">
             <div className="portfolio-row positions-header"><span>Ticker</span><span>Net Qty</span><span>Avg</span><span>Mark</span><span>Live PnL</span><span>Realized</span><span>Action</span></div>
             {positions.length ? positions.map((position) => {
@@ -1461,19 +1464,28 @@ function PortfolioRailMetric({ label, value, tone = '' }) {
   return <div className="portfolio-rail-metric"><span>{label}</span><strong className={tone}>{value}</strong></div>
 }
 
-function PortfolioCalendar() {
+function PortfolioCalendar({ history }) {
   const today = new Date()
   const monthStart = new Date(today.getFullYear(), today.getMonth(), 1)
   const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate()
   const offset = (monthStart.getDay() + 6) % 7
   const cells = Array.from({ length: offset + daysInMonth }, (_, index) => index < offset ? null : index - offset + 1)
   while (cells.length % 7) cells.push(null)
+  const activityByDay = history.reduce((activity, entry) => {
+    if (!String(entry.account_code || '').endsWith(':CASH')) return activity
+    const date = new Date(entry.posted_at || 0)
+    if (Number.isNaN(date.getTime()) || date.getFullYear() !== today.getFullYear() || date.getMonth() !== today.getMonth()) return activity
+    const day = date.getDate()
+    const amount = Number(entry.amount_micro_usdc || 0) * (entry.direction === 'CR' ? 1 : -1)
+    activity[day] = (activity[day] || 0) + amount
+    return activity
+  }, {})
   return (
     <div className="portfolio-calendar">
       <div className="calendar-toolbar"><button type="button">‹</button><strong>{today.toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}</strong><button type="button">›</button><span>All⌄</span></div>
       <div className="calendar-weekdays">{['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day) => <span key={day}>{day}</span>)}</div>
-      <div className="calendar-grid">{cells.map((day, index) => <div className={day === today.getDate() ? 'calendar-day today' : 'calendar-day'} key={`${day || 'empty'}-${index}`}>{day && <><span>{day}</span>{day === today.getDate() && <small>+$0</small>}</>}</div>)}</div>
-      <div className="calendar-legend"><span><i className="loss" /> Loss</span><span><i className="profit" /> Profit</span><span><i className="best" /> Best</span></div>
+      <div className="calendar-grid">{cells.map((day, index) => <div className={day === today.getDate() ? 'calendar-day today' : 'calendar-day'} key={`${day || 'empty'}-${index}`}>{day && <><span>{day}</span>{activityByDay[day] !== undefined && <small className={activityByDay[day] >= 0 ? 'activity-positive' : 'activity-negative'}>{formatSignedUSDC(activityByDay[day])}</small>}</>}</div>)}</div>
+      <div className="calendar-legend"><span><i className="loss" /> Outflow</span><span><i className="profit" /> Inflow</span><span><i className="best" /> Activity</span></div>
     </div>
   )
 }
@@ -1856,6 +1868,16 @@ function livePnlMicro(position, markTicks, market) {
   const mark = Number(markTicks || 0) * 10000
   if (!avg || !mark) return 0
   return (mark - avg) * qty
+}
+
+function positionValueMicro(position, markTicks, market) {
+  const qty = Math.abs(positionQty(position))
+  const mark = Number(markTicks || 0)
+  if (!qty || !mark) return 0
+  if (isFutureMarket(market)) {
+    return qty * mark * Number(market?.multiplier_micro_usdc ?? market?.multiplierMicroUsdc ?? 10000)
+  }
+  return qty * mark * 10000
 }
 
 function pnlClassName(value) {

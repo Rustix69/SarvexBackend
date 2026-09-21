@@ -150,7 +150,12 @@ impl Position for PositionService {
         if request.user_id.trim().is_empty() {
             return Err(Status::invalid_argument("user_id is required"));
         }
-        let rows = sqlx::query(POSITION_SELECT_USER)
+        let query = if request.include_closed {
+            POSITION_SELECT_USER
+        } else {
+            POSITION_SELECT_OPEN_USER
+        };
+        let rows = sqlx::query(query)
             .bind(&request.user_id)
             .fetch_all(&self.pool)
             .await
@@ -209,6 +214,7 @@ impl Position for PositionService {
 const POSITION_SELECT: &str = "SELECT user_id, ticker, net_qty, avg_cost_micro_usdc, realized_pnl_micro_usdc, unrealized_pnl_micro_usdc, updated_at, last_global_seq FROM position.positions";
 const POSITION_SELECT_BY_USER_TICKER: &str = "SELECT user_id, ticker, net_qty, avg_cost_micro_usdc, realized_pnl_micro_usdc, unrealized_pnl_micro_usdc, updated_at, last_global_seq FROM position.positions WHERE user_id=$1 AND ticker=$2";
 const POSITION_SELECT_USER: &str = "SELECT user_id, ticker, net_qty, avg_cost_micro_usdc, realized_pnl_micro_usdc, unrealized_pnl_micro_usdc, updated_at, last_global_seq FROM position.positions WHERE user_id=$1 ORDER BY ticker";
+const POSITION_SELECT_OPEN_USER: &str = "SELECT user_id, ticker, net_qty, avg_cost_micro_usdc, realized_pnl_micro_usdc, unrealized_pnl_micro_usdc, updated_at, last_global_seq FROM position.positions WHERE user_id=$1 AND net_qty <> 0 ORDER BY ticker";
 
 fn position_from_row(row: &sqlx::postgres::PgRow) -> UserPosition {
     UserPosition {

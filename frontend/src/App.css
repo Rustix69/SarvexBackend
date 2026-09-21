@@ -1555,3 +1555,8 @@ body { background: #111113; }
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
 }
+
+/* Portfolio data is now two-pane; referrals are intentionally not part of the product surface. */
+.portfolio-workspace { grid-template-columns: 190px minmax(0, 1fr); }
+.calendar-day small.activity-positive { color: #5fd4c5; }
+.calendar-day small.activity-negative { color: #ff80ac; }
