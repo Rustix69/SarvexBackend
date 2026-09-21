@@ -301,7 +301,7 @@ impl RiskService {
     }
 
     async fn working_order_signed_qty(&self, user_id: &str, ticker: &str) -> Result<i64, Status> {
-        let row = sqlx::query("SELECT COALESCE(SUM(CASE WHEN side IN ('YES','LONG') THEN total_qty ELSE 0 END),0) AS buys, COALESCE(SUM(CASE WHEN side IN ('NO','SHORT') THEN total_qty ELSE 0 END),0) AS sells FROM risk.working_orders_summary WHERE user_id=$1 AND ticker=$2")
+        let row = sqlx::query("SELECT COALESCE(SUM(CASE WHEN side IN ('YES','LONG') THEN total_qty ELSE 0 END),0)::BIGINT AS buys, COALESCE(SUM(CASE WHEN side IN ('NO','SHORT') THEN total_qty ELSE 0 END),0)::BIGINT AS sells FROM risk.working_orders_summary WHERE user_id=$1 AND ticker=$2")
             .bind(user_id).bind(ticker).fetch_one(&self.pool).await.map_err(internal)?;
         Ok(row.get::<i64, _>("buys") - row.get::<i64, _>("sells"))
     }

@@ -197,7 +197,7 @@ impl Position for PositionService {
         if ticker.trim().is_empty() {
             return Err(Status::invalid_argument("ticker is required"));
         }
-        let row = sqlx::query("SELECT COALESCE(SUM(GREATEST(net_qty,0)),0) AS long_qty, COALESCE(SUM(GREATEST(-net_qty,0)),0) AS short_qty FROM position.positions WHERE ticker=$1").bind(&ticker).fetch_one(&self.pool).await.map_err(internal)?;
+        let row = sqlx::query("SELECT COALESCE(SUM(GREATEST(net_qty,0)),0)::BIGINT AS long_qty, COALESCE(SUM(GREATEST(-net_qty,0)),0)::BIGINT AS short_qty FROM position.positions WHERE ticker=$1").bind(&ticker).fetch_one(&self.pool).await.map_err(internal)?;
         Ok(Response::new(OpenInterest {
             ticker,
             total_open_long: row.get("long_qty"),
