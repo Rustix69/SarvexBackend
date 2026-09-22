@@ -1,4 +1,4 @@
-name: sarvex-rust-phase07
+name: sarvex-rust
 
 services:
   nats:

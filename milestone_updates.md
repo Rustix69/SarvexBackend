@@ -1,6 +1,6 @@
 # Milestone Updates
 
-## Trade Bots (In Progress)
+## Trade Bots (Deployed and Verified)
 
 - Added a dedicated Rust `trade-bots` service that defaults to 30 deterministic demo bots and clamps configuration to 20-50 bots.
 - Bots authenticate through the existing demo login route, receive idempotent demo funding, and submit orders through `gw-rest` so risk, holds, matching, fills, ledger posting, and event publication are exercised normally.
@@ -9,7 +9,9 @@
 - Added configurable gateway URL, bot count, funding, interval, rounds, and ticker filters through environment variables.
 - Added bounded passive depth configuration with `BOT_BOOK_LEVELS` (default `2`) so a large contract catalog does not consume all demo collateral.
 - Added a bot health endpoint through the shared Rust runtime and exposed it in Docker Compose on port `18090`.
-- Remaining verification: run the service against the live Compose/EC2 stack, confirm fills and positions, and tune funding/order rates for the deployed contract catalog.
+- Deployed from the pushed Rust backend to the live EC2 `sarvex-rust` Compose project.
+- Verified all 14 services are running and the public health endpoint returns HTTP 200 with zero non-running services.
+- Verified live PostgreSQL activity after rollout: 700 bot orders and 400 bot fills.
 
 ## Phase 09 (Rust REST Gateway Foundation) - In Progress
 
