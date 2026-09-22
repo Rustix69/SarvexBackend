@@ -410,8 +410,11 @@ async fn run_market_round(
     let taker_count = bots.len() - taker_start;
     let fair = fair_price(market, round, market_index);
     let step = price_step(market);
-    let buy_price = align_price(market, fair.saturating_add(step.saturating_mul(10)));
-    let sell_price = align_price(market, fair.saturating_sub(step.saturating_mul(10)));
+    // Cross only the nearest passive level. A wide IOC would sweep every
+    // quote in the eight-level demo book and make one side look empty.
+    let taker_distance = step.saturating_mul(2);
+    let buy_price = align_price(market, fair.saturating_add(taker_distance));
+    let sell_price = align_price(market, fair.saturating_sub(taker_distance));
     let count = order_count(market, round);
     let buy_bot = &bots[taker_start + ((round as usize + market_index) % taker_count)];
     let sell_bot = &bots[taker_start + ((round as usize + market_index + 1) % taker_count)];
