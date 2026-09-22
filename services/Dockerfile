@@ -7,7 +7,9 @@ RUN apt-get update \
 WORKDIR /app
 COPY services ./services
 COPY proto ./proto
-RUN cargo build --manifest-path services/Cargo.toml --release --workspace
+ARG SERVICE
+RUN test -n "$SERVICE"
+RUN cargo build --manifest-path services/Cargo.toml --release -p "$SERVICE"
 
 FROM debian:bookworm-slim
 RUN apt-get update \
