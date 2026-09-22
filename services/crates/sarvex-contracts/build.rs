@@ -4,7 +4,7 @@ fn main() {
     let protoc = protoc_bin_vendored::protoc_bin_path().expect("protoc binary");
     std::env::set_var("PROTOC", protoc);
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
-    let proto_root = manifest_dir.join("../../../backend-old/proto");
+    let proto_root = manifest_dir.join("../../../proto");
     let files = [
         "sarvex/v1/audit.proto",
         "sarvex/v1/common.proto",

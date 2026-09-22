@@ -16,3 +16,4 @@ run_sql /migrations/000007_oracle_settlement.up.sql
 run_sql /migrations/000008_gateway_idempotency.up.sql
 run_sql /seeds/000001_refdata.sql
 run_sql /seeds/000002_risk.sql
+run_sql /seeds/000003_trade_bots.sql

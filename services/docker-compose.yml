@@ -319,6 +319,30 @@ services:
       - "15058:50058"
       - "18089:8089"
 
+  trade-bots:
+    build:
+      context: ..
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE: trade-bots
+    environment:
+      GW_REST_URL: http://gw-rest:18080
+      BOT_COUNT: ${BOT_COUNT:-30}
+      BOT_FUND_USDC: ${BOT_FUND_USDC:-100000}
+      BOT_BOOK_LEVELS: ${BOT_BOOK_LEVELS:-2}
+      BOT_INTERVAL_MS: ${BOT_INTERVAL_MS:-1000}
+      BOT_ROUNDS: ${BOT_ROUNDS:-0}
+      BOT_TICKERS: ${BOT_TICKERS:-}
+      HTTP_PORT: 8090
+      RUST_LOG: info
+    depends_on:
+      gw-rest:
+        condition: service_started
+      refdata-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "18090:8090"
+
 volumes:
   phase01_postgres:
   phase01_nats:

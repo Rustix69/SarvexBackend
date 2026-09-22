@@ -6,8 +6,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 get_filename_component(SARVEX_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
-set(PROTO_ROOT "${SARVEX_REPO_ROOT}/backend-old/proto")
-set(LIQUIBOOK_ROOT "${SARVEX_REPO_ROOT}/backend-old/liquibook/src")
+set(PROTO_ROOT "${SARVEX_REPO_ROOT}/proto")
+set(LIQUIBOOK_ROOT "${SARVEX_REPO_ROOT}/third_party/liquibook/src")
 set(GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY "${GENERATED_DIR}")
 

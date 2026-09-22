@@ -6,7 +6,7 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY services ./services
-COPY backend-old/proto ./backend-old/proto
+COPY proto ./proto
 
 RUN cargo build --manifest-path services/Cargo.toml --release -p refdata-svc
 

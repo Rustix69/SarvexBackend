@@ -6,11 +6,12 @@ Sarvex contains the existing frontend and a Rust rebuild of the backend.
 
 - `frontend/` - existing Vite frontend.
 - `services/` - new Rust backend workspace.
-- `backend-old/` - archived Go/C++ backend, protobufs, Liquibook integration, database migrations, and deployment files.
+- `proto/` - frozen protobuf contracts used by the Rust services and C++ matching engine.
+- `third_party/liquibook/` - Liquibook source used by `services/me-core`.
 - `planning.md` - implementation roadmap.
 - `milestone_updates.md` - completed milestone notes.
 
-The Rust rebuild preserves the existing service boundaries and uses the archived protobuf contracts as its initial internal API reference.
+The Rust backend preserves the existing service boundaries and uses the frozen protobuf contracts as its internal API reference.
 
 ## Phase 01
 

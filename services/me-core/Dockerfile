@@ -7,8 +7,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-COPY backend-old/liquibook ./backend-old/liquibook
-COPY backend-old/proto ./backend-old/proto
+COPY third_party/liquibook ./third_party/liquibook
+COPY proto ./proto
 COPY services/me-core ./services/me-core
 
 RUN cmake -S services/me-core -B build -DCMAKE_BUILD_TYPE=Release \

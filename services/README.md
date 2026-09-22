@@ -1,6 +1,6 @@
 # Sarvex Rust Services
 
-This directory is the new backend workspace. The previous Go/C++ implementation is preserved under `../backend-old/`.
+This directory is the Sarvex backend workspace. Frozen protobuf contracts live in `../proto/`, and Liquibook is retained under `../third_party/liquibook/` for the C++ matching engine build.
 
 ## Rust local stack
 

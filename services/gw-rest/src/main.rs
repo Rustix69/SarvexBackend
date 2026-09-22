@@ -221,6 +221,7 @@ async fn health_overview() -> impl IntoResponse {
         ("oracle-svc", "backend", "oracle-svc:8088"),
         ("settlement-svc", "backend", "settlement-svc:8089"),
         ("gw-ws", "backend", "gw-ws:8082"),
+        ("trade-bots", "backend", "trade-bots:8090"),
     ];
     let mut checks = JoinSet::new();
     for (name, kind, target) in targets {

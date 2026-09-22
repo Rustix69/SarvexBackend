@@ -1,5 +1,16 @@
 # Milestone Updates
 
+## Trade Bots (In Progress)
+
+- Added a dedicated Rust `trade-bots` service that defaults to 30 deterministic demo bots and clamps configuration to 20-50 bots.
+- Bots authenticate through the existing demo login route, receive idempotent demo funding, and submit orders through `gw-rest` so risk, holds, matching, fills, ledger posting, and event publication are exercised normally.
+- Added deterministic demo risk-limit seeds for `u_bot_001` through `u_bot_050`.
+- Added passive bid/ask book seeding for open binary and scalar contracts, followed by crossing IOC orders to create visible fills and market-data activity.
+- Added configurable gateway URL, bot count, funding, interval, rounds, and ticker filters through environment variables.
+- Added bounded passive depth configuration with `BOT_BOOK_LEVELS` (default `2`) so a large contract catalog does not consume all demo collateral.
+- Added a bot health endpoint through the shared Rust runtime and exposed it in Docker Compose on port `18090`.
+- Remaining verification: run the service against the live Compose/EC2 stack, confirm fills and positions, and tune funding/order rates for the deployed contract catalog.
+
 ## Phase 09 (Rust REST Gateway Foundation) - In Progress
 
 - Replaced the REST gateway health-only implementation with protobuf-backed delegation to refdata, order-router, ledger, and position services.
@@ -58,7 +69,7 @@
 - Added explicit timeout semantics: local timeout and unavailable/deadline responses remain `OutcomeUnknown`; they are never treated as terminal order rejection. `RESOURCE_EXHAUSTED` remains distinguishable as a pre-enqueue queue-full rejection.
 - Added client tests for flag mapping, side/action determinism, unknown outcomes, and queue-full classification.
 - Wired `me-core-adapter` to initialize the typed client from `ME_CORE_ADDR` and `ME_CORE_TIMEOUT_MS` while retaining its health endpoint.
-- Added the adapter to `services/docker-compose.yml` without pretending that the archived C++ process already exposes a gRPC server.
+- Added the adapter to `services/docker-compose.yml` without moving matching ownership out of the active C++ process.
 - Fixed the shared Rust health runtime JSON response to serialize its `Arc<str>` service name correctly under the current serde version.
 - Rust formatting, workspace compilation, strict Clippy, and all workspace tests pass.
 - Remaining Phase 04 work: expose the frozen MatchingEngine gRPC server from the preserved C++ Liquibook process, then add cross-language submit/cancel/snapshot integration tests. No matching state, ledger posting, NATS publishing, or replay logic was moved into the adapter.
@@ -101,12 +112,12 @@
 - Rust formatting, compilation, strict Clippy, and workspace tests pass. PostgreSQL integration and Docker bring-up remain environment-blocked by unavailable local PostgreSQL/Docker daemon access.
 
 ## Phase 01 (Rust Backend Workspace and Refdata Foundation) - Completed
-- Archived the existing Go/C++ backend under `backend-old/` with Git moves; `frontend/` was left in place and unchanged.
-- Moved the legacy backend services, protobufs, Liquibook source, database migrations/seeds, deployment files, scripts, and root backend configuration into `backend-old/`.
+- Archived the existing Go/C++ backend during the initial rebuild; the obsolete legacy application code has now been removed while `frontend/` remains unchanged.
+- Retained the frozen protobuf contracts under root `proto/` and the Liquibook source under `third_party/liquibook/` because the active Rust and C++ builds still depend on them.
 - Created the new Rust workspace under `services/` with shared crates for protobuf contracts, domain types, PostgreSQL access, events, and service runtime health endpoints.
 - Added compilable Rust service boundaries for `gw-rest`, `gw-ws`, `order-router`, `risk-svc`, `position-svc`, `refdata-svc`, `oracle-svc`, `settlement-svc`, `audit-svc`, `admin-svc`, and `me-core-adapter`.
 - Added the planned `ledger-svc` health-only service boundary.
-- Added Rust protobuf generation sourced from the archived `backend-old/proto` files without changing protobuf semantics.
+- Added Rust protobuf generation sourced from the frozen root `proto/` files without changing protobuf semantics.
 - Implemented SQLx-backed `refdata-svc` gRPC listing, lookup, state filtering, cursor pagination, event lookup, and transactional state transition support.
 - Implemented the Phase 01 Axum REST gateway endpoints `GET /v1/markets` and `GET /v1/markets/:ticker`.
 - Added clean Phase 01 refdata migration and deterministic seed data with resolved TASI, Nikkei, TTF, and 2028 nominee values.
