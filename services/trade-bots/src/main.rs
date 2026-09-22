@@ -71,6 +71,13 @@ struct OrderRequest {
 struct OrderOutcome {
     accepted: bool,
     fill_count: usize,
+    order_id: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct LiveOrder {
+    bot: Bot,
+    order_id: String,
 }
 
 #[tokio::main]
@@ -162,6 +169,7 @@ async fn run_worker(client: Client, config: Config) -> Result<()> {
     };
     let mut round = 0_u64;
     let mut markets = Vec::new();
+    let mut live_quotes = Vec::new();
 
     loop {
         if markets.is_empty() {
@@ -182,18 +190,19 @@ async fn run_worker(client: Client, config: Config) -> Result<()> {
                 markets = markets.len(),
                 "trade bots discovered open markets"
             );
-            seed_books(
-                &client,
-                &config.rest_url,
-                &bots,
-                &markets,
-                round,
-                config.book_levels,
-            )
-            .await;
         }
 
         round = round.saturating_add(1);
+        cancel_live_quotes(&client, &config.rest_url, &mut live_quotes).await;
+        live_quotes = seed_books(
+            &client,
+            &config.rest_url,
+            &bots,
+            &markets,
+            round,
+            config.book_levels,
+        )
+        .await;
         let mut submissions = 0_usize;
         let mut fills = 0_usize;
         for (market_index, market) in markets.iter().enumerate() {
@@ -308,9 +317,10 @@ async fn seed_books(
     markets: &[Market],
     round: u64,
     book_levels: usize,
-) {
+) -> Vec<LiveOrder> {
     let maker_count = bots.len() / 3;
     let levels = maker_count.min(book_levels);
+    let mut live_quotes = Vec::new();
     for (market_index, market) in markets.iter().enumerate() {
         let fair = fair_price(market, round, market_index);
         let step = price_step(market);
@@ -321,7 +331,7 @@ async fn seed_books(
             let count = order_count(market, round + level as u64);
             let bid_bot = &bots[(level - 1) % maker_count];
             let ask_bot = &bots[maker_count + ((level - 1) % maker_count)];
-            let _ = submit_order(
+            let bid_outcome = submit_order(
                 client,
                 rest_url,
                 bid_bot,
@@ -334,7 +344,7 @@ async fn seed_books(
                 "GTC",
             )
             .await;
-            let _ = submit_order(
+            let ask_outcome = submit_order(
                 client,
                 rest_url,
                 ask_bot,
@@ -347,6 +357,42 @@ async fn seed_books(
                 "GTC",
             )
             .await;
+            if let Some(order_id) = bid_outcome.order_id {
+                live_quotes.push(LiveOrder {
+                    bot: bid_bot.clone(),
+                    order_id,
+                });
+            }
+            if let Some(order_id) = ask_outcome.order_id {
+                live_quotes.push(LiveOrder {
+                    bot: ask_bot.clone(),
+                    order_id,
+                });
+            }
+        }
+    }
+    live_quotes
+}
+
+async fn cancel_live_quotes(client: &Client, rest_url: &str, live_quotes: &mut Vec<LiveOrder>) {
+    let previous = std::mem::take(live_quotes);
+    for quote in previous {
+        let key = format!("bot-quote-cancel-v1:{}", quote.order_id);
+        let result = client
+            .post(format!("{rest_url}/v1/orders/{}/cancel", quote.order_id))
+            .bearer_auth(&quote.bot.token)
+            .header("Idempotency-Key", key)
+            .send()
+            .await;
+        if let Ok(response) = result {
+            if !response.status().is_success() {
+                tracing::debug!(
+                    user = %quote.bot.user_id,
+                    order_id = %quote.order_id,
+                    status = %response.status(),
+                    "quote cancellation was not accepted"
+                );
+            }
         }
     }
 }
@@ -408,7 +454,7 @@ async fn submit_order(
         price_ticks,
         count,
         tif,
-        post_only: false,
+        post_only: tif == "GTC",
         reduce_only: false,
         stp: "TAKER_AT_CROSS",
     };
@@ -436,6 +482,11 @@ async fn submit_order(
                         .get("fills")
                         .and_then(|value| value.as_array())
                         .map_or(0, Vec::len),
+                    order_id: response
+                        .get("order")
+                        .and_then(|value| value.get("order_id"))
+                        .and_then(|value| value.as_str())
+                        .map(str::to_owned),
                 }
             }
         }

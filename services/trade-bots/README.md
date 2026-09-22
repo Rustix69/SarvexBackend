@@ -13,10 +13,19 @@ Useful environment variables:
 
 - `BOT_COUNT`: 20-50, default `30`.
 - `BOT_FUND_USDC`: idempotent demo funding per bot, default `100000`.
-- `BOT_BOOK_LEVELS`: passive levels per side, default `2`.
-- `BOT_INTERVAL_MS`: delay between rounds, default `1000`.
+- `BOT_BOOK_LEVELS`: passive levels per side, default `1`.
+- `BOT_INTERVAL_MS`: delay between rounds, default `5000`. The bot cancels and replaces
+  its previous passive quotes each round so every open workbook contract keeps a
+  visible, moving book without unbounded order growth.
 - `BOT_ROUNDS`: finite rounds for a test run; `0` means continuous.
 - `BOT_TICKERS`: optional comma-separated allowlist of open tickers.
+
+The initial catalog is seeded from the authoritative `Contracts.xlsx` workbook by
+`services/seeds/000004_contract_catalog.sql`. Sports rows are intentionally excluded
+from the Sarvex catalog. Workbook template rows are represented by deterministic demo
+instances so the API never returns unresolved `<K>`, `<candidate>`, or rolling-window
+placeholders. The full non-sports catalog contains 49 binary contracts and 47 scalar
+futures contracts.
 
 For a bounded local run against an already running stack:
 

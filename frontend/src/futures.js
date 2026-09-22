@@ -1,6 +1,16 @@
 // These fallbacks describe the existing demo tick encoding, not workbook terms.
 // Changing a contract's encoding requires a coordinated refdata/book migration.
 export function futureMeta(market = {}) {
+  const workbookEncoding = market.settlement_rule?.encoding || market.settlementRule?.encoding
+  if (workbookEncoding && Number(workbookEncoding.divider) > 0) {
+    return {
+      divider: Number(workbookEncoding.divider),
+      decimals: Number(workbookEncoding.decimals || 0),
+      prefix: workbookEncoding.prefix || '',
+      suffix: workbookEncoding.suffix || '',
+      compactThousands: Boolean(workbookEncoding.compactThousands),
+    }
+  }
   const ticker = String(market.ticker || '').toUpperCase()
   const text = `${ticker} ${market.underlying || ''} ${market.question || ''}`.toUpperCase()
   if (/BTC|BITCOIN|ETHEREUM|\bETH\b|SXF-ETHD/.test(text)) return { divider: 1, decimals: 0, prefix: '$', compactThousands: true }

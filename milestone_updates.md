@@ -2,12 +2,19 @@
 
 ## Trade Bots (Deployed and Verified)
 
+- Replaced the provisional frontend-derived contract seed with `services/seeds/000004_contract_catalog.sql`, generated from the authoritative root `Contracts.xlsx` workbook.
+- Seeded 96 concrete non-sports contracts from the workbook: 49 binary contracts and 47 scalar futures, with 49 paired events and full workbook terms retained in `settlement_rule`.
+- Resolved workbook templates for the demo catalog: TASI `K=11,500`, Nikkei `K=42,000`, TTF `K=35 EUR/MWh`, the `JOSS` presidential candidate as Josh Shapiro, and one deterministic BTC rolling-window instance.
+- Marked the prior provisional `CAT-*` catalog and unresolved presidential ticker cancelled so they cannot appear in the open-market API.
+- Added live-only contract merging and workbook metadata extraction in the frontend, so API contracts absent from the older static catalog still appear with correct categories and filtering.
+- Added per-contract futures price encoding metadata and made the frontend use it for display, input validation, and chart conversion.
+- Changed the default bot cycle to one passive level and a five-second cancel/requote interval to maintain depth across the full catalog without unbounded order growth.
 - Added a dedicated Rust `trade-bots` service that defaults to 30 deterministic demo bots and clamps configuration to 20-50 bots.
 - Bots authenticate through the existing demo login route, receive idempotent demo funding, and submit orders through `gw-rest` so risk, holds, matching, fills, ledger posting, and event publication are exercised normally.
 - Added deterministic demo risk-limit seeds for `u_bot_001` through `u_bot_050`.
 - Added passive bid/ask book seeding for open binary and scalar contracts, followed by crossing IOC orders to create visible fills and market-data activity.
 - Added configurable gateway URL, bot count, funding, interval, rounds, and ticker filters through environment variables.
-- Added bounded passive depth configuration with `BOT_BOOK_LEVELS` (default `2`) so a large contract catalog does not consume all demo collateral.
+- Added bounded passive depth configuration with `BOT_BOOK_LEVELS` (default `1`) so a large contract catalog does not consume all demo collateral.
 - Added a bot health endpoint through the shared Rust runtime and exposed it in Docker Compose on port `18090`.
 - Deployed from the pushed Rust backend to the live EC2 `sarvex-rust` Compose project.
 - Verified all 14 services are running and the public health endpoint returns HTTP 200 with zero non-running services.

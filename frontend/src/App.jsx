@@ -241,17 +241,21 @@ function App() {
     setError('')
     let nextMarkets = marketsRef.current
     let nextFutures = futuresRef.current
-    let liveContracts = []
     const shouldRefreshMarkets = refreshMarkets || !nextMarkets.length || !nextFutures.length || Date.now() - lastMarketListRefreshRef.current > MARKET_LIST_REFRESH_MS
     if (shouldRefreshMarkets) {
       // The refdata API permits up to 200 contracts; load the complete MVP
       // catalog so cards are not incorrectly treated as catalog-only.
       const marketBody = await api('/v1/markets?state=OPEN&limit=200', { auth: false })
-      liveContracts = marketBody?.contracts || []
+      const liveContracts = marketBody?.contracts || []
       const catalogContracts = contractsCatalog.map(catalogMarket)
       const liveByTicker = new Map(liveContracts.map((market) => [market.ticker, market]))
-      const mergedContracts = catalogContracts
+      const mergedCatalog = catalogContracts
         .map((market) => ({ ...market, ...(liveByTicker.get(market.ticker) || {}), catalogOnly: !liveByTicker.has(market.ticker) }))
+      const catalogTickers = new Set(catalogContracts.map((market) => market.ticker))
+      const liveOnlyContracts = liveContracts
+        .filter((market) => !catalogTickers.has(market.ticker))
+        .map((market) => ({ ...market, ...workbookMetadata(market), catalogOnly: false }))
+      const mergedContracts = [...mergedCatalog, ...liveOnlyContracts]
         .map(resolveDemoContractQuestion)
       const nonSportsContracts = mergedContracts.filter((market) => !isSportsMarket(market))
       nextMarkets = nonSportsContracts
@@ -1603,7 +1607,7 @@ function cardMarketTitle(market) {
 }
 
 function contractSection(market) {
-  const category = String(market?.category || '').trim()
+  const category = String(market?.category || workbookMetadata(market).category || '').trim()
   const normalized = category.toLowerCase()
   const identity = `${market?.ticker || ''} ${market?.question || ''} ${market?.underlying || ''}`.toLowerCase()
   if (normalized.startsWith('economics')) return 'Economics'
@@ -1635,7 +1639,18 @@ function scalarCardColor(market) {
 }
 
 function isSportsMarket(market) {
-  return String(market?.category || '').startsWith('Sports')
+  return String(market?.category || workbookMetadata(market).category || '').startsWith('Sports')
+}
+
+function workbookMetadata(market) {
+  const rule = market?.settlement_rule || market?.settlementRule || {}
+  return {
+    category: rule.category || '',
+    subcategory: rule.subcategory || '',
+    region: rule.region || '',
+    pair_id: rule.pair_id || '',
+    launch_priority: rule.priority || '',
+  }
 }
 
 function marketMatchesSearch(market, query) {
