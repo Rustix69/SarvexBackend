@@ -400,6 +400,22 @@ async fn submit_order(
         .as_deref()
         .or(input.type_alias.as_deref())
         .is_some_and(|value| value.eq_ignore_ascii_case("market"));
+    let price_ticks = if market {
+        let contract = match state
+            .refdata
+            .clone()
+            .get_contract(GetContractRequest {
+                ticker: input.ticker.clone(),
+            })
+            .await
+        {
+            Ok(contract) => contract.into_inner(),
+            Err(error) => return grpc_error(error),
+        };
+        market_protection_price(side, action, &contract)
+    } else {
+        input.price_ticks
+    };
     let expires_at = match input.expires_at.as_deref() {
         Some(value) => match parse_timestamp(value) {
             Ok(value) => value,
@@ -420,7 +436,7 @@ async fn submit_order(
         ticker: input.ticker,
         side,
         action,
-        price_ticks: if market { 0 } else { input.price_ticks },
+        price_ticks,
         count: input.count,
         tif: if market {
             TimeInForce::Ioc as i32
@@ -857,6 +873,17 @@ fn action_value(value: &str) -> Option<i32> {
         _ => None,
     }
 }
+
+fn market_protection_price(side: i32, action: i32, contract: &Contract) -> i64 {
+    let side_is_positive = side == Side::Yes as i32 || side == Side::Long as i32;
+    let action_is_buy = action == Action::Buy as i32;
+    if side_is_positive == action_is_buy {
+        contract.max_price_ticks
+    } else {
+        contract.min_price_ticks
+    }
+}
+
 fn tif_value(value: &str) -> i32 {
     match value.trim().to_ascii_uppercase().as_str() {
         "IOC" => TimeInForce::Ioc as i32,
