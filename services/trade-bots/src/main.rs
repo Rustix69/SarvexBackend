@@ -123,7 +123,7 @@ impl Config {
         let interval_ms = env::var("BOT_INTERVAL_MS")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(1_000)
+            .unwrap_or(10_000)
             .max(100);
         let rounds = env::var("BOT_ROUNDS")
             .ok()
@@ -132,7 +132,7 @@ impl Config {
         let book_levels = env::var("BOT_BOOK_LEVELS")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(2)
+            .unwrap_or(8)
             .clamp(1, 8);
         let rest_url = env::var("GW_REST_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:18080".to_owned())
