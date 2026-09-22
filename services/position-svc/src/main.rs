@@ -45,6 +45,7 @@ struct WireFill {
     maker_user_id: String,
     taker_user_id: String,
     count: i64,
+    price_ticks: i64,
     maker_side: i32,
     maker_action: i32,
     taker_side: i32,
@@ -350,6 +351,7 @@ async fn apply_fill_record(
             maker_user_id: fill.maker_user_id.clone(),
             taker_user_id: fill.taker_user_id.clone(),
             count: fill.count,
+            price_ticks: fill.price_ticks,
             maker_side: fill.maker_side,
             maker_action: fill.maker_action,
             taker_side: fill.taker_side,
@@ -386,6 +388,8 @@ async fn apply_fill(pool: &PgPool, event: &WireEnvelope) -> Result<(), Status> {
                 event.payload.maker_action,
                 event.payload.count,
             ),
+            event.payload.maker_side,
+            event.payload.price_ticks,
             global_seq,
         )
         .await?;
@@ -398,6 +402,8 @@ async fn apply_fill(pool: &PgPool, event: &WireEnvelope) -> Result<(), Status> {
                 event.payload.taker_action,
                 event.payload.count,
             ),
+            event.payload.taker_side,
+            event.payload.price_ticks,
             global_seq,
         )
         .await?;
@@ -412,13 +418,112 @@ async fn apply_position_delta(
     user_id: &str,
     ticker: &str,
     delta: i64,
+    side: i32,
+    price_ticks: i64,
     global_seq: i64,
 ) -> Result<(), Status> {
     if user_id.trim().is_empty() || delta == 0 {
         return Ok(());
     }
-    sqlx::query("INSERT INTO position.positions (user_id, ticker, net_qty, last_global_seq) VALUES ($1,$2,$3,$4) ON CONFLICT (user_id,ticker) DO UPDATE SET net_qty=position.positions.net_qty+EXCLUDED.net_qty, last_global_seq=GREATEST(position.positions.last_global_seq,EXCLUDED.last_global_seq), updated_at=now()").bind(user_id).bind(ticker).bind(delta).bind(global_seq).execute(&mut **tx).await.map_err(internal)?;
+    let current = sqlx::query(
+        "SELECT net_qty, avg_cost_micro_usdc, realized_pnl_micro_usdc FROM position.positions WHERE user_id=$1 AND ticker=$2 FOR UPDATE",
+    )
+    .bind(user_id)
+    .bind(ticker)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(internal)?;
+    let (current_qty, current_avg_micro, current_realized_micro) = current
+        .map(|row| {
+            (
+                row.get::<i64, _>("net_qty"),
+                row.get::<i64, _>("avg_cost_micro_usdc"),
+                row.get::<i64, _>("realized_pnl_micro_usdc"),
+            )
+        })
+        .unwrap_or((0, 0, 0));
+    let trade_price_ticks = normalized_position_price(side, price_ticks);
+    let trade_price_micro = trade_price_ticks.saturating_mul(10_000);
+    let (next_qty, next_avg_micro, next_realized_micro) = update_cost_basis(
+        current_qty,
+        current_avg_micro,
+        current_realized_micro,
+        delta,
+        trade_price_micro,
+    );
+    sqlx::query("INSERT INTO position.positions (user_id, ticker, net_qty, avg_cost_micro_usdc, realized_pnl_micro_usdc, last_global_seq) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (user_id,ticker) DO UPDATE SET net_qty=EXCLUDED.net_qty, avg_cost_micro_usdc=EXCLUDED.avg_cost_micro_usdc, realized_pnl_micro_usdc=EXCLUDED.realized_pnl_micro_usdc, last_global_seq=GREATEST(position.positions.last_global_seq,EXCLUDED.last_global_seq), updated_at=now()")
+        .bind(user_id)
+        .bind(ticker)
+        .bind(next_qty)
+        .bind(next_avg_micro)
+        .bind(next_realized_micro)
+        .bind(global_seq)
+        .execute(&mut **tx)
+        .await
+        .map_err(internal)?;
     Ok(())
+}
+
+fn normalized_position_price(side: i32, price_ticks: i64) -> i64 {
+    if side == sarvex_contracts::sarvex::v1::Side::No as i32 {
+        100_i64.saturating_sub(price_ticks)
+    } else {
+        price_ticks
+    }
+}
+
+fn update_cost_basis(
+    current_qty: i64,
+    current_avg_micro: i64,
+    current_realized_micro: i64,
+    delta: i64,
+    trade_price_micro: i64,
+) -> (i64, i64, i64) {
+    let next_qty = current_qty.saturating_add(delta);
+    if current_qty == 0 {
+        return (next_qty, trade_price_micro, current_realized_micro);
+    }
+
+    // A zero cost basis can exist in rows created by the pre-PnL consumer. Treat
+    // the first subsequent fill as a recovery anchor instead of compounding zero.
+    if current_avg_micro == 0 {
+        return (
+            next_qty,
+            if next_qty == 0 { 0 } else { trade_price_micro },
+            current_realized_micro,
+        );
+    }
+
+    if current_qty.signum() == delta.signum() {
+        let old_abs = current_qty.unsigned_abs();
+        let delta_abs = delta.unsigned_abs();
+        let total_abs = old_abs.saturating_add(delta_abs);
+        let weighted = current_avg_micro
+            .unsigned_abs()
+            .saturating_mul(old_abs)
+            .saturating_add(trade_price_micro.unsigned_abs().saturating_mul(delta_abs));
+        let next_avg = weighted.checked_div(total_abs).unwrap_or_default() as i64;
+        return (next_qty, next_avg, current_realized_micro);
+    }
+
+    let closed_abs = current_qty.unsigned_abs().min(delta.unsigned_abs());
+    let price_difference = if current_qty > 0 {
+        trade_price_micro.saturating_sub(current_avg_micro)
+    } else {
+        current_avg_micro.saturating_sub(trade_price_micro)
+    };
+    let realized_delta = price_difference.saturating_mul(closed_abs as i64);
+    let next_realized = current_realized_micro.saturating_add(realized_delta);
+    let next_avg = if next_qty == 0 || current_qty.signum() != next_qty.signum() {
+        if next_qty == 0 {
+            0
+        } else {
+            trade_price_micro
+        }
+    } else {
+        current_avg_micro
+    };
+    (next_qty, next_avg, next_realized)
 }
 
 fn signed_delta(side: i32, action: i32, count: i64) -> i64 {
@@ -478,5 +583,24 @@ mod tests {
             ),
             -3
         );
+        assert_eq!(event.payload.price_ticks, 40);
+    }
+
+    #[test]
+    fn cost_basis_tracks_additions_and_closes() {
+        let (qty, avg, realized) = update_cost_basis(0, 0, 0, 10, 500_000);
+        assert_eq!((qty, avg, realized), (10, 500_000, 0));
+
+        let (qty, avg, realized) = update_cost_basis(qty, avg, realized, 10, 600_000);
+        assert_eq!((qty, avg, realized), (20, 550_000, 0));
+
+        let (qty, avg, realized) = update_cost_basis(qty, avg, realized, -5, 650_000);
+        assert_eq!((qty, avg, realized), (15, 550_000, 500_000));
+    }
+
+    #[test]
+    fn no_side_uses_yes_equivalent_price() {
+        assert_eq!(normalized_position_price(1, 60), 60);
+        assert_eq!(normalized_position_price(2, 60), 40);
     }
 }
