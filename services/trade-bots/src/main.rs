@@ -5,6 +5,9 @@ use std::{env, time::Duration};
 
 const MIN_BOTS: usize = 20;
 const MAX_BOTS: usize = 50;
+const MIN_BOOK_LEVELS: usize = 8;
+const MAX_BOOK_LEVELS: usize = 12;
+const DEFAULT_BOOK_LEVELS: usize = 10;
 
 #[derive(Clone, Debug)]
 struct Config {
@@ -34,6 +37,10 @@ struct Market {
     min_price_ticks: i64,
     #[serde(default)]
     max_price_ticks: i64,
+    #[serde(default)]
+    max_order_size: i64,
+    #[serde(default)]
+    position_limit_per_user: i64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -132,8 +139,7 @@ impl Config {
         let book_levels = env::var("BOT_BOOK_LEVELS")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(8)
-            .clamp(1, 8);
+            .unwrap_or(DEFAULT_BOOK_LEVELS);
         let rest_url = env::var("GW_REST_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:18080".to_owned())
             .trim_end_matches('/')
@@ -149,7 +155,7 @@ impl Config {
             rest_url,
             bot_count,
             funding_usdc,
-            book_levels,
+            book_levels: bounded_book_levels(book_levels),
             interval: Duration::from_millis(interval_ms),
             rounds,
             tickers,
@@ -374,7 +380,11 @@ async fn seed_books(
     book_levels: usize,
 ) -> Vec<LiveOrder> {
     let maker_count = bots.len() / 3;
-    let levels = maker_count.min(book_levels);
+    if maker_count == 0 {
+        tracing::warn!("trade bot book seeding skipped because no maker bots are available");
+        return Vec::new();
+    }
+    let levels = bounded_book_levels(book_levels);
     let mut live_quotes = Vec::new();
     for (market_index, market) in markets.iter().enumerate() {
         let fair = fair_price(market, round, market_index);
@@ -383,7 +393,7 @@ async fn seed_books(
             let distance = step.saturating_mul(level as i64);
             let bid = align_price(market, fair.saturating_sub(distance));
             let ask = align_price(market, fair.saturating_add(distance));
-            let count = order_count(market, round + level as u64);
+            let count = quote_count(market, round + level as u64);
             let bid_bot = &bots[(level - 1) % maker_count];
             let ask_bot = &bots[maker_count + ((level - 1) % maker_count)];
             let bid_outcome = submit_order(
@@ -470,7 +480,7 @@ async fn run_market_round(
     let taker_distance = step.saturating_mul(2);
     let buy_price = align_price(market, fair.saturating_add(taker_distance));
     let sell_price = align_price(market, fair.saturating_sub(taker_distance));
-    let count = order_count(market, round);
+    let count = quote_count(market, round);
     let buy_bot = &bots[taker_start + ((round as usize + market_index) % taker_count)];
     let sell_bot = &bots[taker_start + ((round as usize + market_index + 1) % taker_count)];
     let buy = submit_order(
@@ -582,12 +592,23 @@ fn price_step(market: &Market) -> i64 {
     market.tick_size.max(1)
 }
 
-fn order_count(market: &Market, value: u64) -> i64 {
-    if market.kind == 2 {
+fn bounded_book_levels(value: usize) -> usize {
+    value.clamp(MIN_BOOK_LEVELS, MAX_BOOK_LEVELS)
+}
+
+fn quote_count(market: &Market, value: u64) -> i64 {
+    let preferred = if market.kind == 2 {
         1
     } else {
         3 + (value % 4) as i64
-    }
+    };
+    let configured_limit = [market.max_order_size, market.position_limit_per_user]
+        .into_iter()
+        .filter(|limit| *limit > 0)
+        .min();
+    configured_limit
+        .map_or(preferred, |limit| preferred.min(limit))
+        .max(1)
 }
 
 fn fair_price(market: &Market, round: u64, market_index: usize) -> i64 {
@@ -628,6 +649,8 @@ mod tests {
             tick_size: 2,
             min_price_ticks: 1,
             max_price_ticks: 99,
+            max_order_size: 250_000,
+            position_limit_per_user: 100_000,
         }
     }
 
@@ -646,5 +669,24 @@ mod tests {
         assert_eq!(5_usize.clamp(MIN_BOTS, MAX_BOTS), 20);
         assert_eq!(30_usize.clamp(MIN_BOTS, MAX_BOTS), 30);
         assert_eq!(100_usize.clamp(MIN_BOTS, MAX_BOTS), 50);
+    }
+
+    #[test]
+    fn book_depth_is_bounded_to_eight_through_twelve_levels() {
+        assert_eq!(bounded_book_levels(1), MIN_BOOK_LEVELS);
+        assert_eq!(bounded_book_levels(10), 10);
+        assert_eq!(bounded_book_levels(99), MAX_BOOK_LEVELS);
+    }
+
+    #[test]
+    fn quote_count_respects_contract_limits() {
+        let mut market = market();
+        assert_eq!(quote_count(&market, 0), 3);
+
+        market.max_order_size = 2;
+        assert_eq!(quote_count(&market, 0), 2);
+
+        market.position_limit_per_user = 1;
+        assert_eq!(quote_count(&market, 0), 1);
     }
 }

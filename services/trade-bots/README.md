@@ -6,14 +6,15 @@ order routing, me-core matching, fill persistence, ledger posting, positions,
 and market-data publication through the normal exchange path.
 
 The service provisions deterministic users `u_bot_001` through `u_bot_050`.
-The default is 30 active bots, eight passive levels per side, and one buy plus
-one sell IOC attempt per open market each round.
+The default is 30 active bots, ten passive levels per side, and one buy plus
+one sell IOC attempt per open market each round. The configured passive depth is
+bounded to eight through twelve levels per side.
 
 Useful environment variables:
 
 - `BOT_COUNT`: 20-50, default `30`.
 - `BOT_FUND_USDC`: idempotent demo funding per bot, default `100000`.
-- `BOT_BOOK_LEVELS`: passive levels per side, default `8` and capped at `8`.
+- `BOT_BOOK_LEVELS`: passive levels per side, default `10`, bounded to `8..12`.
 - `BOT_INTERVAL_MS`: delay between rounds, default `10000`. The bot cancels and replaces
   its previous passive quotes each round so every open workbook contract keeps a
   visible, moving book without unbounded order growth.
