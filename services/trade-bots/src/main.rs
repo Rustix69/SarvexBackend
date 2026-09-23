@@ -490,16 +490,33 @@ async fn seed_books(
 }
 
 async fn load_order_book(client: &Client, rest_url: &str, ticker: &str) -> Option<OrderBook> {
-    client
-        .get(format!("{rest_url}/v1/markets/{ticker}/orderbook?depth=12"))
-        .send()
-        .await
-        .ok()?
-        .error_for_status()
-        .ok()?
-        .json()
-        .await
-        .ok()
+    let url = format!("{rest_url}/v1/markets/{ticker}/orderbook?depth=12");
+    let response = match client.get(&url).send().await {
+        Ok(response) => response,
+        Err(error) => {
+            tracing::warn!(ticker, error = %error, "order book request failed");
+            return None;
+        }
+    };
+    let status = response.status();
+    let body = match response.text().await {
+        Ok(body) => body,
+        Err(error) => {
+            tracing::warn!(ticker, error = %error, "order book response could not be read");
+            return None;
+        }
+    };
+    if !status.is_success() {
+        tracing::warn!(ticker, %status, "order book request returned an error");
+        return None;
+    }
+    match serde_json::from_str(&body) {
+        Ok(book) => Some(book),
+        Err(error) => {
+            tracing::warn!(ticker, error = %error, "order book response could not be decoded");
+            None
+        }
+    }
 }
 
 fn passive_bid_price(market: &Market, candidate: i64, best_ask: Option<&BookLevel>) -> Option<i64> {
