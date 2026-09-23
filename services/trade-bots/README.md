@@ -15,9 +15,10 @@ Useful environment variables:
 - `BOT_COUNT`: 20-50, default `30`.
 - `BOT_FUND_USDC`: idempotent demo funding per bot, default `100000`.
 - `BOT_BOOK_LEVELS`: passive levels per side, default `10`, bounded to `8..12`.
-- `BOT_INTERVAL_MS`: delay between rounds, default `10000`. The bot cancels and replaces
-  its previous passive quotes each round so every open workbook contract keeps a
-  visible, moving book without unbounded order growth.
+- `BOT_INTERVAL_MS`: delay between rounds, default `30000`.
+- `BOT_MARKETS_PER_ROUND`: number of new markets seeded per round, default `8`,
+  bounded to `1..16`. Quotes are retained after acceptance so the bot does not
+  cancel and recreate the entire catalog every cycle.
 - `BOT_ROUNDS`: finite rounds for a test run; `0` means continuous.
 - `BOT_TICKERS`: optional comma-separated allowlist of open tickers.
 

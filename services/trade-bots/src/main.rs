@@ -11,6 +11,7 @@ const MAX_BOTS: usize = 50;
 const MIN_BOOK_LEVELS: usize = 8;
 const MAX_BOOK_LEVELS: usize = 12;
 const DEFAULT_BOOK_LEVELS: usize = 10;
+const DEFAULT_MARKET_BATCH_SIZE: usize = 8;
 
 #[derive(Clone, Debug)]
 struct Config {
@@ -22,6 +23,7 @@ struct Config {
     rounds: u64,
     tickers: Vec<String>,
     run_id: String,
+    market_batch_size: usize,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -82,13 +84,6 @@ struct OrderRequest {
 struct OrderOutcome {
     accepted: bool,
     fill_count: usize,
-    order_id: Option<String>,
-}
-
-#[derive(Clone, Debug)]
-struct LiveOrder {
-    bot: Bot,
-    order_id: String,
 }
 
 #[tokio::main]
@@ -102,6 +97,7 @@ async fn main() -> Result<()> {
         rounds = config.rounds,
         interval_ms = config.interval.as_millis(),
         run_id = %config.run_id,
+        market_batch_size = config.market_batch_size,
         "trade bot service starting"
     );
 
@@ -135,7 +131,7 @@ impl Config {
         let interval_ms = env::var("BOT_INTERVAL_MS")
             .ok()
             .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(10_000)
+            .unwrap_or(30_000)
             .max(100);
         let rounds = env::var("BOT_ROUNDS")
             .ok()
@@ -163,6 +159,11 @@ impl Config {
                 .as_millis();
             format!("{millis}-{}", std::process::id())
         });
+        let market_batch_size = env::var("BOT_MARKETS_PER_ROUND")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_MARKET_BATCH_SIZE)
+            .clamp(1, 16);
         Ok(Self {
             rest_url,
             bot_count,
@@ -172,6 +173,7 @@ impl Config {
             rounds,
             tickers,
             run_id,
+            market_batch_size,
         })
     }
 }
@@ -188,7 +190,6 @@ async fn run_worker(client: Client, config: Config) -> Result<()> {
     };
     let mut round = 0_u64;
     let mut markets = Vec::new();
-    let mut live_quotes = Vec::new();
 
     loop {
         if markets.is_empty() {
@@ -212,20 +213,29 @@ async fn run_worker(client: Client, config: Config) -> Result<()> {
         }
 
         round = round.saturating_add(1);
-        cancel_live_quotes(&client, &config.rest_url, &mut live_quotes).await;
-        live_quotes = seed_books(
+        let seeded_market_count = markets.len().min(round as usize * config.market_batch_size);
+        let batch_start =
+            (round.saturating_sub(1) as usize * config.market_batch_size).min(markets.len());
+        let batch_end = seeded_market_count.max(batch_start);
+        let seed_batch = if batch_start < batch_end {
+            &markets[batch_start..batch_end]
+        } else {
+            &[]
+        };
+        let quotes = seed_books(
             &client,
             &config.rest_url,
             &bots,
-            &markets,
+            seed_batch,
             round,
             config.book_levels,
             &config.run_id,
         )
         .await;
+        let active_markets = &markets[..seeded_market_count];
         let mut submissions = 0_usize;
         let mut fills = 0_usize;
-        for (market_index, market) in markets.iter().enumerate() {
+        for (market_index, market) in active_markets.iter().enumerate() {
             let (submitted, matched) = run_market_round(
                 &client,
                 &config.rest_url,
@@ -243,7 +253,8 @@ async fn run_worker(client: Client, config: Config) -> Result<()> {
             round,
             submissions,
             fills,
-            markets = markets.len(),
+            quotes,
+            markets = active_markets.len(),
             "trade bot round complete"
         );
 
@@ -394,14 +405,14 @@ async fn seed_books(
     round: u64,
     book_levels: usize,
     run_id: &str,
-) -> Vec<LiveOrder> {
+) -> usize {
     let maker_count = bots.len() / 3;
     if maker_count == 0 {
         tracing::warn!("trade bot book seeding skipped because no maker bots are available");
-        return Vec::new();
+        return 0;
     }
     let levels = bounded_book_levels(book_levels);
-    let mut live_quotes = Vec::new();
+    let mut accepted = 0_usize;
     for (market_index, market) in markets.iter().enumerate() {
         let fair = fair_price(market, round, market_index);
         let step = price_step(market);
@@ -440,44 +451,10 @@ async fn seed_books(
                 run_id,
             )
             .await;
-            if let Some(order_id) = bid_outcome.order_id {
-                live_quotes.push(LiveOrder {
-                    bot: bid_bot.clone(),
-                    order_id,
-                });
-            }
-            if let Some(order_id) = ask_outcome.order_id {
-                live_quotes.push(LiveOrder {
-                    bot: ask_bot.clone(),
-                    order_id,
-                });
-            }
+            accepted += usize::from(bid_outcome.accepted) + usize::from(ask_outcome.accepted);
         }
     }
-    live_quotes
-}
-
-async fn cancel_live_quotes(client: &Client, rest_url: &str, live_quotes: &mut Vec<LiveOrder>) {
-    let previous = std::mem::take(live_quotes);
-    for quote in previous {
-        let key = format!("bot-quote-cancel-v1:{}", quote.order_id);
-        let result = client
-            .post(format!("{rest_url}/v1/orders/{}/cancel", quote.order_id))
-            .bearer_auth(&quote.bot.token)
-            .header("Idempotency-Key", key)
-            .send()
-            .await;
-        if let Ok(response) = result {
-            if !response.status().is_success() {
-                tracing::debug!(
-                    user = %quote.bot.user_id,
-                    order_id = %quote.order_id,
-                    status = %response.status(),
-                    "quote cancellation was not accepted"
-                );
-            }
-        }
-    }
+    accepted
 }
 
 async fn run_market_round(
@@ -570,11 +547,6 @@ async fn submit_order(
                         .get("fills")
                         .and_then(|value| value.as_array())
                         .map_or(0, Vec::len),
-                    order_id: response
-                        .get("order")
-                        .and_then(|value| value.get("order_id"))
-                        .and_then(|value| value.as_str())
-                        .map(str::to_owned),
                 }
             }
         }
