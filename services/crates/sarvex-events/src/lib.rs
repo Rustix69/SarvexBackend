@@ -62,7 +62,15 @@ impl EventPublisher {
 
     pub async fn publish(&self, subject: String, payload: Vec<u8>) -> anyhow::Result<()> {
         if let Some(context) = &self.retained {
-            context.publish(subject, payload.into()).await?.await?;
+            // Retention and live delivery are separate concerns. JetStream
+            // stores the event for replay, while core NATS wakes the current
+            // lightweight subscribers that do not use durable consumers.
+            context
+                .publish(subject.clone(), payload.clone().into())
+                .await?
+                .await?;
+            self.client.publish(subject, payload.into()).await?;
+            self.client.flush().await?;
         } else {
             self.client.publish(subject, payload.into()).await?;
             self.client.flush().await?;
