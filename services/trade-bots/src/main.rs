@@ -422,11 +422,10 @@ async fn seed_books(
     let levels = bounded_book_levels(book_levels);
     let mut accepted = 0_usize;
     for (market_index, market) in markets.iter().enumerate() {
-        let (bid_levels, ask_levels) = match load_order_book(client, rest_url, &market.ticker).await
-        {
-            Some(book) => (book.bids.len(), book.asks.len()),
-            None => (0, 0),
-        };
+        let book = load_order_book(client, rest_url, &market.ticker).await;
+        let (bid_levels, ask_levels) = book
+            .as_ref()
+            .map_or((0, 0), |book| (book.bids.len(), book.asks.len()));
         let need_bid = bid_levels < MIN_BOOK_LEVELS;
         let need_ask = ask_levels < MIN_BOOK_LEVELS;
         if !need_bid && !need_ask {
@@ -436,12 +435,21 @@ async fn seed_books(
         let step = price_step(market);
         for level in 1..=levels {
             let distance = step.saturating_mul(level as i64);
-            let bid = align_price(market, fair.saturating_sub(distance));
-            let ask = align_price(market, fair.saturating_add(distance));
+            let bid = passive_bid_price(
+                market,
+                align_price(market, fair.saturating_sub(distance)),
+                book.as_ref().and_then(|book| book.asks.first()),
+            );
+            let ask = passive_ask_price(
+                market,
+                align_price(market, fair.saturating_add(distance)),
+                book.as_ref().and_then(|book| book.bids.first()),
+            );
             let count = quote_count(market, round + level as u64);
             let bid_bot = &bots[(level - 1) % maker_count];
             let ask_bot = &bots[maker_count + ((level - 1) % maker_count)];
             if need_bid {
+                let Some(bid) = bid else { continue };
                 let bid_outcome = submit_order(
                     client,
                     rest_url,
@@ -459,6 +467,7 @@ async fn seed_books(
                 accepted += usize::from(bid_outcome.accepted);
             }
             if need_ask {
+                let Some(ask) = ask else { continue };
                 let ask_outcome = submit_order(
                     client,
                     rest_url,
@@ -491,6 +500,20 @@ async fn load_order_book(client: &Client, rest_url: &str, ticker: &str) -> Optio
         .json()
         .await
         .ok()
+}
+
+fn passive_bid_price(market: &Market, candidate: i64, best_ask: Option<&BookLevel>) -> Option<i64> {
+    let ceiling = best_ask
+        .map(|level| level.price_ticks.saturating_sub(price_step(market)))
+        .unwrap_or(market.max_price_ticks);
+    (ceiling >= market.min_price_ticks).then(|| align_price(market, candidate.min(ceiling)))
+}
+
+fn passive_ask_price(market: &Market, candidate: i64, best_bid: Option<&BookLevel>) -> Option<i64> {
+    let floor = best_bid
+        .map(|level| level.price_ticks.saturating_add(price_step(market)))
+        .unwrap_or(market.min_price_ticks);
+    (floor <= market.max_price_ticks).then(|| align_price(market, candidate.max(floor)))
 }
 
 async fn run_market_round(
@@ -718,5 +741,20 @@ mod tests {
 
         market.position_limit_per_user = 1;
         assert_eq!(quote_count(&market, 0), 1);
+    }
+
+    #[test]
+    fn repair_prices_remain_passive_against_existing_book() {
+        let market = market();
+        let ask = BookLevel {
+            price_ticks: 33,
+            total_qty: 4,
+        };
+        let bid = BookLevel {
+            price_ticks: 66,
+            total_qty: 4,
+        };
+        assert_eq!(passive_bid_price(&market, 50, Some(&ask)), Some(31));
+        assert_eq!(passive_ask_price(&market, 50, Some(&bid)), Some(67));
     }
 }
