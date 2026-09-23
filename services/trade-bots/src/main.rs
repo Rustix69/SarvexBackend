@@ -1,7 +1,10 @@
 use anyhow::{Context, Result};
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
-use std::{env, time::Duration};
+use std::{
+    env,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 const MIN_BOTS: usize = 20;
 const MAX_BOTS: usize = 50;
@@ -18,6 +21,7 @@ struct Config {
     interval: Duration,
     rounds: u64,
     tickers: Vec<String>,
+    run_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -97,6 +101,7 @@ async fn main() -> Result<()> {
         book_levels = config.book_levels,
         rounds = config.rounds,
         interval_ms = config.interval.as_millis(),
+        run_id = %config.run_id,
         "trade bot service starting"
     );
 
@@ -151,6 +156,13 @@ impl Config {
             .filter(|ticker| !ticker.is_empty())
             .map(str::to_owned)
             .collect();
+        let run_id = env::var("BOT_RUN_ID").unwrap_or_else(|_| {
+            let millis = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            format!("{millis}-{}", std::process::id())
+        });
         Ok(Self {
             rest_url,
             bot_count,
@@ -159,6 +171,7 @@ impl Config {
             interval: Duration::from_millis(interval_ms),
             rounds,
             tickers,
+            run_id,
         })
     }
 }
@@ -207,6 +220,7 @@ async fn run_worker(client: Client, config: Config) -> Result<()> {
             &markets,
             round,
             config.book_levels,
+            &config.run_id,
         )
         .await;
         let mut submissions = 0_usize;
@@ -219,6 +233,7 @@ async fn run_worker(client: Client, config: Config) -> Result<()> {
                 market,
                 round,
                 market_index,
+                &config.run_id,
             )
             .await;
             submissions += submitted;
@@ -378,6 +393,7 @@ async fn seed_books(
     markets: &[Market],
     round: u64,
     book_levels: usize,
+    run_id: &str,
 ) -> Vec<LiveOrder> {
     let maker_count = bots.len() / 3;
     if maker_count == 0 {
@@ -407,6 +423,7 @@ async fn seed_books(
                 bid,
                 count,
                 "GTC",
+                run_id,
             )
             .await;
             let ask_outcome = submit_order(
@@ -420,6 +437,7 @@ async fn seed_books(
                 ask,
                 count,
                 "GTC",
+                run_id,
             )
             .await;
             if let Some(order_id) = bid_outcome.order_id {
@@ -469,6 +487,7 @@ async fn run_market_round(
     market: &Market,
     round: u64,
     market_index: usize,
+    run_id: &str,
 ) -> (usize, usize) {
     let maker_count = bots.len() / 3;
     let taker_start = maker_count * 2;
@@ -484,11 +503,11 @@ async fn run_market_round(
     let buy_bot = &bots[taker_start + ((round as usize + market_index) % taker_count)];
     let sell_bot = &bots[taker_start + ((round as usize + market_index + 1) % taker_count)];
     let buy = submit_order(
-        client, rest_url, buy_bot, market, round, 10_001, "BUY", buy_price, count, "IOC",
+        client, rest_url, buy_bot, market, round, 10_001, "BUY", buy_price, count, "IOC", run_id,
     )
     .await;
     let sell = submit_order(
-        client, rest_url, sell_bot, market, round, 10_002, "SELL", sell_price, count, "IOC",
+        client, rest_url, sell_bot, market, round, 10_002, "SELL", sell_price, count, "IOC", run_id,
     )
     .await;
     (
@@ -509,10 +528,11 @@ async fn submit_order(
     price_ticks: i64,
     count: i64,
     tif: &'static str,
+    run_id: &str,
 ) -> OrderOutcome {
     let client_order_id = format!(
-        "bot-{}-{}-{}-{}",
-        bot.user_id, market.ticker, round, sequence
+        "bot-{}-{}-{}-{}-{}",
+        run_id, bot.user_id, market.ticker, round, sequence
     );
     let request = OrderRequest {
         client_order_id: client_order_id.clone(),
