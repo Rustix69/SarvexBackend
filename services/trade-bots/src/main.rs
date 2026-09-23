@@ -32,6 +32,22 @@ struct MarketList {
     contracts: Vec<Market>,
 }
 
+#[derive(Debug, Deserialize)]
+struct OrderBook {
+    #[serde(default)]
+    bids: Vec<BookLevel>,
+    #[serde(default)]
+    asks: Vec<BookLevel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BookLevel {
+    #[allow(dead_code)]
+    price_ticks: i64,
+    #[allow(dead_code)]
+    total_qty: i64,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 struct Market {
     ticker: String,
@@ -214,19 +230,11 @@ async fn run_worker(client: Client, config: Config) -> Result<()> {
 
         round = round.saturating_add(1);
         let seeded_market_count = markets.len().min(round as usize * config.market_batch_size);
-        let batch_start =
-            (round.saturating_sub(1) as usize * config.market_batch_size).min(markets.len());
-        let batch_end = seeded_market_count.max(batch_start);
-        let seed_batch = if batch_start < batch_end {
-            &markets[batch_start..batch_end]
-        } else {
-            &[]
-        };
         let quotes = seed_books(
             &client,
             &config.rest_url,
             &bots,
-            seed_batch,
+            &markets[..seeded_market_count],
             round,
             config.book_levels,
             &config.run_id,
@@ -414,6 +422,16 @@ async fn seed_books(
     let levels = bounded_book_levels(book_levels);
     let mut accepted = 0_usize;
     for (market_index, market) in markets.iter().enumerate() {
+        let (bid_levels, ask_levels) = match load_order_book(client, rest_url, &market.ticker).await
+        {
+            Some(book) => (book.bids.len(), book.asks.len()),
+            None => (0, 0),
+        };
+        let need_bid = bid_levels < MIN_BOOK_LEVELS;
+        let need_ask = ask_levels < MIN_BOOK_LEVELS;
+        if !need_bid && !need_ask {
+            continue;
+        }
         let fair = fair_price(market, round, market_index);
         let step = price_step(market);
         for level in 1..=levels {
@@ -423,38 +441,56 @@ async fn seed_books(
             let count = quote_count(market, round + level as u64);
             let bid_bot = &bots[(level - 1) % maker_count];
             let ask_bot = &bots[maker_count + ((level - 1) % maker_count)];
-            let bid_outcome = submit_order(
-                client,
-                rest_url,
-                bid_bot,
-                market,
-                round,
-                level as u64,
-                "BUY",
-                bid,
-                count,
-                "GTC",
-                run_id,
-            )
-            .await;
-            let ask_outcome = submit_order(
-                client,
-                rest_url,
-                ask_bot,
-                market,
-                round,
-                level as u64,
-                "SELL",
-                ask,
-                count,
-                "GTC",
-                run_id,
-            )
-            .await;
-            accepted += usize::from(bid_outcome.accepted) + usize::from(ask_outcome.accepted);
+            if need_bid {
+                let bid_outcome = submit_order(
+                    client,
+                    rest_url,
+                    bid_bot,
+                    market,
+                    round,
+                    level as u64,
+                    "BUY",
+                    bid,
+                    count,
+                    "GTC",
+                    run_id,
+                )
+                .await;
+                accepted += usize::from(bid_outcome.accepted);
+            }
+            if need_ask {
+                let ask_outcome = submit_order(
+                    client,
+                    rest_url,
+                    ask_bot,
+                    market,
+                    round,
+                    level as u64,
+                    "SELL",
+                    ask,
+                    count,
+                    "GTC",
+                    run_id,
+                )
+                .await;
+                accepted += usize::from(ask_outcome.accepted);
+            }
         }
     }
     accepted
+}
+
+async fn load_order_book(client: &Client, rest_url: &str, ticker: &str) -> Option<OrderBook> {
+    client
+        .get(format!("{rest_url}/v1/markets/{ticker}/orderbook?depth=12"))
+        .send()
+        .await
+        .ok()?
+        .error_for_status()
+        .ok()?
+        .json()
+        .await
+        .ok()
 }
 
 async fn run_market_round(
