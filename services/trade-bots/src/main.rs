@@ -426,8 +426,11 @@ async fn seed_books(
         let (bid_levels, ask_levels) = book
             .as_ref()
             .map_or((0, 0), |book| (book.bids.len(), book.asks.len()));
-        let need_bid = bid_levels < MIN_BOOK_LEVELS;
-        let need_ask = ask_levels < MIN_BOOK_LEVELS;
+        // Refill to the configured target, not merely the minimum. The
+        // synthetic taker can consume one level later in this round, so the
+        // buffer prevents normal activity from dropping a side below eight.
+        let need_bid = bid_levels < levels;
+        let need_ask = ask_levels < levels;
         if !need_bid && !need_ask {
             continue;
         }
