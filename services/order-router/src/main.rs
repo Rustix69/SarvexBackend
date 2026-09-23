@@ -901,16 +901,26 @@ async fn run_fill_posting_worker(
                     }
                 }
                 Err(error) => {
-                    tracing::warn!(fill_id = %fill_id, error = %error, "fill ledger posting deferred");
-                    let _ = sqlx::query("UPDATE orders.fill_posting_outbox SET attempts=attempts+1, last_error=$2, next_attempt_at=now()+interval '2 seconds' WHERE fill_id=$1")
+                    let terminal = is_terminal_fill_posting_error(&error);
+                    if terminal {
+                        tracing::error!(fill_id = %fill_id, error = %error, "fill ledger posting marked terminally failed");
+                    } else {
+                        tracing::warn!(fill_id = %fill_id, error = %error, "fill ledger posting deferred");
+                    }
+                    let _ = sqlx::query("UPDATE orders.fill_posting_outbox SET status=CASE WHEN $3 THEN 'FAILED' ELSE status END, attempts=attempts+1, last_error=$2, next_attempt_at=CASE WHEN $3 THEN now() ELSE now()+interval '2 seconds' END WHERE fill_id=$1")
                         .bind(&fill_id)
                         .bind(error.to_string())
+                        .bind(terminal)
                         .execute(&pool)
                         .await;
                 }
             }
         }
     }
+}
+
+fn is_terminal_fill_posting_error(error: &Status) -> bool {
+    error.message().contains("hold is not active")
 }
 
 async fn post_fill(
@@ -1269,9 +1279,25 @@ fn upstream_code(code: tonic::Code) -> &'static str {
         _ => "UPSTREAM_ERROR",
     }
 }
+
 fn internal(error: impl std::fmt::Display) -> Status {
     Status::internal(error.to_string())
 }
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn closed_hold_fill_errors_are_terminal() {
+        assert!(is_terminal_fill_posting_error(&Status::internal(
+            "status: FailedPrecondition, message: hold is not active",
+        )));
+        assert!(!is_terminal_fill_posting_error(&Status::unavailable(
+            "ledger temporarily unavailable",
+        )));
+    }
 }

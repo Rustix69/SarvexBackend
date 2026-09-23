@@ -106,7 +106,7 @@ services:
         SERVICE: me-core-adapter
     environment:
       ME_CORE_ADDR: http://me-core:50054
-      ME_CORE_TIMEOUT_MS: 100
+      ME_CORE_TIMEOUT_MS: ${ME_CORE_TIMEOUT_MS:-500}
       NATS_URL: nats://nats:4222
       HTTP_PORT: 8084
       RUST_LOG: info
@@ -163,7 +163,7 @@ services:
       RISK_ADDR: http://risk-svc:50053
       LEDGER_ADDR: http://ledger-svc:50052
       ME_CORE_ADDR: http://me-core:50054
-      ME_CORE_TIMEOUT_MS: 100
+      ME_CORE_TIMEOUT_MS: ${ME_CORE_TIMEOUT_MS:-500}
       NATS_URL: nats://nats:4222
       EVENT_RETENTION: jetstream
       GRPC_PORT: 50055
