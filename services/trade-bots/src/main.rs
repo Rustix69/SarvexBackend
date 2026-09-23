@@ -476,7 +476,9 @@ async fn run_market_round(
     let taker_distance = step.saturating_mul(2);
     let buy_price = align_price(market, fair.saturating_add(taker_distance));
     let sell_price = align_price(market, fair.saturating_sub(taker_distance));
-    let count = quote_count(market, round);
+    // Keep each synthetic taker small enough that it consumes quantity without
+    // removing an entire passive level from the displayed book.
+    let count = 1;
     let buy_bot = &bots[taker_start + ((round as usize + market_index) % taker_count)];
     let sell_bot = &bots[taker_start + ((round as usize + market_index + 1) % taker_count)];
     let buy = submit_order(
