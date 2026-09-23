@@ -439,11 +439,13 @@ async fn seed_books(
                 market,
                 align_price(market, fair.saturating_sub(distance)),
                 book.as_ref().and_then(|book| book.asks.first()),
+                level as i64,
             );
             let ask = passive_ask_price(
                 market,
                 align_price(market, fair.saturating_add(distance)),
                 book.as_ref().and_then(|book| book.bids.first()),
+                level as i64,
             );
             let count = quote_count(market, round + level as u64);
             let bid_bot = &bots[(level - 1) % maker_count];
@@ -519,16 +521,32 @@ async fn load_order_book(client: &Client, rest_url: &str, ticker: &str) -> Optio
     }
 }
 
-fn passive_bid_price(market: &Market, candidate: i64, best_ask: Option<&BookLevel>) -> Option<i64> {
+fn passive_bid_price(
+    market: &Market,
+    candidate: i64,
+    best_ask: Option<&BookLevel>,
+    level: i64,
+) -> Option<i64> {
     let ceiling = best_ask
-        .map(|level| level.price_ticks.saturating_sub(price_step(market)))
+        .map(|best| {
+            best.price_ticks
+                .saturating_sub(price_step(market).saturating_mul(level))
+        })
         .unwrap_or(market.max_price_ticks);
     (ceiling >= market.min_price_ticks).then(|| align_price(market, candidate.min(ceiling)))
 }
 
-fn passive_ask_price(market: &Market, candidate: i64, best_bid: Option<&BookLevel>) -> Option<i64> {
+fn passive_ask_price(
+    market: &Market,
+    candidate: i64,
+    best_bid: Option<&BookLevel>,
+    level: i64,
+) -> Option<i64> {
     let floor = best_bid
-        .map(|level| level.price_ticks.saturating_add(price_step(market)))
+        .map(|best| {
+            best.price_ticks
+                .saturating_add(price_step(market).saturating_mul(level))
+        })
         .unwrap_or(market.min_price_ticks);
     (floor <= market.max_price_ticks).then(|| align_price(market, candidate.max(floor)))
 }
@@ -771,7 +789,9 @@ mod tests {
             price_ticks: 66,
             total_qty: 4,
         };
-        assert_eq!(passive_bid_price(&market, 50, Some(&ask)), Some(31));
-        assert_eq!(passive_ask_price(&market, 50, Some(&bid)), Some(67));
+        assert_eq!(passive_bid_price(&market, 50, Some(&ask), 1), Some(31));
+        assert_eq!(passive_bid_price(&market, 50, Some(&ask), 2), Some(29));
+        assert_eq!(passive_ask_price(&market, 50, Some(&bid), 1), Some(67));
+        assert_eq!(passive_ask_price(&market, 50, Some(&bid), 2), Some(69));
     }
 }
