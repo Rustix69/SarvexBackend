@@ -208,8 +208,8 @@ impl RefData for RefDataService {
     }
 }
 
-const CONTRACT_SELECT_BASE: &str = "SELECT ticker, event_ticker, series_ticker, kind::text AS kind, question, underlying, tick_size, min_price_ticks, max_price_ticks, lower_bound_ticks, upper_bound_ticks, multiplier_micro_usdc, max_order_size, position_limit_per_user, state::text AS state, listed_at, open_at, close_at, expected_resolution_at, settlement_source, oracle_policy, settlement_rule, close_global_seq FROM refdata.contracts";
-const CONTRACT_SELECT: &str = "SELECT ticker, event_ticker, series_ticker, kind::text AS kind, question, underlying, tick_size, min_price_ticks, max_price_ticks, lower_bound_ticks, upper_bound_ticks, multiplier_micro_usdc, max_order_size, position_limit_per_user, state::text AS state, listed_at, open_at, close_at, expected_resolution_at, settlement_source, oracle_policy, settlement_rule, close_global_seq FROM refdata.contracts WHERE ticker = $1";
+const CONTRACT_SELECT_BASE: &str = "SELECT ticker, event_ticker, series_ticker, kind::text AS kind, question, underlying, tick_size, min_price_ticks, max_price_ticks, lower_bound_ticks, upper_bound_ticks, multiplier_micro_usdc, max_order_size, position_limit_per_user, state::text AS state, listed_at, open_at, close_at, expected_resolution_at, settlement_source, oracle_policy, settlement_rule, close_global_seq, divider, multiplier_micro_per_display_unit, tick_value_micro FROM refdata.contracts";
+const CONTRACT_SELECT: &str = "SELECT ticker, event_ticker, series_ticker, kind::text AS kind, question, underlying, tick_size, min_price_ticks, max_price_ticks, lower_bound_ticks, upper_bound_ticks, multiplier_micro_usdc, max_order_size, position_limit_per_user, state::text AS state, listed_at, open_at, close_at, expected_resolution_at, settlement_source, oracle_policy, settlement_rule, close_global_seq, divider, multiplier_micro_per_display_unit, tick_value_micro FROM refdata.contracts WHERE ticker = $1";
 
 fn contract_from_row(row: &sqlx::postgres::PgRow) -> Contract {
     Contract {
@@ -253,6 +253,11 @@ fn contract_from_row(row: &sqlx::postgres::PgRow) -> Contract {
         close_global_seq: row
             .get::<Option<i64>, _>("close_global_seq")
             .unwrap_or_default() as u64,
+        divider: row.get::<i64, _>("divider"),
+        multiplier_micro_per_display_unit: row
+            .get::<Option<i64>, _>("multiplier_micro_per_display_unit")
+            .unwrap_or_default(),
+        tick_value_micro: row.get::<i64, _>("tick_value_micro"),
     }
 }
 

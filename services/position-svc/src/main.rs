@@ -8,8 +8,10 @@ use prost_types::Timestamp;
 use sarvex_contracts::sarvex::v1::{
     order_router_client::OrderRouterClient,
     position_server::{Position, PositionServer},
-    GetOpenInterestRequest, GetPositionRequest, ListPositionsByContractRequest,
-    ListPositionsRequest, ListPositionsResponse, OpenInterest, UserPosition,
+    ref_data_client::RefDataClient,
+    ContractKind, GetContractRequest, GetOpenInterestRequest, GetPositionRequest,
+    ListPositionsByContractRequest, ListPositionsRequest, ListPositionsResponse, OpenInterest,
+    UserPosition,
 };
 use sarvex_db::connect;
 use sqlx::{postgres::PgPool, QueryBuilder, Row};
@@ -62,8 +64,14 @@ async fn main() -> Result<()> {
         .context("position database readiness check failed")?;
     let order_router =
         OrderRouterClient::new(grpc_channel("ORDER_ROUTER_ADDR", "http://127.0.0.1:50055")?);
+    let refdata = RefDataClient::new(grpc_channel("REFDATA_ADDR", "http://127.0.0.1:50054")?);
     if let Ok(nats_url) = env::var("NATS_URL") {
-        tokio::spawn(run_fill_consumer(pool.clone(), order_router, nats_url));
+        tokio::spawn(run_fill_consumer(
+            pool.clone(),
+            order_router,
+            refdata,
+            nats_url,
+        ));
     }
     let grpc_addr: SocketAddr = format!(
         "0.0.0.0:{}",
@@ -233,6 +241,7 @@ fn position_from_row(row: &sqlx::postgres::PgRow) -> UserPosition {
 async fn run_fill_consumer(
     pool: PgPool,
     order_router: OrderRouterClient<Channel>,
+    refdata: RefDataClient<Channel>,
     nats_url: String,
 ) {
     loop {
@@ -275,6 +284,7 @@ async fn run_fill_consumer(
                 if let Err(error) = replay_gap(
                     &pool,
                     order_router.clone(),
+                    refdata.clone(),
                     last.saturating_add(1),
                     event.global_seq.saturating_sub(1),
                 )
@@ -284,7 +294,7 @@ async fn run_fill_consumer(
                     break;
                 }
             }
-            if let Err(error) = apply_fill(&pool, &event).await {
+            if let Err(error) = apply_fill(&pool, &event, refdata.clone()).await {
                 tracing::error!(error = %error, event_id = %event.event_id, "position fill application failed");
                 break;
             }
@@ -296,6 +306,7 @@ async fn run_fill_consumer(
 async fn replay_gap(
     pool: &PgPool,
     mut order_router: OrderRouterClient<Channel>,
+    refdata: RefDataClient<Channel>,
     from: u64,
     to: u64,
 ) -> Result<(), Status> {
@@ -319,7 +330,7 @@ async fn replay_gap(
             .map_err(internal)?
             .into_inner();
         for fill in response.fills {
-            apply_fill_record(pool, &fill).await?;
+            apply_fill_record(pool, &fill, refdata.clone()).await?;
         }
         if response.next_cursor.is_empty() {
             break;
@@ -342,6 +353,7 @@ async fn replay_gap(
 async fn apply_fill_record(
     pool: &PgPool,
     fill: &sarvex_contracts::sarvex::v1::FillRecord,
+    refdata: RefDataClient<Channel>,
 ) -> Result<(), Status> {
     let event = WireEnvelope {
         event_id: fill.fill_id.clone(),
@@ -358,7 +370,7 @@ async fn apply_fill_record(
             taker_action: fill.taker_action,
         },
     };
-    apply_fill(pool, &event).await
+    apply_fill(pool, &event, refdata).await
 }
 
 async fn current_offset(pool: &PgPool) -> Result<u64, sqlx::Error> {
@@ -372,9 +384,30 @@ async fn current_offset(pool: &PgPool) -> Result<u64, sqlx::Error> {
         .unwrap_or(0))
 }
 
-async fn apply_fill(pool: &PgPool, event: &WireEnvelope) -> Result<(), Status> {
+async fn apply_fill(
+    pool: &PgPool,
+    event: &WireEnvelope,
+    mut refdata: RefDataClient<Channel>,
+) -> Result<(), Status> {
     let global_seq = i64::try_from(event.global_seq)
         .map_err(|_| Status::invalid_argument("global sequence exceeds database range"))?;
+    let contract = refdata
+        .get_contract(GetContractRequest {
+            ticker: event.payload.ticker.clone(),
+        })
+        .await
+        .map_err(internal)?
+        .into_inner();
+    let tick_value_micro = if contract.kind == ContractKind::Scalar as i32 {
+        if contract.tick_value_micro <= 0 {
+            return Err(Status::failed_precondition(
+                "scalar contract tick value is missing",
+            ));
+        }
+        contract.tick_value_micro
+    } else {
+        10_000
+    };
     let mut tx = pool.begin().await.map_err(internal)?;
     sqlx::query("INSERT INTO position.consumer_offsets (consumer_name, stream_name) VALUES ($1,$2) ON CONFLICT (consumer_name) DO NOTHING").bind(CONSUMER_NAME).bind(STREAM_NAME).execute(&mut *tx).await.map_err(internal)?;
     let inserted = sqlx::query("INSERT INTO position.applied_fills (fill_id, ticker, global_seq) VALUES ($1,$2,$3) ON CONFLICT (fill_id) DO NOTHING RETURNING fill_id").bind(&event.event_id).bind(&event.payload.ticker).bind(global_seq).fetch_optional(&mut *tx).await.map_err(internal)?.is_some();
@@ -391,6 +424,7 @@ async fn apply_fill(pool: &PgPool, event: &WireEnvelope) -> Result<(), Status> {
             event.payload.maker_side,
             event.payload.price_ticks,
             global_seq,
+            tick_value_micro,
         )
         .await?;
         apply_position_delta(
@@ -405,6 +439,7 @@ async fn apply_fill(pool: &PgPool, event: &WireEnvelope) -> Result<(), Status> {
             event.payload.taker_side,
             event.payload.price_ticks,
             global_seq,
+            tick_value_micro,
         )
         .await?;
     }
@@ -413,6 +448,7 @@ async fn apply_fill(pool: &PgPool, event: &WireEnvelope) -> Result<(), Status> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn apply_position_delta(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: &str,
@@ -421,6 +457,7 @@ async fn apply_position_delta(
     side: i32,
     price_ticks: i64,
     global_seq: i64,
+    tick_value_micro: i64,
 ) -> Result<(), Status> {
     if user_id.trim().is_empty() || delta == 0 {
         return Ok(());
@@ -443,13 +480,13 @@ async fn apply_position_delta(
         })
         .unwrap_or((0, 0, 0));
     let trade_price_ticks = normalized_position_price(side, price_ticks);
-    let trade_price_micro = trade_price_ticks.saturating_mul(10_000);
     let (next_qty, next_avg_micro, next_realized_micro) = update_cost_basis(
         current_qty,
         current_avg_micro,
         current_realized_micro,
         delta,
-        trade_price_micro,
+        trade_price_ticks,
+        tick_value_micro,
     );
     sqlx::query("INSERT INTO position.positions (user_id, ticker, net_qty, avg_cost_micro_usdc, realized_pnl_micro_usdc, last_global_seq) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (user_id,ticker) DO UPDATE SET net_qty=EXCLUDED.net_qty, avg_cost_micro_usdc=EXCLUDED.avg_cost_micro_usdc, realized_pnl_micro_usdc=EXCLUDED.realized_pnl_micro_usdc, last_global_seq=GREATEST(position.positions.last_global_seq,EXCLUDED.last_global_seq), updated_at=now()")
         .bind(user_id)
@@ -477,8 +514,10 @@ fn update_cost_basis(
     current_avg_micro: i64,
     current_realized_micro: i64,
     delta: i64,
-    trade_price_micro: i64,
+    trade_price_ticks: i64,
+    tick_value_micro: i64,
 ) -> (i64, i64, i64) {
+    let trade_price_micro = trade_price_ticks.saturating_mul(10_000);
     let next_qty = current_qty.saturating_add(delta);
     if current_qty == 0 {
         return (next_qty, trade_price_micro, current_realized_micro);
@@ -507,12 +546,15 @@ fn update_cost_basis(
     }
 
     let closed_abs = current_qty.unsigned_abs().min(delta.unsigned_abs());
-    let price_difference = if current_qty > 0 {
-        trade_price_micro.saturating_sub(current_avg_micro)
+    let current_avg_ticks = current_avg_micro / 10_000;
+    let price_difference_ticks = if current_qty > 0 {
+        trade_price_ticks.saturating_sub(current_avg_ticks)
     } else {
-        current_avg_micro.saturating_sub(trade_price_micro)
+        current_avg_ticks.saturating_sub(trade_price_ticks)
     };
-    let realized_delta = price_difference.saturating_mul(closed_abs as i64);
+    let realized_delta = price_difference_ticks
+        .saturating_mul(closed_abs as i64)
+        .saturating_mul(tick_value_micro);
     let next_realized = current_realized_micro.saturating_add(realized_delta);
     let next_avg = if next_qty == 0 || current_qty.signum() != next_qty.signum() {
         if next_qty == 0 {
@@ -588,13 +630,13 @@ mod tests {
 
     #[test]
     fn cost_basis_tracks_additions_and_closes() {
-        let (qty, avg, realized) = update_cost_basis(0, 0, 0, 10, 500_000);
+        let (qty, avg, realized) = update_cost_basis(0, 0, 0, 10, 50, 10_000);
         assert_eq!((qty, avg, realized), (10, 500_000, 0));
 
-        let (qty, avg, realized) = update_cost_basis(qty, avg, realized, 10, 600_000);
+        let (qty, avg, realized) = update_cost_basis(qty, avg, realized, 10, 60, 10_000);
         assert_eq!((qty, avg, realized), (20, 550_000, 0));
 
-        let (qty, avg, realized) = update_cost_basis(qty, avg, realized, -5, 650_000);
+        let (qty, avg, realized) = update_cost_basis(qty, avg, realized, -5, 65, 10_000);
         assert_eq!((qty, avg, realized), (15, 550_000, 500_000));
     }
 

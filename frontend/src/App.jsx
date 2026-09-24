@@ -1,5 +1,5 @@
 /* eslint-disable react-hooks/set-state-in-effect */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
   Activity,
   ArrowLeft,
@@ -589,7 +589,6 @@ function App() {
           markets={markets}
           fills={fills}
           onSelect={handleMarketSelect}
-          onRefresh={refreshAll}
           searchQuery={searchQuery}
         />
       )}
@@ -732,7 +731,7 @@ function HealthPage({ api }) {
   )
 }
 
-function MarketDashboard({ loading, markets, fills, onSelect, onRefresh, searchQuery }) {
+function MarketDashboard({ loading, markets, fills, onSelect, searchQuery }) {
   const [section, setSection] = useState('All')
   const rows = markets
     .filter((market) => section === 'All' || contractSection(market) === section)
@@ -954,7 +953,7 @@ function FutureDetail({ market, watchlist, watchlistFills, onSelect, orderbook, 
   const bestBid = Number(orderbook?.bids?.[0]?.price_ticks || orderbook?.bids?.[0]?.priceTicks || 0)
   const bestAsk = Number(orderbook?.asks?.[0]?.price_ticks || orderbook?.asks?.[0]?.priceTicks || 0)
   const last = Number(fills?.[fills.length - 1]?.price_ticks || fills?.[fills.length - 1]?.priceTicks || midpoint(bestBid, bestAsk) || futureFallbackTicks(market))
-  const multiplier = Number(market.multiplier_micro_usdc ?? market.multiplierMicroUsdc ?? 0)
+  const multiplier = Number(market.multiplier_micro_per_display_unit ?? market.multiplierMicroPerDisplayUnit ?? market.multiplier_micro_usdc ?? market.multiplierMicroUsdc ?? 0)
 
   return (
     <main className="detail-page terminal-page">
@@ -1263,6 +1262,8 @@ function TradeTicket({ market, bestBid, bestAsk, authed, busy, onTrade }) {
 }
 
 function FutureTradeTicket({ market, bestBid, bestAsk, mark, authed, busy, onTrade }) {
+  const componentId = useId()
+  const submitSequenceRef = useRef(0)
   const [tab, setTab] = useState('buy')
   const [orderType, setOrderType] = useState('market')
   const [priceInput, setPriceInput] = useState(() => formatFutureInput(market, bestAsk || bestBid || mark))
@@ -1270,7 +1271,7 @@ function FutureTradeTicket({ market, bestBid, bestAsk, mark, authed, busy, onTra
   const parsedPrice = parseFutureInput(market, priceInput)
   const priceTicks = Number.isFinite(parsedPrice) ? parsedPrice : 0
   const marketPriceTicks = tab === 'buy' ? (bestAsk || mark || bestBid || futureFallbackTicks(market)) : (bestBid || mark || bestAsk || futureFallbackTicks(market))
-  const executionTicks = orderType === 'market' ? marketSweepTicks(market, tab === 'buy' ? 'BUY' : 'SELL') : priceTicks
+  const executionTicks = orderType === 'market' ? marketSweepTicks(market, tab === 'buy' ? 'BUY' : 'SELL', bestBid, bestAsk) : priceTicks
   const contracts = Math.max(0, Math.floor(Number(size || 0)))
   const hold = computeFutureHoldMicro(market, tab, executionTicks, contracts)
   const orderIssue = futureConfigurationIssue(market)
@@ -1278,8 +1279,8 @@ function FutureTradeTicket({ market, bestBid, bestAsk, mark, authed, busy, onTra
     || (!Number.isSafeInteger(contracts) || contracts <= 0 ? 'Enter a positive whole number of contracts.' : '')
     || (contracts > Number(market.max_order_size ?? market.maxOrderSize ?? Infinity) ? 'Quantity exceeds the contract order limit.' : '')
   const payoffNote = tab === 'buy'
-    ? 'Final payoff: (final value - entry) x contracts x multiplier.'
-    : 'Final payoff: (entry - final value) x contracts x multiplier.'
+    ? 'Long collateral is locked from the floor; final payout is based on the clamped settlement value.'
+    : 'Short collateral is locked from the cap; final payout is based on the clamped settlement value.'
   const switchSide = (nextTab) => {
     setTab(nextTab)
     const nextPrice = nextTab === 'buy' ? (bestAsk || mark || bestBid) : (bestBid || mark || bestAsk)
@@ -1288,7 +1289,8 @@ function FutureTradeTicket({ market, bestBid, bestAsk, mark, authed, busy, onTra
 
   const submit = () => {
     if (orderIssue) return
-    const id = `fut-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    submitSequenceRef.current += 1
+    const id = `fut-${componentId}-${submitSequenceRef.current}`
     onTrade({
       client_order_id: id,
       ticker: market.ticker,
@@ -1363,6 +1365,8 @@ function PositionSnapshot({ position, mark, market, authed }) {
 }
 
 function PortfolioPage({ balance, authed, busy, positions, orders, history, marketPrices, marketByTicker, selectedUser, onDeposit, onRefresh, onExitPosition }) {
+  const [workspaceView, setWorkspaceView] = useState('calendar')
+  const [workspaceMetric, setWorkspaceMetric] = useState('pnl')
   const cash = balance?.cash_micro_usdc ?? balance?.cashMicroUsdc
   const held = balance?.held_micro_usdc ?? balance?.heldMicroUsdc
   const total = balance?.total_micro_usdc ?? balance?.totalMicroUsdc ?? Number(cash || 0) + Number(held || 0)
@@ -1406,8 +1410,14 @@ function PortfolioPage({ balance, authed, busy, positions, orders, history, mark
         </aside>
 
         <section className="portfolio-calendar-panel">
-          <div className="workspace-tabs"><button className="active" type="button">Calendar</button><button type="button">Chart</button><div className="workspace-tabs-spacer" /><button className="active" type="button">PnL</button><button type="button">Volume</button></div>
-          <PortfolioCalendar history={history} />
+          <div className="workspace-tabs">
+            <button className={workspaceView === 'calendar' ? 'active' : ''} type="button" onClick={() => setWorkspaceView('calendar')}>Calendar</button>
+            <button className={workspaceView === 'chart' ? 'active' : ''} type="button" onClick={() => setWorkspaceView('chart')}>Chart</button>
+            <div className="workspace-tabs-spacer" />
+            <button className={workspaceMetric === 'pnl' ? 'active' : ''} type="button" onClick={() => setWorkspaceMetric('pnl')}>PnL</button>
+            <button className={workspaceMetric === 'volume' ? 'active' : ''} type="button" onClick={() => setWorkspaceMetric('volume')}>Volume</button>
+          </div>
+          {workspaceView === 'calendar' ? <PortfolioCalendar history={history} /> : <PortfolioPerformanceChart history={history} orders={orders} metric={workspaceMetric} />}
         </section>
       </section>
 
@@ -1494,6 +1504,89 @@ function PortfolioCalendar({ history }) {
   )
 }
 
+function PortfolioPerformanceChart({ history, orders, metric }) {
+  const points = buildPortfolioCurve(history, orders, metric)
+  const width = 760
+  const height = 260
+  const padding = { top: 20, right: 18, bottom: 30, left: 52 }
+  const plotWidth = width - padding.left - padding.right
+  const plotHeight = height - padding.top - padding.bottom
+  const values = points.map((point) => point.value)
+  const minValue = Math.min(0, ...values)
+  const maxValue = Math.max(0, ...values)
+  const range = Math.max(1, maxValue - minValue)
+  const xFor = (index) => padding.left + (index / Math.max(1, points.length - 1)) * plotWidth
+  const yFor = (value) => padding.top + ((maxValue - value) / range) * plotHeight
+  const coordinates = points.map((point, index) => ({ ...point, x: xFor(index), y: yFor(point.value) }))
+  const line = coordinates.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(' ')
+  const area = `${line} L ${coordinates.at(-1).x.toFixed(2)} ${(padding.top + plotHeight).toFixed(2)} L ${coordinates[0].x.toFixed(2)} ${(padding.top + plotHeight).toFixed(2)} Z`
+  const zeroY = yFor(0)
+  const latest = coordinates.at(-1)
+  const labels = [coordinates[0], coordinates[Math.floor((coordinates.length - 1) / 2)], latest]
+  const formatValue = (value) => metric === 'volume' ? value.toLocaleString() : formatSignedUSDC(value)
+
+  return (
+    <div className="portfolio-performance-chart">
+      <div className="performance-chart-summary">
+        <div><span>{metric === 'volume' ? 'Filled contracts' : 'Account curve'}</span><strong className={metric === 'pnl' ? pnlClassName(latest.value) : ''}>{formatValue(latest.value)}</strong></div>
+        <span>{points.length > 1 ? `${points[0].label} - ${latest.label}` : 'No account activity yet'}</span>
+      </div>
+      <svg className="portfolio-curve" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={metric === 'volume' ? 'Portfolio filled volume curve' : 'Portfolio account activity curve'}>
+        <defs>
+          <linearGradient id="portfolio-curve-fill" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="#3fd0c2" stopOpacity="0.28" />
+            <stop offset="100%" stopColor="#3fd0c2" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        {[0, 0.5, 1].map((ratio) => {
+          const y = padding.top + plotHeight * ratio
+          const value = maxValue - range * ratio
+          return <g key={ratio}><line className="portfolio-chart-gridline" x1={padding.left} x2={width - padding.right} y1={y} y2={y} /><text className="portfolio-chart-axis" x={padding.left - 8} y={y + 4} textAnchor="end">{formatValue(value)}</text></g>
+        })}
+        <line className="portfolio-chart-zero" x1={padding.left} x2={width - padding.right} y1={zeroY} y2={zeroY} />
+        <path className="portfolio-curve-area" d={area} />
+        <path className="portfolio-curve-line" d={line} />
+        <circle className="portfolio-curve-point" cx={latest.x} cy={latest.y} r="4" />
+        {labels.map((point, index) => <text className="portfolio-chart-label" key={`${point.label}-${index}`} x={point.x} y={height - 8} textAnchor={index === 0 ? 'start' : index === labels.length - 1 ? 'end' : 'middle'}>{point.label}</text>)}
+      </svg>
+    </div>
+  )
+}
+
+function buildPortfolioCurve(history, orders, metric) {
+  const rawEntries = metric === 'volume'
+    ? (orders || []).filter((order) => Number(order.filled_count ?? order.filledCount ?? 0) > 0).map((order) => ({
+      date: new Date(order.updated_at || order.updatedAt || order.created_at || order.createdAt || 0),
+      amount: Number(order.filled_count ?? order.filledCount ?? 0),
+    }))
+    : (history || []).filter((entry) => String(entry.account_code || '').endsWith(':CASH')).map((entry) => ({
+      date: new Date(entry.posted_at || 0),
+      amount: Number(entry.amount_micro_usdc || 0) * (entry.direction === 'CR' ? 1 : -1),
+    }))
+  const entries = rawEntries
+    .filter((entry) => !Number.isNaN(entry.date.getTime()))
+    .sort((left, right) => left.date - right.date)
+
+  if (!entries.length) return [{ label: 'Now', value: 0 }]
+
+  const byDay = new Map()
+  entries.forEach((entry) => {
+    const key = entry.date.toISOString().slice(0, 10)
+    const current = byDay.get(key) || { amount: 0 }
+    current.amount += entry.amount
+    byDay.set(key, current)
+  })
+
+  let cumulative = 0
+  return [...byDay.entries()].map(([key, value]) => {
+    cumulative += value.amount
+    return {
+      label: new Date(`${key}T00:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+      value: cumulative,
+    }
+  })
+}
+
 function PortfolioOrderRow({ order, market }) {
   const scalar = isFutureMarket(market)
   const price = order.avg_fill_price_ticks || order.avgFillPriceTicks || order.price_ticks || order.priceTicks
@@ -1557,21 +1650,6 @@ function RecentTrades({ fills, market }) {
 
 function avatarText(market) {
   return (market.series_ticker || market.seriesTicker || market.ticker || 'SX').split('-').map((part) => part[0]).join('').slice(0, 2)
-}
-
-function MarketImage({ market, index = 0, size = '' }) {
-  const imageIndex = marketImageIndex(market, index)
-  return (
-    <div className={`market-avatar market-image ${size}`}>
-      <img src={`/market-art-${imageIndex}.svg`} alt="" aria-hidden="true" />
-    </div>
-  )
-}
-
-function marketImageIndex(market, index = 0) {
-  const value = String(market?.ticker || market?.underlying || market?.question || index)
-  const hash = [...value].reduce((sum, character) => sum + character.charCodeAt(0), 0)
-  return (hash + index) % 5 + 1
 }
 
 function catalogMarket(contract) {
@@ -1716,10 +1794,11 @@ function formatFutureTickDiff(market, ticks) {
 function formatFutureMultiplierSpec(market, multiplierMicro) {
   const meta = futureMeta(market)
   const tick = Number(market?.tick_size ?? market?.tickSize ?? 1)
-  const multiplier = Number(multiplierMicro || market?.multiplier_micro_usdc || market?.multiplierMicroUsdc || 0)
-  if (!multiplier) return 'Demo multiplier'
+  const multiplier = Number((market?.multiplier_micro_per_display_unit ?? market?.multiplierMicroPerDisplayUnit ?? multiplierMicro) || 0)
+  const tickValue = futureTickValueMicro(market)
+  if (!multiplier || !tickValue) return 'Contract multiplier unavailable'
 
-  const perTick = formatUSDC(multiplier * tick)
+  const perTick = formatUSDC(tickValue * tick)
   const tickLabel = formatFutureTickDiff(market, tick)
   if (meta.suffix === '%' && meta.divider) {
     const onePointPayout = formatUSDC(multiplier * meta.divider)
@@ -1743,10 +1822,17 @@ function clampFutureTicks(market, value) {
   return Math.max(min, Math.min(max, rounded))
 }
 
-function marketSweepTicks(market, action) {
+function marketSweepTicks(market, action, bestBid = 0, bestAsk = 0) {
   const min = Number(market?.min_price_ticks ?? market?.minPriceTicks ?? market?.lower_bound_ticks ?? market?.lowerBoundTicks ?? 1)
   const max = Number(market?.max_price_ticks ?? market?.maxPriceTicks ?? market?.upper_bound_ticks ?? market?.upperBoundTicks ?? 99)
-  return action === 'SELL' ? min : max
+  const tick = Number(market?.tick_size ?? market?.tickSize ?? 1)
+  const width = Math.max(tick, max - min)
+  const protection = Math.max(tick, Math.ceil(width / 20 / tick) * tick)
+  const reference = action === 'SELL' ? Number(bestBid) : Number(bestAsk)
+  if (!reference) return action === 'SELL' ? min : max
+  const raw = action === 'SELL' ? reference - protection : reference + protection
+  const aligned = action === 'SELL' ? Math.floor(raw / tick) * tick : Math.ceil(raw / tick) * tick
+  return Math.max(min, Math.min(max, aligned))
 }
 
 function clampBinaryPrice(value) {
@@ -1760,9 +1846,18 @@ function midpoint(bid, ask) {
 function computeFutureHoldMicro(market, tab, priceTicks, count) {
   const lower = Number(market?.lower_bound_ticks ?? market?.lowerBoundTicks ?? market?.min_price_ticks ?? market?.minPriceTicks ?? 0)
   const upper = Number(market?.upper_bound_ticks ?? market?.upperBoundTicks ?? market?.max_price_ticks ?? market?.maxPriceTicks ?? 0)
-  const multiplier = Number(market?.multiplier_micro_usdc ?? market?.multiplierMicroUsdc ?? 10000)
+  const multiplier = futureTickValueMicro(market)
   const riskTicks = tab === 'sell' ? Math.max(0, upper - priceTicks) : Math.max(0, priceTicks - lower)
   return riskTicks * Math.max(0, Number(count || 0)) * multiplier
+}
+
+function futureTickValueMicro(market) {
+  const explicit = Number(market?.tick_value_micro ?? market?.tickValueMicro ?? 0)
+  if (explicit > 0) return explicit
+  const display = Number(market?.multiplier_micro_per_display_unit ?? market?.multiplierMicroPerDisplayUnit ?? 0)
+  const divider = Number(market?.divider ?? futureMeta(market).divider ?? 0)
+  if (display > 0 && divider > 0 && display % divider === 0) return display / divider
+  return Number(market?.multiplier_micro_usdc ?? market?.multiplierMicroUsdc ?? 0)
 }
 
 function avgPriceTicks(position) {
@@ -1875,9 +1970,13 @@ function livePnlMicro(position, markTicks, market) {
   if (!qty || !markTicks) return 0
   if (isFutureMarket(market)) {
     const avgTicks = avgPriceTicks(position)
-    const multiplier = Number(market?.multiplier_micro_usdc ?? market?.multiplierMicroUsdc ?? 10000)
+    const multiplier = futureTickValueMicro(market)
     if (!avgTicks || !multiplier) return 0
-    return (Number(markTicks || 0) - avgTicks) * qty * multiplier
+    const lower = Number(market?.lower_bound_ticks ?? market?.lowerBoundTicks ?? 0)
+    const upper = Number(market?.upper_bound_ticks ?? market?.upperBoundTicks ?? 0)
+    const mark = Math.max(lower, Math.min(upper, Number(markTicks || 0)))
+    const signedDelta = qty > 0 ? mark - avgTicks : avgTicks - mark
+    return signedDelta * Math.abs(qty) * multiplier
   }
   const avg = positionAvgMicro(position)
   const mark = Number(markTicks || 0) * 10000
@@ -1890,7 +1989,11 @@ function positionValueMicro(position, markTicks, market) {
   const mark = Number(markTicks || 0)
   if (!qty || !mark) return 0
   if (isFutureMarket(market)) {
-    return qty * mark * Number(market?.multiplier_micro_usdc ?? market?.multiplierMicroUsdc ?? 10000)
+    const lower = Number(market?.lower_bound_ticks ?? market?.lowerBoundTicks ?? 0)
+    const upper = Number(market?.upper_bound_ticks ?? market?.upperBoundTicks ?? 0)
+    const clampedMark = Math.max(lower, Math.min(upper, mark))
+    const distance = positionQty(position) >= 0 ? clampedMark - lower : upper - clampedMark
+    return Math.max(0, distance) * qty * futureTickValueMicro(market)
   }
   return qty * mark * 10000
 }
@@ -1984,33 +2087,6 @@ function spread(book) {
   const ask = Number(book?.asks?.[0]?.price_ticks || book?.asks?.[0]?.priceTicks || 0)
   if (!bid || !ask) return '--'
   return Math.max(0, ask - bid)
-}
-
-function chartY(value, min, max) {
-  return 248 - ((value - min) / Math.max(1, max - min)) * 220
-}
-
-function buildChartPoints(fills, fallback, market) {
-  const source = fills.length ? fills.slice(-34).map((fill) => Number(fill.price_ticks || fill.priceTicks || fallback)) : []
-  const scalar = isFutureMarket(market)
-  const min = scalar ? Number(market?.min_price_ticks ?? market?.minPriceTicks ?? 0) : 0
-  const max = scalar ? Number(market?.max_price_ticks ?? market?.maxPriceTicks ?? Math.max(fallback * 1.2, fallback + 10)) : 100
-  const wave = scalar ? Math.max(1, Math.round((max - min) * 0.02)) : 7
-  let seed = [...String(market?.ticker || 'sarvex')].reduce((sum, char) => ((sum * 31) + char.charCodeAt(0)) >>> 0, 7)
-  const values = source.length ? source : Array.from({ length: 34 }, (_, i) => {
-    seed = (seed * 1664525 + 1013904223) >>> 0
-    const jitter = ((seed % 1000) / 1000 - 0.5) * wave * 1.8
-    const swing = Math.sin(i / 2.7) * wave * 1.15 + Math.sin(i / 6.5) * wave * 1.7
-    const drift = i * (scalar ? 0.12 : 0.22)
-    return Math.max(min + 1, Math.min(max - 1, fallback + swing + jitter + drift))
-  })
-  const points = values.map((value, index) => {
-    const x = (index / Math.max(1, values.length - 1)) * 720
-    const y = chartY(value, min, max)
-    return [x, y]
-  })
-  const line = points.map(([x, y], index) => `${index === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`).join(' ')
-  return { line, area: line, points: points.map(([x, y], index) => ({ x, y, value: values[index] })) }
 }
 
 export default App

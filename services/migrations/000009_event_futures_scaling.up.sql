@@ -1,0 +1,4 @@
+ALTER TABLE refdata.contracts
+  ADD COLUMN IF NOT EXISTS divider BIGINT NOT NULL DEFAULT 1,
+  ADD COLUMN IF NOT EXISTS multiplier_micro_per_display_unit BIGINT,
+  ADD COLUMN IF NOT EXISTS tick_value_micro BIGINT NOT NULL DEFAULT 0;

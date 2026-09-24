@@ -412,7 +412,16 @@ async fn submit_order(
             Ok(contract) => contract.into_inner(),
             Err(error) => return grpc_error(error),
         };
-        market_protection_price(side, action, &contract)
+        let snapshot = match state.me.get_book_snapshot(input.ticker.clone(), 1).await {
+            Ok(snapshot) => snapshot,
+            Err(error) => return me_core_error(error),
+        };
+        match market_protection_price(side, action, &contract, &snapshot) {
+            Ok(price) => price,
+            Err(reason) => {
+                return error_response(StatusCode::BAD_REQUEST, "MARKET_NOT_AVAILABLE", &reason)
+            }
+        }
     } else {
         input.price_ticks
     };
@@ -874,14 +883,45 @@ fn action_value(value: &str) -> Option<i32> {
     }
 }
 
-fn market_protection_price(side: i32, action: i32, contract: &Contract) -> i64 {
-    let side_is_positive = side == Side::Yes as i32 || side == Side::Long as i32;
+fn market_protection_price(
+    _side: i32,
+    action: i32,
+    contract: &Contract,
+    snapshot: &BookSnapshot,
+) -> Result<i64, String> {
     let action_is_buy = action == Action::Buy as i32;
-    if side_is_positive == action_is_buy {
-        contract.max_price_ticks
+    let best = if action_is_buy {
+        snapshot.asks.first().map(|level| level.price_ticks)
     } else {
-        contract.min_price_ticks
+        snapshot.bids.first().map(|level| level.price_ticks)
     }
+    .filter(|price| *price > 0)
+    .ok_or_else(|| "market order requires a live opposite-side quote".to_owned())?;
+    let min = contract.min_price_ticks.max(contract.lower_bound_ticks);
+    let max = if contract.max_price_ticks > 0 {
+        contract
+            .max_price_ticks
+            .min(contract.upper_bound_ticks.max(contract.max_price_ticks))
+    } else {
+        contract.upper_bound_ticks
+    };
+    let width = max
+        .checked_sub(min)
+        .filter(|value| *value > 0)
+        .ok_or_else(|| "contract price band is invalid".to_owned())?;
+    let tick = contract.tick_size.max(1);
+    let protection = ((width + 19) / 20).max(tick);
+    let raw = if action_is_buy {
+        best.saturating_add(protection)
+    } else {
+        best.saturating_sub(protection)
+    };
+    let aligned = if action_is_buy {
+        ((raw + tick - 1) / tick) * tick
+    } else {
+        (raw / tick) * tick
+    };
+    Ok(aligned.clamp(min, max))
 }
 
 fn tif_value(value: &str) -> i32 {
@@ -934,7 +974,7 @@ fn parse_timestamp(value: &str) -> Result<Option<Timestamp>, ()> {
 }
 
 fn contract_json(contract: &Contract) -> Value {
-    json!({"ticker":contract.ticker,"event_ticker":contract.event_ticker,"series_ticker":contract.series_ticker,"kind":contract.kind,"question":contract.question,"underlying":contract.underlying,"tick_size":contract.tick_size,"min_price_ticks":contract.min_price_ticks,"max_price_ticks":contract.max_price_ticks,"lower_bound_ticks":contract.lower_bound_ticks,"upper_bound_ticks":contract.upper_bound_ticks,"multiplier_micro_usdc":contract.multiplier_micro_usdc,"max_order_size":contract.max_order_size,"position_limit_per_user":contract.position_limit_per_user,"state":contract.state,"listed_at":timestamp_json(contract.listed_at.as_ref()),"open_at":timestamp_json(contract.open_at.as_ref()),"close_at":timestamp_json(contract.close_at.as_ref()),"expected_resolution_at":timestamp_json(contract.expected_resolution_at.as_ref()),"settlement_source":contract.settlement_source,"oracle_policy":contract.oracle_policy,"settlement_rule":contract.settlement_rule.as_ref().map(struct_json),"close_global_seq":contract.close_global_seq})
+    json!({"ticker":contract.ticker,"event_ticker":contract.event_ticker,"series_ticker":contract.series_ticker,"kind":contract.kind,"question":contract.question,"underlying":contract.underlying,"tick_size":contract.tick_size,"min_price_ticks":contract.min_price_ticks,"max_price_ticks":contract.max_price_ticks,"lower_bound_ticks":contract.lower_bound_ticks,"upper_bound_ticks":contract.upper_bound_ticks,"multiplier_micro_usdc":contract.multiplier_micro_usdc,"divider":contract.divider,"multiplier_micro_per_display_unit":contract.multiplier_micro_per_display_unit,"tick_value_micro":contract.tick_value_micro,"max_order_size":contract.max_order_size,"position_limit_per_user":contract.position_limit_per_user,"state":contract.state,"listed_at":timestamp_json(contract.listed_at.as_ref()),"open_at":timestamp_json(contract.open_at.as_ref()),"close_at":timestamp_json(contract.close_at.as_ref()),"expected_resolution_at":timestamp_json(contract.expected_resolution_at.as_ref()),"settlement_source":contract.settlement_source,"oracle_policy":contract.oracle_policy,"settlement_rule":contract.settlement_rule.as_ref().map(struct_json),"close_global_seq":contract.close_global_seq})
 }
 fn order_json(order: &Order) -> Value {
     json!({"order_id":order.order_id,"client_order_id":order.client_order_id,"user_id":order.user_id,"ticker":order.ticker,"side":enum_name(Side::try_from(order.side).ok()),"action":enum_name(Action::try_from(order.action).ok()),"price_ticks":order.price_ticks,"count":order.count,"filled_count":order.filled_count,"remaining_count":order.remaining_count,"tif":enum_name(TimeInForce::try_from(order.tif).ok()),"post_only":order.post_only,"reduce_only":order.reduce_only,"stp":enum_name(SelfTradePreventionType::try_from(order.stp).ok()),"status":enum_name(OrderStatus::try_from(order.status).ok()),"created_at":timestamp_json(order.created_at.as_ref()),"updated_at":timestamp_json(order.updated_at.as_ref()),"expires_at":timestamp_json(order.expires_at.as_ref()),"hold_id":order.hold_id,"avg_fill_price_ticks":order.avg_fill_price_ticks})

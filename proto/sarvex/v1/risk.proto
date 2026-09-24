@@ -28,6 +28,8 @@ message PreTradeCheckResponse {
   string reject_reason = 3;
   int64 required_hold_micro_usdc = 4;
   int64 projected_position = 5;
+  int64 opening_qty = 6;
+  int64 closing_qty = 7;
 }
 
 message GetUserLimitsRequest {

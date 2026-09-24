@@ -10,9 +10,9 @@ use sarvex_contracts::sarvex::v1::{
     ref_data_client::RefDataClient,
     risk_client::RiskClient,
     AddBookRequest, AmendOrderRequest, AmendOrderResponse, CancelOrderRequest, CancelOrderResponse,
-    Contract, ContractKind, Fill, FillRecord, GetOrderRequest, ListFillsRequest, ListFillsResponse,
-    ListOrdersRequest, ListOrdersResponse, Order, OrderStatus, SubmitOrderRequest,
-    SubmitOrderResponse,
+    Contract, ContractKind, Fill, FillRecord, GetOrderRequest, LedgerEntry, ListFillsRequest,
+    ListFillsResponse, ListOrdersRequest, ListOrdersResponse, Order, OrderStatus,
+    PostTransactionRequest, SubmitOrderRequest, SubmitOrderResponse,
 };
 use sarvex_db::connect;
 use sarvex_events::{execution_fills_subject, EventPublisher};
@@ -225,26 +225,32 @@ impl OrderRouter for OrderRouterService {
                 .await?,
             ));
         }
-        let hold = self
-            .ledger
-            .clone()
-            .place_hold(sarvex_contracts::sarvex::v1::PlaceHoldRequest {
-                idempotency_key: format!("order:{order_id}:hold"),
-                user_id: request.user_id.clone(),
-                amount_micro_usdc: risk.required_hold_micro_usdc,
-                reason: format!("ORDER:{order_id}"),
-            })
-            .await
-            .map_err(internal)?
-            .into_inner();
-        self.attach_hold(&order_id, &hold.hold_id, risk.required_hold_micro_usdc)
+        self.set_position_reservations(&order_id, risk.opening_qty, risk.closing_qty)
             .await?;
+        let (hold_id, hold_amount) = if risk.required_hold_micro_usdc > 0 {
+            let hold = self
+                .ledger
+                .clone()
+                .place_hold(sarvex_contracts::sarvex::v1::PlaceHoldRequest {
+                    idempotency_key: format!("order:{order_id}:hold"),
+                    user_id: request.user_id.clone(),
+                    amount_micro_usdc: risk.required_hold_micro_usdc,
+                    reason: format!("ORDER:{order_id}"),
+                })
+                .await
+                .map_err(internal)?
+                .into_inner();
+            (hold.hold_id, risk.required_hold_micro_usdc)
+        } else {
+            (String::new(), 0)
+        };
+        self.attach_hold(&order_id, &hold_id, hold_amount).await?;
         let me_response = match self
             .me
             .submit_order(sarvex_contracts::sarvex::v1::MeSubmitOrderRequest {
                 order_id: order_id.clone(),
                 user_id: request.user_id.clone(),
-                hold_id: hold.hold_id.clone(),
+                hold_id: hold_id.clone(),
                 ticker: request.ticker.clone(),
                 side: request.side,
                 action: request.action,
@@ -270,8 +276,9 @@ impl OrderRouter for OrderRouterService {
                 }));
             }
             Err(error) if error.was_rejected_before_enqueue() => {
-                self.release_hold(&hold.hold_id, risk.required_hold_micro_usdc, &order_id)
-                    .await?;
+                if !hold_id.is_empty() {
+                    self.release_hold(&hold_id, hold_amount, &order_id).await?;
+                }
                 self.mark_rejected(&order_id, "ME_QUEUE_FULL").await?;
                 return Ok(Response::new(
                     self.rejected_response(
@@ -286,8 +293,9 @@ impl OrderRouter for OrderRouterService {
             Err(error) => return Err(internal(error.to_string())),
         };
         if !me_response.accepted {
-            self.release_hold(&hold.hold_id, risk.required_hold_micro_usdc, &order_id)
-                .await?;
+            if !hold_id.is_empty() {
+                self.release_hold(&hold_id, hold_amount, &order_id).await?;
+            }
             self.mark_rejected(&order_id, &me_response.reject_code)
                 .await?;
             return Ok(Response::new(
@@ -301,11 +309,10 @@ impl OrderRouter for OrderRouterService {
             ));
         }
         let fills = self
-            .persist_fills(&request, &order_id, &hold.hold_id, &me_response.fills)
+            .persist_fills(&request, &order_id, &hold_id, &me_response.fills)
             .await?;
-        if request.tif == 2 && fills.is_empty() {
-            self.release_hold(&hold.hold_id, risk.required_hold_micro_usdc, &order_id)
-                .await?;
+        if request.tif == 2 && fills.is_empty() && !hold_id.is_empty() {
+            self.release_hold(&hold_id, hold_amount, &order_id).await?;
         }
         let order = self
             .find_order(&request.user_id, Some(&order_id), None)
@@ -623,6 +630,22 @@ impl OrderRouterService {
         Ok(())
     }
 
+    async fn set_position_reservations(
+        &self,
+        order_id: &str,
+        opening_qty: i64,
+        closing_qty: i64,
+    ) -> Result<(), Status> {
+        sqlx::query("UPDATE orders.orders SET opening_qty_reserved=$1, closing_qty_reserved=$2, updated_at=now() WHERE order_id=$3")
+            .bind(opening_qty)
+            .bind(closing_qty)
+            .bind(order_id)
+            .execute(&self.pool)
+            .await
+            .map_err(internal)?;
+        Ok(())
+    }
+
     async fn mark_rejected(&self, order_id: &str, code: &str) -> Result<(), Status> {
         sqlx::query("UPDATE orders.orders SET status='REJECTED', reject_code=$1, updated_at=now() WHERE order_id=$2").bind(code).bind(order_id).execute(&self.pool).await.map_err(internal)?;
         Ok(())
@@ -861,7 +884,7 @@ async fn run_fill_posting_worker(
 ) {
     loop {
         let rows = match sqlx::query(
-            "SELECT f.fill_id, f.ticker, f.maker_hold_id, f.taker_hold_id, f.maker_side, f.maker_action, f.taker_side, f.taker_action, f.price_ticks, f.count, f.maker_order_id, f.taker_order_id FROM orders.fill_posting_outbox o JOIN orders.fills f ON f.fill_id=o.fill_id WHERE o.status='PENDING' AND o.next_attempt_at <= now() ORDER BY f.global_seq ASC LIMIT 100",
+            "SELECT f.fill_id, f.ticker, f.global_seq, f.maker_hold_id, f.taker_hold_id, f.maker_side, f.maker_action, f.taker_side, f.taker_action, f.price_ticks, f.count, f.maker_order_id, f.taker_order_id, f.maker_user_id, f.taker_user_id, om.opening_qty_reserved AS maker_opening_qty, om.closing_qty_reserved AS maker_closing_qty, ot.opening_qty_reserved AS taker_opening_qty, ot.closing_qty_reserved AS taker_closing_qty FROM orders.fill_posting_outbox o JOIN orders.fills f ON f.fill_id=o.fill_id JOIN orders.orders om ON om.order_id=f.maker_order_id JOIN orders.orders ot ON ot.order_id=f.taker_order_id WHERE o.status='PENDING' AND o.next_attempt_at <= now() ORDER BY f.global_seq ASC LIMIT 100",
         )
         .fetch_all(&pool)
         .await
@@ -948,27 +971,147 @@ async fn post_fill(
     let taker_hold_id: Option<String> = row.get("taker_hold_id");
     let price_ticks: i64 = row.get("price_ticks");
     let count: i64 = row.get("count");
-    if let Some(hold_id) = maker_hold_id.filter(|value| !value.trim().is_empty()) {
-        let amount = fill_hold_amount(
-            &contract,
-            row.get("maker_side"),
-            row.get("maker_action"),
-            price_ticks,
-            count,
-        )?;
-        commit_fill_hold(ledger, &fill_id, "maker", &hold_id, amount, &destination).await?;
-    }
-    if let Some(hold_id) = taker_hold_id.filter(|value| !value.trim().is_empty()) {
-        let amount = fill_hold_amount(
-            &contract,
-            row.get("taker_side"),
-            row.get("taker_action"),
-            price_ticks,
-            count,
-        )?;
-        commit_fill_hold(ledger, &fill_id, "taker", &hold_id, amount, &destination).await?;
-    }
+    let global_seq: i64 = row.get("global_seq");
+    let maker_opening = opening_fill_count(
+        pool,
+        &row.get::<String, _>("maker_order_id"),
+        row.get("maker_opening_qty"),
+        row.get("maker_closing_qty"),
+        global_seq,
+        count,
+    )
+    .await?;
+    let taker_opening = opening_fill_count(
+        pool,
+        &row.get::<String, _>("taker_order_id"),
+        row.get("taker_opening_qty"),
+        row.get("taker_closing_qty"),
+        global_seq,
+        count,
+    )
+    .await?;
+    post_fill_party(
+        ledger,
+        &contract,
+        &fill_id,
+        "maker",
+        maker_hold_id,
+        row.get("maker_user_id"),
+        row.get("maker_side"),
+        row.get("maker_action"),
+        price_ticks,
+        count,
+        maker_opening,
+        &destination,
+    )
+    .await?;
+    post_fill_party(
+        ledger,
+        &contract,
+        &fill_id,
+        "taker",
+        taker_hold_id,
+        row.get("taker_user_id"),
+        row.get("taker_side"),
+        row.get("taker_action"),
+        price_ticks,
+        count,
+        taker_opening,
+        &destination,
+    )
+    .await?;
     let _ = pool;
+    Ok(())
+}
+
+async fn opening_fill_count(
+    pool: &PgPool,
+    order_id: &str,
+    opening_reserved: i64,
+    closing_reserved: i64,
+    global_seq: i64,
+    fill_count: i64,
+) -> Result<i64, Status> {
+    let prior: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(count),0)::BIGINT FROM orders.fills WHERE (maker_order_id=$1 OR taker_order_id=$1) AND global_seq < $2",
+    )
+    .bind(order_id)
+    .bind(global_seq)
+    .fetch_one(pool)
+    .await
+    .map_err(internal)?;
+    let opening_before = prior.saturating_sub(closing_reserved).max(0);
+    let opening_after = prior
+        .saturating_add(fill_count)
+        .saturating_sub(closing_reserved)
+        .max(0);
+    Ok(opening_after
+        .saturating_sub(opening_before)
+        .min(opening_reserved.saturating_sub(opening_before))
+        .clamp(0, fill_count))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn post_fill_party(
+    ledger: &LedgerClient<Channel>,
+    contract: &Contract,
+    fill_id: &str,
+    party: &str,
+    hold_id: Option<String>,
+    user_id: String,
+    side: i32,
+    action: i32,
+    price_ticks: i64,
+    count: i64,
+    opening_count: i64,
+    destination: &str,
+) -> Result<(), Status> {
+    if opening_count > 0 {
+        let hold_id = hold_id
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| Status::failed_precondition("opening fill is missing its order hold"))?;
+        let amount = fill_hold_amount(contract, side, action, price_ticks, opening_count)?;
+        commit_fill_hold(ledger, fill_id, party, &hold_id, amount, destination).await?;
+    }
+    let closing_count = count.saturating_sub(opening_count);
+    if closing_count > 0 && contract.kind == ContractKind::Scalar as i32 {
+        let signed = signed_position_delta(side, action, 1);
+        let is_long = signed < 0;
+        let amount = sarvex_domain::scalar_lock_micro(
+            is_long,
+            price_ticks,
+            closing_count,
+            contract.lower_bound_ticks,
+            contract.upper_bound_ticks,
+            contract.tick_value_micro,
+        )
+        .map_err(|error| Status::failed_precondition(error.to_string()))?;
+        if amount > 0 {
+            let mut client = ledger.clone();
+            client
+                .post_transaction(PostTransactionRequest {
+                    idempotency_key: format!("fill:{fill_id}:{party}:close"),
+                    reason_code: "FILL_CLOSE".to_owned(),
+                    entries: vec![
+                        LedgerEntry {
+                            account_code: destination.to_owned(),
+                            direction: "DR".to_owned(),
+                            amount_micro_usdc: amount,
+                            memo: "scalar closing payout".to_owned(),
+                        },
+                        LedgerEntry {
+                            account_code: format!("LIAB:USER:{user_id}:CASH"),
+                            direction: "CR".to_owned(),
+                            amount_micro_usdc: amount,
+                            memo: "scalar closing payout".to_owned(),
+                        },
+                    ],
+                    metadata: None,
+                })
+                .await
+                .map_err(internal)?;
+        }
+    }
     Ok(())
 }
 
@@ -1021,15 +1164,16 @@ fn fill_hold_amount(
             .checked_mul(count)
             .and_then(|value| value.checked_mul(10_000))
     } else if contract.kind == ContractKind::Scalar as i32 {
-        let signed = signed_position_delta(side, action, count);
-        let distance = if signed >= 0 {
-            price.checked_sub(contract.lower_bound_ticks)
-        } else {
-            contract.upper_bound_ticks.checked_sub(price)
-        };
-        distance
-            .and_then(|value| value.checked_mul(count))
-            .and_then(|value| value.checked_mul(contract.multiplier_micro_usdc))
+        let is_long = signed_position_delta(side, action, 1) > 0;
+        sarvex_domain::scalar_lock_micro(
+            is_long,
+            price,
+            count,
+            contract.lower_bound_ticks,
+            contract.upper_bound_ticks,
+            contract.tick_value_micro,
+        )
+        .ok()
     } else {
         None
     };
@@ -1060,7 +1204,7 @@ async fn release_order_remainder(
     refdata: &RefDataClient<Channel>,
     order_id: &str,
 ) -> Result<(), Status> {
-    let order = sqlx::query("SELECT status, ticker, hold_id, hold_amount_micro_usdc FROM orders.orders WHERE order_id=$1")
+    let order = sqlx::query("SELECT status, ticker, hold_id, hold_amount_micro_usdc, opening_qty_reserved FROM orders.orders WHERE order_id=$1")
         .bind(order_id)
         .fetch_optional(pool)
         .await
@@ -1075,6 +1219,8 @@ async fn release_order_remainder(
         return Ok(());
     };
     let hold_amount: i64 = order.get("hold_amount_micro_usdc");
+    let opening_reserved: i64 = order.get("opening_qty_reserved");
+    let closing_reserved: i64 = order.get("closing_qty_reserved");
     if hold_amount <= 0 {
         return Ok(());
     }
@@ -1085,7 +1231,7 @@ async fn release_order_remainder(
         .await
         .map_err(internal)?
         .into_inner();
-    let fills = sqlx::query("SELECT ticker, price_ticks, count, maker_hold_id, taker_hold_id, maker_side, maker_action, taker_side, taker_action FROM orders.fills WHERE maker_order_id=$1 OR taker_order_id=$1 ORDER BY global_seq ASC")
+    let fills = sqlx::query("SELECT ticker, global_seq, price_ticks, count, maker_hold_id, taker_hold_id, maker_side, maker_action, taker_side, taker_action FROM orders.fills WHERE maker_order_id=$1 OR taker_order_id=$1 ORDER BY global_seq ASC")
         .bind(order_id)
         .fetch_all(pool)
         .await
@@ -1102,14 +1248,27 @@ async fn release_order_remainder(
             continue;
         };
         if hold.is_some() {
+            let opening_count = opening_fill_count(
+                pool,
+                order_id,
+                opening_reserved,
+                closing_reserved,
+                fill.get("global_seq"),
+                fill.get("count"),
+            )
+            .await?;
             committed = committed
-                .checked_add(fill_hold_amount(
-                    &contract,
-                    side,
-                    action,
-                    fill.get("price_ticks"),
-                    fill.get("count"),
-                )?)
+                .checked_add(if opening_count > 0 {
+                    fill_hold_amount(
+                        &contract,
+                        side,
+                        action,
+                        fill.get("price_ticks"),
+                        opening_count,
+                    )?
+                } else {
+                    0
+                })
                 .ok_or_else(|| Status::failed_precondition("hold remainder overflow"))?;
         }
     }

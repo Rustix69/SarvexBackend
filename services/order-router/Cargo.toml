@@ -16,6 +16,7 @@ tonic.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 sarvex-contracts = { path = "../crates/sarvex-contracts" }
+sarvex-domain = { path = "../crates/sarvex-domain" }
 sarvex-db = { path = "../crates/sarvex-db" }
 sarvex-me-client = { path = "../crates/sarvex-me-client" }
 sarvex-events = { path = "../crates/sarvex-events" }

@@ -224,7 +224,7 @@ impl Settlement for SettlementService {
             contract.close_global_seq,
             numeric,
             &resolution.categorical_value,
-            contract.multiplier_micro_usdc,
+            winner_payout(&contract, &resolution.categorical_value),
             escrow,
             &payouts,
         )
@@ -432,21 +432,15 @@ fn compute_payout(
         let winning = if yes { qty.max(0) } else { (-qty).max(0) };
         i128::from(winning).checked_mul(i128::from(contract.multiplier_micro_usdc.max(0)))
     } else {
-        let lower = contract.lower_bound_ticks;
-        let upper = contract.upper_bound_ticks;
-        if upper < lower {
-            None
-        } else {
-            let clamped = numeric.clamp(lower, upper);
-            let distance = if qty >= 0 {
-                clamped - lower
-            } else {
-                upper - clamped
-            };
-            i128::from(qty.unsigned_abs())
-                .checked_mul(i128::from(distance))
-                .and_then(|v| v.checked_mul(i128::from(contract.multiplier_micro_usdc.max(0))))
-        }
+        sarvex_domain::scalar_payout_micro(
+            qty,
+            numeric,
+            contract.lower_bound_ticks,
+            contract.upper_bound_ticks,
+            contract.tick_value_micro,
+        )
+        .ok()
+        .map(i128::from)
     }
     .ok_or_else(|| Status::failed_precondition("settlement payout overflow"))?;
     payout
@@ -493,7 +487,7 @@ mod tests {
             kind: ContractKind::Scalar as i32,
             lower_bound_ticks: 10,
             upper_bound_ticks: 20,
-            multiplier_micro_usdc: 100,
+            tick_value_micro: 100,
             ..Default::default()
         };
         assert_eq!(compute_payout(&contract, "", 30, 2).unwrap(), 2_000);

@@ -41,6 +41,12 @@ message Contract {
   string oracle_policy = 21;
   google.protobuf.Struct settlement_rule = 22;
   uint64 close_global_seq = 23;
+  // Raw ticks per display unit. Display-only; never use this as a cash scale.
+  int64 divider = 24;
+  // Contract multiplier in micro-USDC per one display unit of the underlying.
+  int64 multiplier_micro_per_display_unit = 25;
+  // Derived listing-time value in micro-USDC per raw price tick.
+  int64 tick_value_micro = 26;
 }
 
 message Event {

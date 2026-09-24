@@ -14,7 +14,10 @@ run_sql /migrations/000005_execution_events.up.sql
 run_sql /migrations/000006_position_consumer.up.sql
 run_sql /migrations/000007_oracle_settlement.up.sql
 run_sql /migrations/000008_gateway_idempotency.up.sql
+run_sql /migrations/000009_event_futures_scaling.up.sql
 run_sql /seeds/000001_refdata.sql
 run_sql /seeds/000002_risk.sql
 run_sql /seeds/000003_trade_bots.sql
 run_sql /seeds/000004_contract_catalog.sql
+run_sql /migrations/000010_event_futures_scaling_data.up.sql
+run_sql /migrations/000011_order_position_reservations.up.sql

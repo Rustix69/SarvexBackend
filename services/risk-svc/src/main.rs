@@ -171,7 +171,23 @@ impl Risk for RiskService {
                 "count exceeds contract max order size",
             )));
         }
-        let required_hold = match required_hold(&request, &contract) {
+        let current_position = self
+            .current_position(&request.user_id, &request.ticker)
+            .await?;
+        let working = self
+            .working_order_signed_qty(&request.user_id, &request.ticker)
+            .await?;
+        let effective_position = current_position.saturating_add(working);
+        let signed_delta = signed_position_delta(request.side, request.action, request.count);
+        let closing_count = if signed_delta < 0 {
+            request.count.min(effective_position.max(0))
+        } else if signed_delta > 0 {
+            request.count.min((-effective_position).max(0))
+        } else {
+            0
+        };
+        let opening_count = request.count.saturating_sub(closing_count);
+        let required_hold = match required_hold(&request, &contract, opening_count) {
             Ok(value) => value,
             Err(reason) => return Ok(Response::new(reject("INVALID_ORDER", &reason))),
         };
@@ -181,12 +197,6 @@ impl Risk for RiskService {
                 "required hold exceeds max order limit",
             )));
         }
-        let current_position = self
-            .current_position(&request.user_id, &request.ticker)
-            .await?;
-        let working = self
-            .working_order_signed_qty(&request.user_id, &request.ticker)
-            .await?;
         let projected = current_position
             + working
             + signed_position_delta(request.side, request.action, request.count);
@@ -207,6 +217,8 @@ impl Risk for RiskService {
             approved: true,
             required_hold_micro_usdc: required_hold,
             projected_position: projected,
+            opening_qty: opening_count,
+            closing_qty: closing_count,
             reject_code: String::new(),
             reject_reason: String::new(),
         }))
@@ -333,6 +345,7 @@ fn valid_side_action(side: i32, action: i32) -> bool {
 fn required_hold(
     request: &PreTradeCheckRequest,
     contract: &sarvex_contracts::sarvex::v1::Contract,
+    opening_count: i64,
 ) -> Result<i64, String> {
     let price = request.price_ticks;
     let count = request.count;
@@ -348,22 +361,22 @@ fn required_hold(
             .ok_or_else(|| "hold calculation overflow".to_owned());
     }
     if contract.kind == ContractKind::Scalar as i32 {
-        let multiplier = if contract.multiplier_micro_usdc > 0 {
-            contract.multiplier_micro_usdc
-        } else {
-            return Err("scalar multiplier missing".to_owned());
-        };
-        let signed = signed_position_delta(request.side, request.action, count);
-        let distance = if signed >= 0 {
-            price.checked_sub(contract.lower_bound_ticks)
-        } else {
-            contract.upper_bound_ticks.checked_sub(price)
+        if opening_count == 0 {
+            return Ok(0);
         }
-        .ok_or_else(|| "scalar price is outside bounds".to_owned())?;
-        return distance
-            .checked_mul(count)
-            .and_then(|value| value.checked_mul(multiplier))
-            .ok_or_else(|| "hold calculation overflow".to_owned());
+        if contract.tick_value_micro <= 0 {
+            return Err("scalar tick value is missing".to_owned());
+        }
+        let is_long = signed_position_delta(request.side, request.action, 1) > 0;
+        return sarvex_domain::scalar_lock_micro(
+            is_long,
+            price,
+            opening_count,
+            contract.lower_bound_ticks,
+            contract.upper_bound_ticks,
+            contract.tick_value_micro,
+        )
+        .map_err(|error| error.to_string());
     }
     Err("unknown contract kind".to_owned())
 }
@@ -385,6 +398,8 @@ fn reject(code: &str, reason: &str) -> PreTradeCheckResponse {
         reject_reason: reason.to_owned(),
         required_hold_micro_usdc: 0,
         projected_position: 0,
+        opening_qty: 0,
+        closing_qty: 0,
     }
 }
 
@@ -421,8 +436,34 @@ mod tests {
             count: 10,
             ..Default::default()
         };
-        assert_eq!(required_hold(&buy, &contract).unwrap(), 4_000_000);
-        assert_eq!(required_hold(&sell, &contract).unwrap(), 6_000_000);
+        assert_eq!(
+            required_hold(&buy, &contract, buy.count).unwrap(),
+            4_000_000
+        );
+        assert_eq!(
+            required_hold(&sell, &contract, sell.count).unwrap(),
+            6_000_000
+        );
+    }
+
+    #[test]
+    fn scalar_hold_uses_raw_tick_value_and_opening_quantity() {
+        let contract = sarvex_contracts::sarvex::v1::Contract {
+            kind: ContractKind::Scalar as i32,
+            lower_bound_ticks: 2_000,
+            upper_bound_ticks: 8_000,
+            tick_value_micro: 100_000,
+            ..Default::default()
+        };
+        let buy = PreTradeCheckRequest {
+            side: Side::Long as i32,
+            action: Action::Buy as i32,
+            price_ticks: 4_000,
+            count: 3,
+            ..Default::default()
+        };
+        assert_eq!(required_hold(&buy, &contract, 2).unwrap(), 400_000_000);
+        assert_eq!(required_hold(&buy, &contract, 0).unwrap(), 0);
     }
 
     #[test]

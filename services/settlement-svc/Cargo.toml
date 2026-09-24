@@ -14,6 +14,7 @@ sqlx.workspace = true
 tonic.workspace = true
 tower-http.workspace = true
 sarvex-contracts = { path = "../crates/sarvex-contracts" }
+sarvex-domain = { path = "../crates/sarvex-domain" }
 sarvex-db = { path = "../crates/sarvex-db" }
 sarvex-events = { path = "../crates/sarvex-events" }
 tokio.workspace = true
