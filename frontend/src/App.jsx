@@ -928,7 +928,13 @@ function BinaryCleanChart({ fills, bestBid, bestAsk, market, fallback }) {
     const source = fills
       .map((fill, index) => {
         const price = Number(fill.price_ticks || fill.priceTicks || fallback)
-        return { fill, index, price: Math.max(1, Math.min(99, price)), t: fillTimestamp(fill, index, fills.length, now) }
+        return {
+          fill,
+          index,
+          price: Math.max(1, Math.min(99, price)),
+          side: chartFillSide(fill),
+          t: fillTimestamp(fill, index, fills.length, now),
+        }
       })
       .filter((item) => item.t >= now - rangeMs)
       .sort((a, b) => a.t - b.t)
@@ -938,7 +944,12 @@ function BinaryCleanChart({ fills, bestBid, bestAsk, market, fallback }) {
       : Array.from({ length: 3 }, (_, index) => ({ t: now - (2 - index) * 3600000, bid: Math.max(1, mid - 1), ask: Math.min(99, mid + 1) }))
     return {
       points,
-      fills: source.map((item) => ({ t: item.t, price: item.price, qty: Number(item.fill.count || item.fill.qty || 1), side: item.fill.side || 'buy' })),
+      fills: source.map((item) => ({
+        t: item.t,
+        price: item.price,
+        qty: Number(item.fill.count || item.fill.qty || 1),
+        side: item.side,
+      })),
       events: [],
       last: source.at(-1)?.price || mid,
       closeLabel: formatDate(market.close_at || market.closeAt || market.expected_resolution_at),
@@ -946,6 +957,13 @@ function BinaryCleanChart({ fills, bestBid, bestAsk, market, fallback }) {
   }, [bestAsk, bestBid, fallback, fills, market])
 
   return <MidPriceChart key={`${market.ticker}-${fills.length}`} getData={getData} initialRange="1D" height={300} />
+}
+
+function chartFillSide(fill) {
+  const value = fill?.side ?? fill?.aggressor_side ?? fill?.aggressorSide ?? fill?.taker_side ?? fill?.takerSide
+  if (value === 1 || String(value).toUpperCase() === 'YES') return 'yes'
+  if (value === 2 || String(value).toUpperCase() === 'NO') return 'no'
+  return 'yes'
 }
 
 function FutureDetail({ market, watchlist, watchlistFills, onSelect, orderbook, fills, position, authed, busy, onBack, onTrade, pinnedTickers, onTogglePin }) {

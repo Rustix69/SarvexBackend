@@ -360,6 +360,11 @@ export function mountMidPriceChart(root, userOpts = {}) {
     return best;
   }
   const onMove = (e) => { if (geo && data.points.length >= o.minPoints) setHover(idxAt(e.clientX)); };
+  const onClick = (e) => {
+    if (!geo || !data || data.points.length < o.minPoints) return;
+    plot.focus({ preventScroll: true });
+    setHover(idxAt(e.clientX));
+  };
   const onLeave = () => setHover(null);
   const onKey = (e) => {
     if (!data || data.points.length < o.minPoints) return;
@@ -369,6 +374,7 @@ export function mountMidPriceChart(root, userOpts = {}) {
     else if (e.key === 'Escape') setHover(null);
   };
   plot.addEventListener('pointermove', onMove);
+  plot.addEventListener('click', onClick);
   plot.addEventListener('pointerleave', onLeave);
   plot.addEventListener('keydown', onKey);
   plot.addEventListener('blur', onLeave);
@@ -404,7 +410,16 @@ export function mountMidPriceChart(root, userOpts = {}) {
       if (hover == null) header(null);
       draw();
     },
-    destroy() { ro.disconnect(); root.innerHTML = ''; root.classList.remove('mpc'); },
+    destroy() {
+      ro.disconnect();
+      plot.removeEventListener('pointermove', onMove);
+      plot.removeEventListener('click', onClick);
+      plot.removeEventListener('pointerleave', onLeave);
+      plot.removeEventListener('keydown', onKey);
+      plot.removeEventListener('blur', onLeave);
+      root.innerHTML = '';
+      root.classList.remove('mpc');
+    },
   };
 }
 
