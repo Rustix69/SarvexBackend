@@ -55,6 +55,11 @@ registerStyles('sarvexKlineTheme', {
 })
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api'
+const WS_BASE = import.meta.env.VITE_WS_BASE_URL || (
+  API_BASE.startsWith('http')
+    ? `${API_BASE.replace(/^http/, 'ws')}/ws`
+    : `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.hostname}:18082/ws`
+)
 const DEMO_MAX_ORDER_CENTS = 10000
 const LIVE_TRADE_REFRESH_MS = 1500
 const LIVE_PAGE_REFRESH_MS = 6000
@@ -114,6 +119,7 @@ function App() {
   const [orders, setOrders] = useState([])
   const [history, setHistory] = useState([])
   const [bookMarks, setBookMarks] = useState({})
+  const [liveQuotes, setLiveQuotes] = useState({})
   const [pinnedTickers, setPinnedTickers] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('sarvex_pinned_markets') || '[]')
@@ -133,6 +139,13 @@ function App() {
   const selectedTickerRef = useRef('')
   const activeViewRef = useRef(activeView)
 
+  const streamTickers = useMemo(
+    () => [...new Set([...markets, ...futures]
+      .filter((market) => !market.catalogOnly)
+      .map((market) => market.ticker))].sort(),
+    [futures, markets],
+  )
+
   const selectedMarket = useMemo(
     () => [...markets, ...futures].find((market) => market.ticker === selectedTicker),
     [futures, markets, selectedTicker],
@@ -143,8 +156,8 @@ function App() {
     ;[...markets, ...futures].forEach((market) => {
       prices[market.ticker] = impliedPrice(market, fills)
     })
-    return { ...prices, ...bookMarks }
-  }, [bookMarks, fills, futures, markets])
+    return { ...prices, ...bookMarks, ...liveQuotes }
+  }, [bookMarks, fills, futures, liveQuotes, markets])
   const marketByTicker = useMemo(() => {
     const byTicker = {}
     ;[...markets, ...futures].forEach((market) => {
@@ -354,6 +367,104 @@ function App() {
   useEffect(() => {
     activeViewRef.current = activeView
   }, [activeView])
+
+  useEffect(() => {
+    if (!streamTickers.length || typeof WebSocket === 'undefined') return undefined
+
+    let socket
+    let retryTimer
+    let stopped = false
+    const books = new Map()
+    const tickerSet = new Set(streamTickers)
+
+    const publishMark = (ticker, book) => {
+      const bids = [...book.bids.entries()].filter(([, qty]) => qty > 0).sort((a, b) => b[0] - a[0])
+      const asks = [...book.asks.entries()].filter(([, qty]) => qty > 0).sort((a, b) => a[0] - b[0])
+      const bid = bids[0]?.[0] || 0
+      const ask = asks[0]?.[0] || 0
+      const mark = midpoint(bid, ask) || ask || bid || 0
+      if (mark) setLiveQuotes((current) => current[ticker] === mark ? current : { ...current, [ticker]: mark })
+    }
+
+    const loadSnapshot = async (ticker) => {
+      try {
+        const snapshot = await api(`/v1/markets/${ticker}/orderbook?depth=25`, { auth: false })
+        if (stopped) return
+        const book = {
+          seq: Number(snapshot?.seq || 0),
+          bids: new Map((snapshot?.bids || []).map((level) => [Number(level.price_ticks ?? level.priceTicks), Number(level.total_qty ?? level.totalQty)])),
+          asks: new Map((snapshot?.asks || []).map((level) => [Number(level.price_ticks ?? level.priceTicks), Number(level.total_qty ?? level.totalQty)])),
+        }
+        books.set(ticker, book)
+        publishMark(ticker, book)
+      } catch {
+        // REST polling remains the fallback if stream resynchronization fails.
+      }
+    }
+
+    const handleMessage = (message) => {
+      if (!message || !tickerSet.has(message.ticker)) return
+      if (message.type === 'market_book_snapshot') {
+        const book = {
+          seq: Number(message.seq || 0),
+          bids: new Map((message.bids || []).map((level) => [Number(level.price_ticks ?? level.priceTicks), Number(level.total_qty ?? level.totalQty)])),
+          asks: new Map((message.asks || []).map((level) => [Number(level.price_ticks ?? level.priceTicks), Number(level.total_qty ?? level.totalQty)])),
+        }
+        books.set(message.ticker, book)
+        publishMark(message.ticker, book)
+        return
+      }
+      if (message.type !== 'market_book_delta') return
+
+      const book = books.get(message.ticker)
+      if (!book) {
+        loadSnapshot(message.ticker)
+        return
+      }
+      const sequence = Number(message.contract_seq || 0)
+      if (sequence && book.seq && sequence <= book.seq) return
+      if (sequence && book.seq && sequence > book.seq + 1) {
+        loadSnapshot(message.ticker)
+        return
+      }
+      const side = Number(message.side)
+      const levels = side === 1 || side === 3 ? book.bids : side === 2 || side === 4 ? book.asks : null
+      const price = Number(message.price_ticks || 0)
+      if (!levels || !price) return
+      const quantity = Number(message.new_total_qty || 0)
+      if (quantity > 0) levels.set(price, quantity)
+      else levels.delete(price)
+      book.seq = sequence || book.seq
+      publishMark(message.ticker, book)
+    }
+
+    const connect = () => {
+      if (stopped) return
+      socket = new WebSocket(WS_BASE)
+      socket.onopen = () => {
+        streamTickers.forEach((ticker) => socket.send(JSON.stringify({ op: 'subscribe', channel: 'market', ticker })))
+      }
+      socket.onmessage = (event) => {
+        try {
+          handleMessage(JSON.parse(event.data))
+        } catch {
+          // Ignore malformed stream messages and keep the connection alive.
+        }
+      }
+      socket.onerror = () => socket.close()
+      socket.onclose = () => {
+        if (!stopped) retryTimer = window.setTimeout(connect, 3000)
+      }
+    }
+
+    setLiveQuotes((current) => Object.fromEntries(Object.entries(current).filter(([ticker]) => tickerSet.has(ticker))))
+    connect()
+    return () => {
+      stopped = true
+      window.clearTimeout(retryTimer)
+      socket?.close()
+    }
+  }, [api, streamTickers])
 
   useEffect(() => {
     const onPopState = () => {
@@ -581,6 +692,7 @@ function App() {
           loading={loading}
           futures={futures}
           fills={fills}
+          marketPrices={marketPrices}
           onSelect={handleMarketSelect}
           searchQuery={searchQuery}
         />
@@ -589,6 +701,7 @@ function App() {
           loading={loading}
           markets={markets}
           fills={fills}
+          marketPrices={marketPrices}
           onSelect={handleMarketSelect}
           searchQuery={searchQuery}
         />
@@ -732,7 +845,7 @@ function HealthPage({ api }) {
   )
 }
 
-function MarketDashboard({ loading, markets, fills, onSelect, searchQuery }) {
+function MarketDashboard({ loading, markets, fills, marketPrices, onSelect, searchQuery }) {
   const [section, setSection] = useState('All')
   const rows = markets
     .filter((market) => section === 'All' || contractSection(market) === section)
@@ -753,7 +866,7 @@ function MarketDashboard({ loading, markets, fills, onSelect, searchQuery }) {
         </div>
         <aside className="live-panel">
           <div className="live-panel-head"><span><i /> Live markets</span><span>1 / 11 <ChevronDown size={13} /></span></div>
-          {markets.slice(0, 5).map((market, index) => <button type="button" className="live-market" key={market.ticker} onClick={() => onSelect(market.ticker)}><span className={`live-avatar avatar-${index}`}>{avatarText(market)}</span><span><small>{contractSection(market)} · {market.catalogOnly ? 'Planned' : 'Live'}</small><b>{market.question || market.underlying || market.ticker}</b></span><strong>{Math.max(1, Math.min(99, impliedPrice(market, fills)))}%</strong></button>)}
+          {markets.slice(0, 5).map((market, index) => <button type="button" className="live-market" key={market.ticker} onClick={() => onSelect(market.ticker)}><span className={`live-avatar avatar-${index}`}>{avatarText(market)}</span><span><small>{contractSection(market)} · {market.catalogOnly ? 'Planned' : 'Live'}</small><b>{market.question || market.underlying || market.ticker}</b></span><strong>{Math.max(1, Math.min(99, marketPrices[market.ticker] || impliedPrice(market, fills)))}%</strong></button>)}
         </aside>
       </section>
 
@@ -766,6 +879,7 @@ function MarketDashboard({ loading, markets, fills, onSelect, searchQuery }) {
               key={market.ticker}
               market={market}
               fills={fills}
+              marketPrices={marketPrices}
               index={index}
               section={section}
               onClick={() => onSelect(market.ticker)}
@@ -777,8 +891,8 @@ function MarketDashboard({ loading, markets, fills, onSelect, searchQuery }) {
   )
 }
 
-function MarketCard({ market, fills, section, onClick }) {
-  const price = impliedPrice(market, fills)
+function MarketCard({ market, fills, marketPrices, section, onClick }) {
+  const price = marketPrices[market.ticker] || impliedPrice(market, fills)
   const cardMarket = {
     id: market.ticker,
     question: cardMarketTitle(market),
@@ -793,7 +907,7 @@ function MarketCard({ market, fills, section, onClick }) {
   return <BinaryCard market={cardMarket} onBuy={onClick} onOpen={onClick} />
 }
 
-function FuturesDashboard({ loading, futures, fills, onSelect, searchQuery }) {
+function FuturesDashboard({ loading, futures, fills, marketPrices, onSelect, searchQuery }) {
   const [section, setSection] = useState('All')
   const rows = futures
     .filter((market) => section === 'All' || contractSection(market) === section)
@@ -814,6 +928,7 @@ function FuturesDashboard({ loading, futures, fills, onSelect, searchQuery }) {
               key={market.ticker}
               market={market}
               fills={fills}
+              marketPrices={marketPrices}
               index={index}
               onClick={() => onSelect(market.ticker)}
             />
@@ -826,8 +941,8 @@ function FuturesDashboard({ loading, futures, fills, onSelect, searchQuery }) {
   )
 }
 
-function FutureCard({ market, fills, onClick }) {
-  const price = impliedPrice(market, fills)
+function FutureCard({ market, fills, marketPrices, onClick }) {
+  const price = marketPrices[market.ticker] || impliedPrice(market, fills)
   const min = Number(market.min_price_ticks ?? market.minPriceTicks ?? 0)
   const max = Number(market.max_price_ticks ?? market.maxPriceTicks ?? Math.max(price, 1))
   const position = max > min ? Math.max(0, Math.min(100, ((price - min) / (max - min)) * 100)) : 50
