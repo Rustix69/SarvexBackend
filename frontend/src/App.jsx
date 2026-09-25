@@ -1614,9 +1614,18 @@ function PortfolioOrderRow({ order, market }) {
       <span>{order.ticker}</span>
       <span>{scalar ? futuresOrderLabel(order) : `${orderActionLabel(order.action)} ${orderSideLabel(order.side)}`}</span>
       <span>{scalar ? formatFuturePrice(market, price) : `${price}¢`}</span>
-      <span>{orderStatusLabel(order.status)}</span>
+      <span>{formatPortfolioOrderStatus(order)}</span>
     </div>
   )
+}
+
+function formatPortfolioOrderStatus(order) {
+  const label = orderStatusLabel(order?.status)
+  if (label !== 'Partial') return label
+
+  const filled = Number(order?.filled_count ?? order?.filledCount ?? 0)
+  const total = Number(order?.count ?? 0)
+  return total > 0 ? `Partial (${filled}/${total} filled)` : label
 }
 
 function OrderBook({ book, market }) {
