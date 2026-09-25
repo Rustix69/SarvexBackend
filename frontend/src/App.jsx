@@ -59,7 +59,8 @@ const DEMO_MAX_ORDER_CENTS = 10000
 const LIVE_TRADE_REFRESH_MS = 1500
 const LIVE_PAGE_REFRESH_MS = 6000
 const MARKET_LIST_REFRESH_MS = 30000
-const FILL_PAGE_LIMIT = 40
+const FILL_PAGE_LIMIT = 500
+const FILL_HISTORY_LIMIT = 600
 const SCALAR_KIND = 2
 const MARKET_SECTIONS = ['All', 'Economics', 'Finance', 'Crypto', 'Commodities', 'Elections', 'Climate', 'Geopolitics / Shipping']
 const HIDDEN_DEMO_MARKET_TICKERS = new Set([
@@ -956,7 +957,7 @@ function BinaryCleanChart({ fills, bestBid, bestAsk, market, fallback }) {
     }
   }, [bestAsk, bestBid, fallback, fills, market])
 
-  return <MidPriceChart key={`${market.ticker}-${fills.length}`} getData={getData} initialRange="1D" height={300} />
+  return <MidPriceChart key={`${market.ticker}-${fills.length}`} getData={getData} initialRange="ALL" height={300} />
 }
 
 function chartFillSide(fill) {
@@ -1960,9 +1961,9 @@ function mergeRecentFills(current, incoming, tickers) {
     byTicker.set(fill.ticker, tickerFills)
   }
   return [...byTicker.values()].flatMap((tickerFills) => (
-    [...tickerFills.values()]
-      .sort((a, b) => fillSeq(a) - fillSeq(b))
-      .slice(-300)
+      [...tickerFills.values()]
+        .sort((a, b) => fillSeq(a) - fillSeq(b))
+      .slice(-FILL_HISTORY_LIMIT)
   ))
 }
 
