@@ -30,6 +30,7 @@ WHERE operation_id IS NULL;
 
 ALTER TABLE gateway.idempotency_records
   ALTER COLUMN response_body DROP NOT NULL,
+  DROP CONSTRAINT IF EXISTS gateway_idempotency_status_check,
   ADD CONSTRAINT gateway_idempotency_status_check
     CHECK (status IN ('IN_PROGRESS', 'COMPLETED', 'UNKNOWN'));
 
