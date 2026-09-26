@@ -11,7 +11,8 @@ SET cancelled_count = CASE
       WHEN status = 'EXPIRED' THEN GREATEST(count - filled_count, 0)
       ELSE expired_count
     END
-WHERE status IN ('CANCELLED', 'EXPIRED');
+WHERE (status = 'CANCELLED' AND cancelled_count = 0)
+   OR (status = 'EXPIRED' AND expired_count = 0);
 
 ALTER TABLE orders.orders
   DROP CONSTRAINT IF EXISTS orders_orders_quantity_lifecycle_check,
