@@ -216,6 +216,7 @@ services:
     environment:
       POSTGRES_URL: postgres://sarvex:sarvex@postgres:5432/sarvex
       ORDER_ROUTER_ADDR: http://order-router:50055
+      REFDATA_ADDR: http://refdata-svc:50051
       NATS_URL: nats://nats:4222
       GRPC_PORT: 50056
       HTTP_PORT: 8086
