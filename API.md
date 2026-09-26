@@ -50,6 +50,9 @@ Idempotency-Key: order-20260925-000001
 The key is scoped to the authenticated user, HTTP method, and request path.
 Retrying the same request with the same key returns the stored response.
 Reusing a key with a different request body returns `409 IDEMPOTENCY_KEY_REUSED`.
+If the first attempt was durably accepted but its result is not known yet,
+retries return `409 OPERATION_IN_PROGRESS`; reuse the same key while the
+gateway reconciles the original command.
 
 Use a new key for every logical order submission, cancellation, or demo credit.
 
@@ -291,7 +294,9 @@ Response `200`:
 {
   "ticker": "SXF-FFUB-26OCT",
   "total_open_long": 120,
-  "total_open_short": 115
+  "total_open_short": 120,
+  "as_of_global_seq": 8201,
+  "as_of": "2026-09-25T09:10:00Z"
 }
 ```
 
@@ -453,6 +458,8 @@ Response `200`:
       "count": 10,
       "filled_count": 4,
       "remaining_count": 6,
+      "cancelled_count": 0,
+      "expired_count": 0,
       "tif": "GTC",
       "post_only": false,
       "reduce_only": false,
@@ -500,7 +507,11 @@ Response `200`:
   "order": {
     "order_id": "ord-123",
     "status": "CANCELLED",
-    "remaining_count": 6
+    "count": 10,
+    "filled_count": 4,
+    "remaining_count": 0,
+    "cancelled_count": 6,
+    "expired_count": 0
   },
   "reject_code": "",
   "reject_reason": ""
@@ -611,13 +622,14 @@ Response `200`:
 ### List positions
 
 ```http
-GET /v1/positions?include_closed=false
+GET /v1/positions?include_closed=false&limit=100&cursor=<cursor>
 Authorization: Bearer <token>
 ```
 
-The current gateway accepts the query parameter for compatibility; the
-gateway's current implementation requests all positions from the position
-service. Clients should filter terminal zero-quantity positions if needed.
+`include_closed=false` excludes retained zero-quantity positions.
+`include_closed=true` includes them when the account needs realized P&L or
+historical records. `limit` is clamped to `1` through `500`; `next_cursor`
+is a ticker cursor that preserves this filter.
 
 Response `200`:
 
@@ -704,6 +716,7 @@ The server first sends a snapshot:
   "type": "market_book_snapshot",
   "ticker": "SX-FEDDEC-26OCT-H25",
   "seq": 421,
+  "book_seq": 421,
   "bids": [{ "price_ticks": 49, "total_qty": 120, "order_count": 8 }],
   "asks": [{ "price_ticks": 51, "total_qty": 96, "order_count": 6 }]
 }
@@ -718,6 +731,8 @@ It then sends deltas:
   "ticker": "SX-FEDDEC-26OCT-H25",
   "global_seq": 8202,
   "contract_seq": 422,
+  "book_seq": 422,
+  "book_side": "BID",
   "side": 1,
   "price_ticks": 49,
   "qty_delta": -10,
@@ -725,9 +740,11 @@ It then sends deltas:
 }
 ```
 
-Clients must apply a delta only when its contract sequence follows the last
-applied sequence. On a gap, discard the local book and fetch a fresh REST
-snapshot before applying newer deltas.
+`book_seq` is the continuity sequence for this market book. Clients must
+apply a delta only when it follows the last applied `book_seq`; `new_total_qty`
+is authoritative and `qty_delta` is a consistency check. A zero total removes
+the level. On a gap, discard the local book and fetch a fresh REST snapshot
+before applying newer deltas.
 
 The current market channel emits book snapshots and book deltas. Use the REST
 fills endpoint for public recent trades. The private channel below emits the
@@ -791,6 +808,60 @@ Known codes include `INVALID_MESSAGE`, `CHANNEL_REQUIRED`, `TICKER_REQUIRED`,
    another user.
 
 ## Current Scope and Deferred API Work
+
+## RFQ API
+
+RFQ endpoints use the same authenticated demo/JWT bearer token and require an
+`Idempotency-Key` for every mutating request. Prices and quantities are integer
+ticks/counts, matching the order API.
+
+Create an RFQ:
+
+```http
+POST /v1/rfqs
+Authorization: Bearer <token>
+Idempotency-Key: rfq-create-123
+Content-Type: application/json
+
+{
+  "client_rfq_id": "client-rfq-123",
+  "ticker": "SX-FEDDEC-26OCT-H25",
+  "side": "YES",
+  "action": "BUY",
+  "requested_count": 20,
+  "expires_at": "2026-09-26T12:00:00Z"
+}
+```
+
+Quote workflow:
+
+```http
+GET  /v1/rfqs/{rfq_id}
+GET  /v1/rfqs/{rfq_id}/quotes?limit=100&cursor={cursor}
+POST /v1/rfqs/{rfq_id}/quotes
+POST /v1/rfqs/{rfq_id}/quotes/{quote_id}/accept
+POST /v1/rfqs/{rfq_id}/quotes/{quote_id}/cancel
+POST /v1/rfqs/{rfq_id}/cancel
+```
+
+Quote submission body:
+
+```json
+{
+  "quote_id": "quote-123",
+  "bid_price_ticks": 48,
+  "offer_price_ticks": 52,
+  "available_count": 20,
+  "expires_at": "2026-09-26T11:59:00Z"
+}
+```
+
+Accepting a quote atomically selects one quote and cancels the remaining
+pending quotes. The initial implementation returns
+`RFQ_STATUS_ACCEPTED_PENDING_EXECUTION`; it deliberately does not create a
+fill outside me-core. RFQ execution is complete only after the future me-core
+execution bridge submits the corresponding sequenced order flow and the RFQ
+state is advanced to `EXECUTED`.
 
 The following are intentionally not public REST endpoints yet:
 

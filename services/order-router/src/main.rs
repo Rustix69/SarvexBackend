@@ -39,7 +39,7 @@ struct HealthState {
     pool: PgPool,
 }
 
-const ORDER_SELECT: &str = "SELECT order_id, client_order_id, user_id, ticker, side, action, price_ticks, count, filled_count, tif, post_only, reduce_only, stp, status, reject_code, hold_id, hold_amount_micro_usdc, avg_fill_price_ticks, created_at, updated_at, expires_at FROM orders.orders";
+const ORDER_SELECT: &str = "SELECT order_id, client_order_id, user_id, ticker, side, action, price_ticks, count, filled_count, cancelled_count, expired_count, tif, post_only, reduce_only, stp, status, reject_code, hold_id, hold_amount_micro_usdc, avg_fill_price_ticks, created_at, updated_at, expires_at FROM orders.orders";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -377,7 +377,7 @@ impl OrderRouter for OrderRouterService {
                 reject_reason: "matching engine did not cancel the order".to_owned(),
             }));
         }
-        sqlx::query("UPDATE orders.orders SET status='CANCELLED', updated_at=now() WHERE order_id=$1 AND user_id=$2 AND status IN ('PENDING','OPEN','PARTIAL')")
+        sqlx::query("UPDATE orders.orders SET status='CANCELLED', cancelled_count=GREATEST(count-filled_count, 0), updated_at=now() WHERE order_id=$1 AND user_id=$2 AND status IN ('PENDING','OPEN','PARTIAL')")
             .bind(&request.order_id)
             .bind(&request.user_id)
             .execute(&self.pool)
@@ -786,7 +786,7 @@ impl OrderRouterService {
             } else {
                 "OPEN"
             };
-            sqlx::query("UPDATE orders.orders SET status=$1, updated_at=now() WHERE order_id=$2")
+            sqlx::query("UPDATE orders.orders SET status=$1, cancelled_count=CASE WHEN $1='CANCELLED' THEN GREATEST(count-filled_count, 0) ELSE cancelled_count END, updated_at=now() WHERE order_id=$2")
                 .bind(status)
                 .bind(order_id)
                 .execute(&mut *tx)
@@ -801,7 +801,7 @@ impl OrderRouterService {
             } else {
                 "PARTIAL"
             };
-            sqlx::query("UPDATE orders.orders SET avg_fill_price_ticks=$1, status=$2, updated_at=now() WHERE order_id=$3").bind(avg).bind(status).bind(order_id).execute(&mut *tx).await.map_err(internal)?;
+            sqlx::query("UPDATE orders.orders SET avg_fill_price_ticks=$1, status=$2, cancelled_count=CASE WHEN $2='CANCELLED' THEN GREATEST(count-filled_count, 0) ELSE cancelled_count END, updated_at=now() WHERE order_id=$3").bind(avg).bind(status).bind(order_id).execute(&mut *tx).await.map_err(internal)?;
         }
         sqlx::query("UPDATE orders.orders SET hold_id=COALESCE(hold_id,$1) WHERE order_id=$2")
             .bind(hold_id)
@@ -1313,6 +1313,8 @@ async fn update_order_fill(
 fn order_from_row(row: &sqlx::postgres::PgRow) -> Order {
     let count: i64 = row.get("count");
     let filled_count: i64 = row.get("filled_count");
+    let cancelled_count: i64 = row.get("cancelled_count");
+    let expired_count: i64 = row.get("expired_count");
     Order {
         order_id: row.get("order_id"),
         client_order_id: row.get("client_order_id"),
@@ -1323,7 +1325,10 @@ fn order_from_row(row: &sqlx::postgres::PgRow) -> Order {
         price_ticks: row.get("price_ticks"),
         count,
         filled_count,
-        remaining_count: count.saturating_sub(filled_count),
+        remaining_count: count
+            .saturating_sub(filled_count)
+            .saturating_sub(cancelled_count)
+            .saturating_sub(expired_count),
         tif: row.get("tif"),
         post_only: row.get("post_only"),
         reduce_only: row.get("reduce_only"),
@@ -1336,6 +1341,8 @@ fn order_from_row(row: &sqlx::postgres::PgRow) -> Order {
             .map(timestamp),
         hold_id: row.get::<Option<String>, _>("hold_id").unwrap_or_default(),
         avg_fill_price_ticks: row.get("avg_fill_price_ticks"),
+        cancelled_count,
+        expired_count,
     }
 }
 

@@ -1,0 +1,3 @@
+DROP TABLE IF EXISTS rfq.quotes;
+DROP TABLE IF EXISTS rfq.requests;
+DROP SCHEMA IF EXISTS rfq;

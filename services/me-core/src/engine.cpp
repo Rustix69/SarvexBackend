@@ -502,6 +502,7 @@ SnapshotResult Engine::apply_snapshot(const sarvex::v1::GetBookSnapshotRequest& 
   auto& snapshot = result.snapshot;
   snapshot.set_ticker(request.ticker());
   snapshot.set_seq(state->contract_seq);
+  snapshot.set_book_seq(state->contract_seq);
   set_now(snapshot.mutable_ts());
   const int limit = request.depth() <= 0 ? 25 : std::min(request.depth(), 25);
   int count = 0;
@@ -701,7 +702,8 @@ void Engine::on_depth_change(const Book* book, const DepthTracker* depth) {
     }
   }
   auto emit_levels = [this, state](const auto& previous, const auto& current,
-                                   sarvex::v1::Side side) {
+                                   sarvex::v1::Side side,
+                                   sarvex::v1::BookSide book_side) {
     std::map<int64_t, std::pair<int64_t, int32_t>> prices;
     for (const auto& item : previous) prices[item.first] = item.second;
     for (const auto& item : current) prices[item.first] = item.second;
@@ -718,9 +720,12 @@ void Engine::on_depth_change(const Book* book, const DepthTracker* depth) {
       set_now(event.mutable_ts());
       auto* delta = event.mutable_book_delta();
       delta->set_side(side);
+      delta->set_book_side(book_side);
+      delta->set_book_seq(state->contract_seq);
       delta->set_price_ticks(item.first);
       delta->set_qty_delta(new_qty - old_qty);
       delta->set_new_total_qty(new_qty);
+      delta->set_new_order_count(new_it == current.end() ? 0 : new_it->second.second);
       publish(std::move(event));
     }
   };
@@ -731,8 +736,8 @@ void Engine::on_depth_change(const Book* book, const DepthTracker* depth) {
   const auto ask_side = state->kind == sarvex::v1::CONTRACT_KIND_BINARY
                             ? sarvex::v1::SIDE_NO
                             : sarvex::v1::SIDE_SHORT;
-  emit_levels(state->previous_bids, bids, bid_side);
-  emit_levels(state->previous_asks, asks, ask_side);
+  emit_levels(state->previous_bids, bids, bid_side, sarvex::v1::BOOK_SIDE_BID);
+  emit_levels(state->previous_asks, asks, ask_side, sarvex::v1::BOOK_SIDE_ASK);
   state->previous_bids = std::move(bids);
   state->previous_asks = std::move(asks);
 }

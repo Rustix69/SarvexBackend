@@ -15,6 +15,7 @@ members = [
   "risk-svc",
   "position-svc",
   "refdata-svc",
+  "rfq-svc",
   "oracle-svc",
   "settlement-svc",
   "audit-svc",

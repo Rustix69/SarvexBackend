@@ -186,6 +186,27 @@ services:
       - "15055:50055"
       - "18065:8085"
 
+  rfq-svc:
+    build:
+      context: ..
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE: rfq-svc
+    environment:
+      POSTGRES_URL: postgres://sarvex:sarvex@postgres:5432/sarvex
+      REFDATA_ADDR: http://refdata-svc:50051
+      GRPC_PORT: 50059
+      HTTP_PORT: 8091
+      RUST_LOG: info
+    depends_on:
+      refdata-svc:
+        condition: service_started
+      refdata-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "15059:50059"
+      - "18091:8091"
+
   position-svc:
     build:
       context: ..
@@ -221,6 +242,7 @@ services:
       ORDER_ROUTER_ADDR: http://order-router:50055
       LEDGER_ADDR: http://ledger-svc:50052
       POSITION_ADDR: http://position-svc:50056
+      RFQ_ADDR: http://rfq-svc:50059
       ME_CORE_ADDR: http://me-core:50054
       DATABASE_URL: postgres://sarvex:sarvex@postgres:5432/sarvex
       AUTH_MODE: ${AUTH_MODE:-demo}
@@ -237,6 +259,8 @@ services:
       ledger-svc:
         condition: service_started
       position-svc:
+        condition: service_started
+      rfq-svc:
         condition: service_started
       me-core:
         condition: service_started

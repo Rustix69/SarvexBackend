@@ -32,6 +32,8 @@ message GetPositionRequest {
 message ListPositionsRequest {
   string user_id = 1;
   bool include_closed = 2;
+  int32 limit = 3;
+  string cursor = 4;
 }
 
 message ListPositionsResponse {
@@ -55,4 +57,6 @@ message OpenInterest {
   string ticker = 1;
   int64 total_open_long = 2;
   int64 total_open_short = 3;
+  uint64 as_of_global_seq = 4;
+  google.protobuf.Timestamp as_of = 5;
 }

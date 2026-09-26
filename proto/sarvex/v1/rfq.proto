@@ -1,0 +1,123 @@
+syntax = "proto3";
+
+package sarvex.v1;
+
+option go_package = "github.com/sarvex/proto/gen/go/sarvex/v1;sarvexv1";
+
+import "google/protobuf/timestamp.proto";
+import "sarvex/v1/common.proto";
+
+service RfqService {
+  rpc CreateRfq(CreateRfqRequest) returns (Rfq);
+  rpc GetRfq(GetRfqRequest) returns (Rfq);
+  rpc ListQuotes(ListQuotesRequest) returns (ListQuotesResponse);
+  rpc CancelRfq(CancelRfqRequest) returns (Rfq);
+  rpc SubmitQuote(SubmitQuoteRequest) returns (RfqQuote);
+  rpc CancelQuote(CancelQuoteRequest) returns (RfqQuote);
+  rpc AcceptQuote(AcceptQuoteRequest) returns (Rfq);
+}
+
+enum RfqStatus {
+  RFQ_STATUS_UNSPECIFIED = 0;
+  RFQ_STATUS_OPEN = 1;
+  RFQ_STATUS_ACCEPTED_PENDING_EXECUTION = 2;
+  RFQ_STATUS_EXECUTED = 3;
+  RFQ_STATUS_CANCELLED = 4;
+  RFQ_STATUS_EXPIRED = 5;
+  RFQ_STATUS_REJECTED = 6;
+}
+
+enum RfqQuoteStatus {
+  RFQ_QUOTE_STATUS_UNSPECIFIED = 0;
+  RFQ_QUOTE_STATUS_PENDING = 1;
+  RFQ_QUOTE_STATUS_ACCEPTED = 2;
+  RFQ_QUOTE_STATUS_REJECTED = 3;
+  RFQ_QUOTE_STATUS_CANCELLED = 4;
+  RFQ_QUOTE_STATUS_EXPIRED = 5;
+}
+
+message Rfq {
+  string rfq_id = 1;
+  string client_rfq_id = 2;
+  string creator_user_id = 3;
+  string ticker = 4;
+  Side side = 5;
+  Action action = 6;
+  int64 requested_count = 7;
+  google.protobuf.Timestamp expires_at = 8;
+  RfqStatus status = 9;
+  string accepted_quote_id = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+}
+
+message RfqQuote {
+  string quote_id = 1;
+  string rfq_id = 2;
+  string maker_user_id = 3;
+  int64 bid_price_ticks = 4;
+  int64 offer_price_ticks = 5;
+  int64 available_count = 6;
+  google.protobuf.Timestamp expires_at = 7;
+  RfqQuoteStatus status = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+message CreateRfqRequest {
+  string creator_user_id = 1;
+  string client_rfq_id = 2;
+  string ticker = 3;
+  Side side = 4;
+  Action action = 5;
+  int64 requested_count = 6;
+  google.protobuf.Timestamp expires_at = 7;
+  string idempotency_key = 8;
+}
+
+message GetRfqRequest {
+  string user_id = 1;
+  string rfq_id = 2;
+}
+
+message ListQuotesRequest {
+  string user_id = 1;
+  string rfq_id = 2;
+  int32 limit = 3;
+  string cursor = 4;
+}
+
+message ListQuotesResponse {
+  repeated RfqQuote quotes = 1;
+  string next_cursor = 2;
+}
+
+message CancelRfqRequest {
+  string creator_user_id = 1;
+  string rfq_id = 2;
+  string idempotency_key = 3;
+}
+
+message SubmitQuoteRequest {
+  string maker_user_id = 1;
+  string quote_id = 2;
+  string rfq_id = 3;
+  int64 bid_price_ticks = 4;
+  int64 offer_price_ticks = 5;
+  int64 available_count = 6;
+  google.protobuf.Timestamp expires_at = 7;
+  string idempotency_key = 8;
+}
+
+message CancelQuoteRequest {
+  string maker_user_id = 1;
+  string quote_id = 2;
+  string idempotency_key = 3;
+}
+
+message AcceptQuoteRequest {
+  string creator_user_id = 1;
+  string rfq_id = 2;
+  string quote_id = 3;
+  string idempotency_key = 4;
+}

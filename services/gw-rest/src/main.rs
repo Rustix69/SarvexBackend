@@ -12,11 +12,14 @@ use prost_types::Timestamp;
 use sarvex_auth::{AuthMode, Authenticator};
 use sarvex_contracts::sarvex::v1::{
     get_order_request, ledger_client::LedgerClient, order_router_client::OrderRouterClient,
-    position_client::PositionClient, ref_data_client::RefDataClient, Action, Balance, BookSnapshot,
-    CancelOrderRequest, Contract, ContractState, Fill, GetAccountHistoryRequest, GetBalanceRequest,
-    GetContractRequest, GetOpenInterestRequest, GetOrderRequest, GetPositionRequest,
-    ListContractsRequest, ListFillsRequest, ListOrdersRequest, ListPositionsRequest, Order,
-    OrderStatus, SelfTradePreventionType, Side, SubmitOrderRequest, TimeInForce,
+    position_client::PositionClient, ref_data_client::RefDataClient,
+    rfq_service_client::RfqServiceClient, AcceptQuoteRequest, Action, Balance, BookSnapshot,
+    CancelOrderRequest, CancelQuoteRequest, CancelRfqRequest, Contract, ContractState,
+    CreateRfqRequest, Fill, GetAccountHistoryRequest, GetBalanceRequest, GetContractRequest,
+    GetOpenInterestRequest, GetOrderRequest, GetPositionRequest, GetRfqRequest,
+    ListContractsRequest, ListFillsRequest, ListOrdersRequest, ListPositionsRequest,
+    ListQuotesRequest, Order, OrderStatus, Rfq, RfqQuote, RfqQuoteStatus, RfqStatus,
+    SelfTradePreventionType, Side, SubmitOrderRequest, SubmitQuoteRequest, TimeInForce,
 };
 use sarvex_db::connect;
 use sarvex_me_client::{MeCoreClient, MeCoreError};
@@ -45,6 +48,7 @@ struct AppState {
     orders: OrderRouterClient<Channel>,
     ledger: LedgerClient<Channel>,
     positions: PositionClient<Channel>,
+    rfq: RfqServiceClient<Channel>,
     me: MeCoreClient,
 }
 
@@ -103,6 +107,29 @@ struct OrderQuery {
     cursor: Option<String>,
 }
 #[derive(Debug, Deserialize)]
+struct PositionQuery {
+    include_closed: Option<bool>,
+    limit: Option<i32>,
+    cursor: Option<String>,
+}
+#[derive(Debug, Deserialize, Serialize)]
+struct RfqInput {
+    client_rfq_id: String,
+    ticker: String,
+    side: String,
+    action: String,
+    requested_count: i64,
+    expires_at: String,
+}
+#[derive(Debug, Deserialize, Serialize)]
+struct RfqQuoteInput {
+    quote_id: String,
+    bid_price_ticks: i64,
+    offer_price_ticks: i64,
+    available_count: i64,
+    expires_at: String,
+}
+#[derive(Debug, Deserialize)]
 struct FillQuery {
     from_global_seq: Option<u64>,
     to_global_seq: Option<u64>,
@@ -141,6 +168,7 @@ async fn main() -> anyhow::Result<()> {
         )?),
         ledger: LedgerClient::new(grpc_channel("LEDGER_ADDR", "http://127.0.0.1:50052")?),
         positions: PositionClient::new(grpc_channel("POSITION_ADDR", "http://127.0.0.1:50056")?),
+        rfq: RfqServiceClient::new(grpc_channel("RFQ_ADDR", "http://127.0.0.1:50059")?),
         me: MeCoreClient::connect_lazy(
             env::var("ME_CORE_ADDR").unwrap_or_else(|_| "http://127.0.0.1:50054".to_owned()),
             Duration::from_secs(2),
@@ -166,6 +194,21 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/positions", get(list_positions))
         .route("/v1/positions/{ticker}", get(get_position))
         .route("/v1/markets/{ticker}/open-interest", get(get_open_interest))
+        .route("/v1/rfqs", post(create_rfq))
+        .route("/v1/rfqs/{rfq_id}", get(get_rfq))
+        .route(
+            "/v1/rfqs/{rfq_id}/quotes",
+            get(list_rfq_quotes).post(submit_rfq_quote),
+        )
+        .route("/v1/rfqs/{rfq_id}/cancel", post(cancel_rfq))
+        .route(
+            "/v1/rfqs/{rfq_id}/quotes/{quote_id}/cancel",
+            post(cancel_rfq_quote),
+        )
+        .route(
+            "/v1/rfqs/{rfq_id}/quotes/{quote_id}/accept",
+            post(accept_rfq_quote),
+        )
         .route("/v1/demo/deposits/credit", post(demo_deposit))
         .with_state(state)
         .layer(CorsLayer::permissive())
@@ -218,6 +261,7 @@ async fn health_overview() -> impl IntoResponse {
         ("order-router", "backend", "order-router:8085"),
         ("position-svc", "backend", "position-svc:8086"),
         ("marketdata-svc", "backend", "marketdata-svc:8087"),
+        ("rfq-svc", "backend", "rfq-svc:8091"),
         ("oracle-svc", "backend", "oracle-svc:8088"),
         ("settlement-svc", "backend", "settlement-svc:8089"),
         ("gw-ws", "backend", "gw-ws:8082"),
@@ -629,13 +673,22 @@ async fn get_history(
     }
 }
 
-async fn list_positions(State(state): State<AppState>, headers: HeaderMap) -> Response {
+async fn list_positions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<PositionQuery>,
+) -> Response {
     let user_id = match authenticated_user(&headers, &state.auth) {
         Ok(value) => value,
         Err(response) => return response,
     };
     let mut client = state.positions;
-    match rpc(client.list_positions(ListPositionsRequest { user_id, include_closed: true })).await {
+    match rpc(client.list_positions(ListPositionsRequest {
+        user_id,
+        include_closed: query.include_closed.unwrap_or(false),
+        limit: query.limit.unwrap_or(100).clamp(1, 500),
+        cursor: query.cursor.unwrap_or_default(),
+    })).await {
         Ok(response) => Json(json!({"positions":response.positions.iter().map(position_json).collect::<Vec<_>>(),"next_cursor":response.next_cursor})).into_response(), Err(error) => grpc_error(error),
     }
 }
@@ -659,8 +712,347 @@ async fn get_position(
 async fn get_open_interest(State(state): State<AppState>, Path(ticker): Path<String>) -> Response {
     let mut client = state.positions;
     match rpc(client.get_open_interest(GetOpenInterestRequest { ticker })).await {
-        Ok(value) => Json(json!({"ticker":value.ticker,"total_open_long":value.total_open_long,"total_open_short":value.total_open_short})).into_response(), Err(error) => grpc_error(error),
+        Ok(value) => Json(json!({"ticker":value.ticker,"total_open_long":value.total_open_long,"total_open_short":value.total_open_short,"as_of_global_seq":value.as_of_global_seq,"as_of":timestamp_json(value.as_of.as_ref())})).into_response(), Err(error) => grpc_error(error),
     }
+}
+
+async fn create_rfq(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<RfqInput>,
+) -> Response {
+    let user_id = match authenticated_user(&headers, &state.auth) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let side = match side_value(&input.side) {
+        Some(value) => value,
+        None => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "INVALID_ARGUMENT",
+                "invalid RFQ side",
+            )
+        }
+    };
+    let action = match action_value(&input.action) {
+        Some(value) => value,
+        None => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "INVALID_ARGUMENT",
+                "invalid RFQ action",
+            )
+        }
+    };
+    let expires_at = match parse_timestamp(&input.expires_at) {
+        Ok(Some(value)) => value,
+        _ => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "INVALID_ARGUMENT",
+                "invalid RFQ expires_at",
+            )
+        }
+    };
+    let key = match required_header(&headers, "idempotency-key") {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let body = json!(&input);
+    if let Some(response) =
+        match replay_idempotency(&state.pool, &user_id, "POST", "/v1/rfqs", &key, &body).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        }
+    {
+        return response;
+    }
+    let mut client = state.rfq.clone();
+    let value = match rpc(client.create_rfq(CreateRfqRequest {
+        creator_user_id: user_id.clone(),
+        client_rfq_id: input.client_rfq_id,
+        ticker: input.ticker,
+        side,
+        action,
+        requested_count: input.requested_count,
+        expires_at: Some(expires_at),
+        idempotency_key: key.clone(),
+    }))
+    .await
+    {
+        Ok(rfq) => json!({"rfq": rfq_json(&rfq)}),
+        Err(error) => return grpc_error(error),
+    };
+    if let Err(response) = store_idempotency(
+        &state.pool,
+        &user_id,
+        "POST",
+        "/v1/rfqs",
+        &key,
+        &body,
+        &value,
+        StatusCode::OK,
+    )
+    .await
+    {
+        return response;
+    }
+    Json(value).into_response()
+}
+
+async fn get_rfq(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(rfq_id): Path<String>,
+) -> Response {
+    let user_id = match authenticated_user(&headers, &state.auth) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let mut client = state.rfq.clone();
+    match rpc(client.get_rfq(GetRfqRequest { user_id, rfq_id })).await {
+        Ok(rfq) => Json(rfq_json(&rfq)).into_response(),
+        Err(error) => grpc_error(error),
+    }
+}
+
+async fn list_rfq_quotes(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(rfq_id): Path<String>,
+    Query(query): Query<OrderQuery>,
+) -> Response {
+    let user_id = match authenticated_user(&headers, &state.auth) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let mut client = state.rfq.clone();
+    match rpc(client.list_quotes(ListQuotesRequest { user_id, rfq_id, limit: query.limit.unwrap_or(100).clamp(1, 500), cursor: query.cursor.unwrap_or_default() })).await {
+        Ok(response) => Json(json!({"quotes": response.quotes.iter().map(rfq_quote_json).collect::<Vec<_>>(), "next_cursor": response.next_cursor})).into_response(),
+        Err(error) => grpc_error(error),
+    }
+}
+
+async fn submit_rfq_quote(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(rfq_id): Path<String>,
+    Json(input): Json<RfqQuoteInput>,
+) -> Response {
+    let user_id = match authenticated_user(&headers, &state.auth) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let expires_at = match parse_timestamp(&input.expires_at) {
+        Ok(Some(value)) => value,
+        _ => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "INVALID_ARGUMENT",
+                "invalid quote expires_at",
+            )
+        }
+    };
+    let key = match required_header(&headers, "idempotency-key") {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let body = json!({"rfq_id":rfq_id,"quote":input});
+    let path = format!("/v1/rfqs/{rfq_id}/quotes");
+    if let Some(response) =
+        match replay_idempotency(&state.pool, &user_id, "POST", &path, &key, &body).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        }
+    {
+        return response;
+    }
+    let mut client = state.rfq.clone();
+    let value = match rpc(client.submit_quote(SubmitQuoteRequest {
+        maker_user_id: user_id.clone(),
+        quote_id: input.quote_id,
+        rfq_id: rfq_id.clone(),
+        bid_price_ticks: input.bid_price_ticks,
+        offer_price_ticks: input.offer_price_ticks,
+        available_count: input.available_count,
+        expires_at: Some(expires_at),
+        idempotency_key: key.clone(),
+    }))
+    .await
+    {
+        Ok(quote) => json!({"quote":rfq_quote_json(&quote)}),
+        Err(error) => return grpc_error(error),
+    };
+    if let Err(response) = store_idempotency(
+        &state.pool,
+        &user_id,
+        "POST",
+        &path,
+        &key,
+        &body,
+        &value,
+        StatusCode::OK,
+    )
+    .await
+    {
+        return response;
+    }
+    Json(value).into_response()
+}
+
+async fn cancel_rfq(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(rfq_id): Path<String>,
+) -> Response {
+    let user_id = match authenticated_user(&headers, &state.auth) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let key = match required_header(&headers, "idempotency-key") {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let path = format!("/v1/rfqs/{rfq_id}/cancel");
+    let body = json!({"rfq_id":rfq_id});
+    if let Some(response) =
+        match replay_idempotency(&state.pool, &user_id, "POST", &path, &key, &body).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        }
+    {
+        return response;
+    }
+    let mut client = state.rfq.clone();
+    let value = match rpc(client.cancel_rfq(CancelRfqRequest {
+        creator_user_id: user_id.clone(),
+        rfq_id: rfq_id.clone(),
+        idempotency_key: key.clone(),
+    }))
+    .await
+    {
+        Ok(rfq) => json!({"rfq":rfq_json(&rfq)}),
+        Err(error) => return grpc_error(error),
+    };
+    if let Err(response) = store_idempotency(
+        &state.pool,
+        &user_id,
+        "POST",
+        &path,
+        &key,
+        &body,
+        &value,
+        StatusCode::OK,
+    )
+    .await
+    {
+        return response;
+    }
+    Json(value).into_response()
+}
+
+async fn cancel_rfq_quote(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((rfq_id, quote_id)): Path<(String, String)>,
+) -> Response {
+    let user_id = match authenticated_user(&headers, &state.auth) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let key = match required_header(&headers, "idempotency-key") {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let path = format!("/v1/rfqs/{rfq_id}/quotes/{quote_id}/cancel");
+    let body = json!({"rfq_id":rfq_id,"quote_id":quote_id});
+    if let Some(response) =
+        match replay_idempotency(&state.pool, &user_id, "POST", &path, &key, &body).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        }
+    {
+        return response;
+    }
+    let mut client = state.rfq.clone();
+    let value = match rpc(client.cancel_quote(CancelQuoteRequest {
+        maker_user_id: user_id.clone(),
+        quote_id: quote_id.clone(),
+        idempotency_key: key.clone(),
+    }))
+    .await
+    {
+        Ok(quote) => json!({"quote":rfq_quote_json(&quote)}),
+        Err(error) => return grpc_error(error),
+    };
+    if let Err(response) = store_idempotency(
+        &state.pool,
+        &user_id,
+        "POST",
+        &path,
+        &key,
+        &body,
+        &value,
+        StatusCode::OK,
+    )
+    .await
+    {
+        return response;
+    }
+    Json(value).into_response()
+}
+
+async fn accept_rfq_quote(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((rfq_id, quote_id)): Path<(String, String)>,
+) -> Response {
+    let user_id = match authenticated_user(&headers, &state.auth) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let key = match required_header(&headers, "idempotency-key") {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let path = format!("/v1/rfqs/{rfq_id}/quotes/{quote_id}/accept");
+    let body = json!({"rfq_id":rfq_id,"quote_id":quote_id});
+    if let Some(response) =
+        match replay_idempotency(&state.pool, &user_id, "POST", &path, &key, &body).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        }
+    {
+        return response;
+    }
+    let mut client = state.rfq.clone();
+    let value = match rpc(client.accept_quote(AcceptQuoteRequest {
+        creator_user_id: user_id.clone(),
+        rfq_id: rfq_id.clone(),
+        quote_id: quote_id.clone(),
+        idempotency_key: key.clone(),
+    }))
+    .await
+    {
+        Ok(rfq) => json!({"rfq":rfq_json(&rfq),"execution_pending":true}),
+        Err(error) => return grpc_error(error),
+    };
+    if let Err(response) = store_idempotency(
+        &state.pool,
+        &user_id,
+        "POST",
+        &path,
+        &key,
+        &body,
+        &value,
+        StatusCode::OK,
+    )
+    .await
+    {
+        return response;
+    }
+    Json(value).into_response()
 }
 
 async fn demo_deposit(
@@ -811,7 +1203,19 @@ async fn replay_idempotency(
         .execute(pool)
         .await
         .map_err(|error| error_response(StatusCode::SERVICE_UNAVAILABLE, "IDEMPOTENCY_STORE_UNAVAILABLE", &error.to_string()))?;
-    let row = sqlx::query("SELECT request_hash, response_status, response_body FROM gateway.idempotency_records WHERE user_id=$1 AND method=$2 AND request_path=$3 AND idempotency_key=$4 AND expires_at > now()")
+    let inserted = sqlx::query("INSERT INTO gateway.idempotency_records (user_id, method, request_path, idempotency_key, request_hash, operation_id, status, response_status, response_body) VALUES ($1,$2,$3,$4,$5,'op_' || md5($1 || ':' || $2 || ':' || $3 || ':' || $4),'IN_PROGRESS',202,NULL) ON CONFLICT (user_id, method, request_path, idempotency_key) DO NOTHING RETURNING operation_id")
+        .bind(user_id)
+        .bind(method)
+        .bind(path)
+        .bind(key)
+        .bind(&hash)
+        .fetch_optional(pool)
+        .await
+        .map_err(|error| error_response(StatusCode::SERVICE_UNAVAILABLE, "IDEMPOTENCY_STORE_UNAVAILABLE", &error.to_string()))?;
+    if inserted.is_some() {
+        return Ok(None);
+    }
+    let row = sqlx::query("SELECT request_hash, status, response_status, response_body FROM gateway.idempotency_records WHERE user_id=$1 AND method=$2 AND request_path=$3 AND idempotency_key=$4 AND expires_at > now()")
         .bind(user_id).bind(method).bind(path).bind(key).fetch_optional(pool).await
         .map_err(|error| error_response(StatusCode::SERVICE_UNAVAILABLE, "IDEMPOTENCY_STORE_UNAVAILABLE", &error.to_string()))?;
     let Some(row) = row else { return Ok(None) };
@@ -829,6 +1233,20 @@ async fn replay_idempotency(
             "idempotency key was used with a different request",
         ));
     }
+    let operation_status: String = row.try_get("status").map_err(|error| {
+        error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "IDEMPOTENCY_STORE_ERROR",
+            &error.to_string(),
+        )
+    })?;
+    if operation_status != "COMPLETED" {
+        return Err(error_response(
+            StatusCode::CONFLICT,
+            "OPERATION_IN_PROGRESS",
+            "the original operation is still being reconciled; retry with the same key",
+        ));
+    }
     let status: i32 = row.try_get("response_status").map_err(|error| {
         error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -836,13 +1254,22 @@ async fn replay_idempotency(
             &error.to_string(),
         )
     })?;
-    let body: Value = row.try_get("response_body").map_err(|error| {
-        error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "IDEMPOTENCY_STORE_ERROR",
-            &error.to_string(),
-        )
-    })?;
+    let body: Value = row
+        .try_get::<Option<Value>, _>("response_body")
+        .map_err(|error| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "IDEMPOTENCY_STORE_ERROR",
+                &error.to_string(),
+            )
+        })?
+        .ok_or_else(|| {
+            error_response(
+                StatusCode::CONFLICT,
+                "OPERATION_IN_PROGRESS",
+                "the original operation has no stored response yet",
+            )
+        })?;
     let status = StatusCode::from_u16(status as u16).unwrap_or(StatusCode::OK);
     Ok(Some((status, Json(body)).into_response()))
 }
@@ -858,7 +1285,7 @@ async fn store_idempotency(
     response: &Value,
     status: StatusCode,
 ) -> Result<(), Response> {
-    sqlx::query("INSERT INTO gateway.idempotency_records (user_id, method, request_path, idempotency_key, request_hash, response_status, response_body) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (user_id, method, request_path, idempotency_key) DO NOTHING")
+    sqlx::query("UPDATE gateway.idempotency_records SET status='COMPLETED', response_status=$6, response_body=$7, updated_at=now() WHERE user_id=$1 AND method=$2 AND request_path=$3 AND idempotency_key=$4 AND request_hash=$5")
         .bind(user_id).bind(method).bind(path).bind(key).bind(request_hash(request))
         .bind(status.as_u16() as i32).bind(response)
         .execute(pool).await
@@ -977,7 +1404,37 @@ fn contract_json(contract: &Contract) -> Value {
     json!({"ticker":contract.ticker,"event_ticker":contract.event_ticker,"series_ticker":contract.series_ticker,"kind":contract.kind,"question":contract.question,"underlying":contract.underlying,"tick_size":contract.tick_size,"min_price_ticks":contract.min_price_ticks,"max_price_ticks":contract.max_price_ticks,"lower_bound_ticks":contract.lower_bound_ticks,"upper_bound_ticks":contract.upper_bound_ticks,"multiplier_micro_usdc":contract.multiplier_micro_usdc,"divider":contract.divider,"multiplier_micro_per_display_unit":contract.multiplier_micro_per_display_unit,"tick_value_micro":contract.tick_value_micro,"max_order_size":contract.max_order_size,"position_limit_per_user":contract.position_limit_per_user,"state":contract.state,"listed_at":timestamp_json(contract.listed_at.as_ref()),"open_at":timestamp_json(contract.open_at.as_ref()),"close_at":timestamp_json(contract.close_at.as_ref()),"expected_resolution_at":timestamp_json(contract.expected_resolution_at.as_ref()),"settlement_source":contract.settlement_source,"oracle_policy":contract.oracle_policy,"settlement_rule":contract.settlement_rule.as_ref().map(struct_json),"close_global_seq":contract.close_global_seq})
 }
 fn order_json(order: &Order) -> Value {
-    json!({"order_id":order.order_id,"client_order_id":order.client_order_id,"user_id":order.user_id,"ticker":order.ticker,"side":enum_name(Side::try_from(order.side).ok()),"action":enum_name(Action::try_from(order.action).ok()),"price_ticks":order.price_ticks,"count":order.count,"filled_count":order.filled_count,"remaining_count":order.remaining_count,"tif":enum_name(TimeInForce::try_from(order.tif).ok()),"post_only":order.post_only,"reduce_only":order.reduce_only,"stp":enum_name(SelfTradePreventionType::try_from(order.stp).ok()),"status":enum_name(OrderStatus::try_from(order.status).ok()),"created_at":timestamp_json(order.created_at.as_ref()),"updated_at":timestamp_json(order.updated_at.as_ref()),"expires_at":timestamp_json(order.expires_at.as_ref()),"hold_id":order.hold_id,"avg_fill_price_ticks":order.avg_fill_price_ticks})
+    json!({"order_id":order.order_id,"client_order_id":order.client_order_id,"user_id":order.user_id,"ticker":order.ticker,"side":enum_name(Side::try_from(order.side).ok()),"action":enum_name(Action::try_from(order.action).ok()),"price_ticks":order.price_ticks,"count":order.count,"filled_count":order.filled_count,"remaining_count":order.remaining_count,"cancelled_count":order.cancelled_count,"expired_count":order.expired_count,"tif":enum_name(TimeInForce::try_from(order.tif).ok()),"post_only":order.post_only,"reduce_only":order.reduce_only,"stp":enum_name(SelfTradePreventionType::try_from(order.stp).ok()),"status":enum_name(OrderStatus::try_from(order.status).ok()),"created_at":timestamp_json(order.created_at.as_ref()),"updated_at":timestamp_json(order.updated_at.as_ref()),"expires_at":timestamp_json(order.expires_at.as_ref()),"hold_id":order.hold_id,"avg_fill_price_ticks":order.avg_fill_price_ticks})
+}
+fn rfq_json(rfq: &Rfq) -> Value {
+    json!({
+        "rfq_id": rfq.rfq_id,
+        "client_rfq_id": rfq.client_rfq_id,
+        "creator_user_id": rfq.creator_user_id,
+        "ticker": rfq.ticker,
+        "side": enum_name(Side::try_from(rfq.side).ok()),
+        "action": enum_name(Action::try_from(rfq.action).ok()),
+        "requested_count": rfq.requested_count,
+        "expires_at": timestamp_json(rfq.expires_at.as_ref()),
+        "status": enum_name(RfqStatus::try_from(rfq.status).ok()),
+        "accepted_quote_id": rfq.accepted_quote_id,
+        "created_at": timestamp_json(rfq.created_at.as_ref()),
+        "updated_at": timestamp_json(rfq.updated_at.as_ref()),
+    })
+}
+fn rfq_quote_json(quote: &RfqQuote) -> Value {
+    json!({
+        "quote_id": quote.quote_id,
+        "rfq_id": quote.rfq_id,
+        "maker_user_id": quote.maker_user_id,
+        "bid_price_ticks": quote.bid_price_ticks,
+        "offer_price_ticks": quote.offer_price_ticks,
+        "available_count": quote.available_count,
+        "expires_at": timestamp_json(quote.expires_at.as_ref()),
+        "status": enum_name(RfqQuoteStatus::try_from(quote.status).ok()),
+        "created_at": timestamp_json(quote.created_at.as_ref()),
+        "updated_at": timestamp_json(quote.updated_at.as_ref()),
+    })
 }
 fn fill_json(fill: &Fill) -> Value {
     json!({"fill_id":fill.fill_id,"order_id":fill.order_id,"ticker":fill.ticker,"price_ticks":fill.price_ticks,"count":fill.count,"aggressor_side":enum_name(Side::try_from(fill.aggressor_side).ok()),"fee_micro_usdc":fill.fee_micro_usdc,"ts":timestamp_json(fill.ts.as_ref()),"seq":fill.seq})
@@ -998,6 +1455,7 @@ fn book_snapshot_json(snapshot: &BookSnapshot) -> Value {
     json!({
         "ticker": snapshot.ticker,
         "seq": snapshot.seq,
+        "book_seq": snapshot.book_seq,
         "ts": timestamp_json(snapshot.ts.as_ref()),
         "bids": snapshot.bids.iter().map(book_level_json).collect::<Vec<_>>(),
         "asks": snapshot.asks.iter().map(book_level_json).collect::<Vec<_>>(),

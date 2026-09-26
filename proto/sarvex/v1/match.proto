@@ -92,6 +92,7 @@ message BookSnapshot {
   google.protobuf.Timestamp ts = 3;
   repeated PriceLevel bids = 4;
   repeated PriceLevel asks = 5;
+  uint64 book_seq = 6;
 }
 
 message PriceLevel {
@@ -169,4 +170,7 @@ message BookDelta {
   int64 price_ticks = 2;
   int64 qty_delta = 3;
   int64 new_total_qty = 4;
+  BookSide book_side = 5;
+  uint64 book_seq = 6;
+  int32 new_order_count = 7;
 }

@@ -159,19 +159,35 @@ impl Position for PositionService {
         if request.user_id.trim().is_empty() {
             return Err(Status::invalid_argument("user_id is required"));
         }
-        let query = if request.include_closed {
-            POSITION_SELECT_USER
+        let limit = if request.limit <= 0 {
+            100_i64
         } else {
-            POSITION_SELECT_OPEN_USER
+            i64::from(request.limit.clamp(1, 500))
         };
-        let rows = sqlx::query(query)
-            .bind(&request.user_id)
+        let mut query = QueryBuilder::new(POSITION_SELECT);
+        query.push(" WHERE user_id = ").push_bind(request.user_id);
+        if !request.include_closed {
+            query.push(" AND net_qty <> 0");
+        }
+        if !request.cursor.trim().is_empty() {
+            query.push(" AND ticker > ").push_bind(request.cursor);
+        }
+        query.push(" ORDER BY ticker LIMIT ").push_bind(limit);
+        let rows = query
+            .build()
             .fetch_all(&self.pool)
             .await
             .map_err(internal)?;
+        let next_cursor = if rows.len() == limit as usize {
+            rows.last()
+                .map(|row| row.get::<String, _>("ticker"))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
         Ok(Response::new(ListPositionsResponse {
             positions: rows.iter().map(position_from_row).collect(),
-            next_cursor: String::new(),
+            next_cursor,
         }))
     }
 
@@ -211,19 +227,19 @@ impl Position for PositionService {
         if ticker.trim().is_empty() {
             return Err(Status::invalid_argument("ticker is required"));
         }
-        let row = sqlx::query("SELECT COALESCE(SUM(GREATEST(net_qty,0)),0)::BIGINT AS long_qty, COALESCE(SUM(GREATEST(-net_qty,0)),0)::BIGINT AS short_qty FROM position.positions WHERE ticker=$1").bind(&ticker).fetch_one(&self.pool).await.map_err(internal)?;
+        let row = sqlx::query("SELECT COALESCE(SUM(GREATEST(net_qty,0)),0)::BIGINT AS long_qty, COALESCE(SUM(GREATEST(-net_qty,0)),0)::BIGINT AS short_qty, COALESCE(MAX(last_global_seq),0)::BIGINT AS as_of_global_seq, MAX(updated_at) AS as_of FROM position.positions WHERE ticker=$1").bind(&ticker).fetch_one(&self.pool).await.map_err(internal)?;
         Ok(Response::new(OpenInterest {
             ticker,
             total_open_long: row.get("long_qty"),
             total_open_short: row.get("short_qty"),
+            as_of_global_seq: row.get::<i64, _>("as_of_global_seq") as u64,
+            as_of: row.get::<Option<DateTime<Utc>>, _>("as_of").map(timestamp),
         }))
     }
 }
 
 const POSITION_SELECT: &str = "SELECT user_id, ticker, net_qty, avg_cost_micro_usdc, realized_pnl_micro_usdc, unrealized_pnl_micro_usdc, updated_at, last_global_seq FROM position.positions";
 const POSITION_SELECT_BY_USER_TICKER: &str = "SELECT user_id, ticker, net_qty, avg_cost_micro_usdc, realized_pnl_micro_usdc, unrealized_pnl_micro_usdc, updated_at, last_global_seq FROM position.positions WHERE user_id=$1 AND ticker=$2";
-const POSITION_SELECT_USER: &str = "SELECT user_id, ticker, net_qty, avg_cost_micro_usdc, realized_pnl_micro_usdc, unrealized_pnl_micro_usdc, updated_at, last_global_seq FROM position.positions WHERE user_id=$1 ORDER BY ticker";
-const POSITION_SELECT_OPEN_USER: &str = "SELECT user_id, ticker, net_qty, avg_cost_micro_usdc, realized_pnl_micro_usdc, unrealized_pnl_micro_usdc, updated_at, last_global_seq FROM position.positions WHERE user_id=$1 AND net_qty <> 0 ORDER BY ticker";
 
 fn position_from_row(row: &sqlx::postgres::PgRow) -> UserPosition {
     UserPosition {

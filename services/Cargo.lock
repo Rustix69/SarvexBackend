@@ -815,6 +815,7 @@ dependencies = [
  "axum 0.8.9",
  "futures-util",
  "sarvex-auth",
+ "sarvex-contracts",
  "sarvex-me-client",
  "sarvex-runtime",
  "serde",
@@ -2151,6 +2152,25 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "webpki-roots 1.0.9",
+]
+
+[[package]]
+name = "rfq-svc"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum 0.8.9",
+ "chrono",
+ "prost-types",
+ "sarvex-contracts",
+ "sarvex-db",
+ "sarvex-runtime",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tonic",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

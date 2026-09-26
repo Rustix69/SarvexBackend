@@ -1,0 +1,19 @@
+[package]
+name = "rfq-svc"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+chrono.workspace = true
+prost-types.workspace = true
+sqlx.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tonic.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+sarvex-contracts = { path = "../crates/sarvex-contracts" }
+sarvex-db = { path = "../crates/sarvex-db" }
+sarvex-runtime = { path = "../crates/sarvex-runtime" }

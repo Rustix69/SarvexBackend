@@ -513,6 +513,9 @@ function App() {
     try {
       await api('/v1/demo/deposits/credit', {
         method: 'POST',
+        headers: {
+          'Idempotency-Key': `deposit-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        },
         body: JSON.stringify({ amount_usdc: 10000, note: 'frontend quick fund' }),
       })
       await refreshPrivate()

@@ -31,6 +31,12 @@ enum SelfTradePreventionType {
   SELF_TRADE_PREVENTION_TYPE_MAKER = 2;
 }
 
+enum BookSide {
+  BOOK_SIDE_UNSPECIFIED = 0;
+  BOOK_SIDE_BID = 1;
+  BOOK_SIDE_ASK = 2;
+}
+
 enum OrderStatus {
   ORDER_STATUS_UNSPECIFIED = 0;
   ORDER_STATUS_PENDING = 1;

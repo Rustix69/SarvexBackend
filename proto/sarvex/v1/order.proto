@@ -119,6 +119,8 @@ message Order {
   google.protobuf.Timestamp expires_at = 18;
   string hold_id = 19;
   int64 avg_fill_price_ticks = 20;
+  int64 cancelled_count = 21;
+  int64 expired_count = 22;
 }
 
 message Fill {

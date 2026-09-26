@@ -12,6 +12,7 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use sarvex_auth::Authenticator;
+use sarvex_contracts::sarvex::v1::BookSide;
 use sarvex_me_client::MeCoreClient;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -64,9 +65,12 @@ struct WireBookEnvelope {
 struct WireBookDelta {
     ticker: String,
     side: i32,
+    book_side: Option<i32>,
+    book_seq: Option<u64>,
     price_ticks: i64,
     qty_delta: i64,
     new_total_qty: i64,
+    new_order_count: Option<i32>,
 }
 
 #[tokio::main]
@@ -299,11 +303,17 @@ async fn run_market_subscription(
         "type": "market_book_snapshot",
         "ticker": snapshot.ticker,
         "seq": snapshot.seq,
+        "book_seq": snapshot.book_seq,
         "bids": snapshot.bids.iter().map(|level| json!({"price_ticks":level.price_ticks,"total_qty":level.total_qty,"order_count":level.order_count})).collect::<Vec<_>>(),
         "asks": snapshot.asks.iter().map(|level| json!({"price_ticks":level.price_ticks,"total_qty":level.total_qty,"order_count":level.order_count})).collect::<Vec<_>>(),
     })).await.is_err() { return; }
     buffered.sort_by_key(|event: &WireBookEnvelope| {
-        (event.contract_seq.unwrap_or(0), event.global_seq)
+        (
+            event
+                .book_seq()
+                .unwrap_or_else(|| event.contract_seq.unwrap_or(0)),
+            event.global_seq,
+        )
     });
     for event in buffered {
         if event.contract_seq.unwrap_or(0) > snapshot.seq
@@ -329,11 +339,28 @@ fn book_delta_event(event: WireBookEnvelope) -> Value {
         "ticker": event.payload.ticker,
         "global_seq": event.global_seq,
         "contract_seq": event.contract_seq,
+        "book_side": event.payload.book_side.and_then(book_side_name),
+        "book_seq": event.payload.book_seq.or(event.contract_seq),
         "side": event.payload.side,
         "price_ticks": event.payload.price_ticks,
         "qty_delta": event.payload.qty_delta,
         "new_total_qty": event.payload.new_total_qty,
+        "new_order_count": event.payload.new_order_count,
     })
+}
+
+impl WireBookEnvelope {
+    fn book_seq(&self) -> Option<u64> {
+        self.payload.book_seq.or(self.contract_seq)
+    }
+}
+
+fn book_side_name(value: i32) -> Option<&'static str> {
+    match BookSide::try_from(value).ok()? {
+        BookSide::Bid => Some("BID"),
+        BookSide::Ask => Some("ASK"),
+        BookSide::Unspecified => None,
+    }
 }
 
 async fn shutdown_signal() {

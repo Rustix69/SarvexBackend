@@ -16,6 +16,7 @@ fn main() {
         "sarvex/v1/position.proto",
         "sarvex/v1/refdata.proto",
         "sarvex/v1/risk.proto",
+        "sarvex/v1/rfq.proto",
         "sarvex/v1/settlement.proto",
     ];
     let paths: Vec<PathBuf> = files.iter().map(|file| proto_root.join(file)).collect();
