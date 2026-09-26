@@ -5,6 +5,12 @@ BEGIN;
 -- TASI K=11,500; Nikkei K=42,000; TTF K=35 EUR/MWh; PRESNOMD JOSS=Josh Shapiro;
 -- BTC rolling templates use the 30 Oct 2026 17:00 ET demo window.
 
+-- 000010 installs the scalar scaling check after this catalog is loaded. Drop
+-- it for reruns against a database where 000010 already completed, then let
+-- the scaling migration recreate it after the backfill is applied.
+ALTER TABLE refdata.contracts
+  DROP CONSTRAINT IF EXISTS contracts_scalar_scaling_check;
+
 UPDATE refdata.contracts SET state = 'CANCELLED', updated_at = now() WHERE series_ticker IN ('CAT-STANDARD','CAT-REGIONAL') OR ticker = 'SX-PRESNOMD-28-{CAND}';
 
 INSERT INTO refdata.series (series_ticker, title, description) VALUES
