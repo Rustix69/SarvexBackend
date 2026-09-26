@@ -1204,7 +1204,7 @@ async fn release_order_remainder(
     refdata: &RefDataClient<Channel>,
     order_id: &str,
 ) -> Result<(), Status> {
-    let order = sqlx::query("SELECT status, ticker, hold_id, hold_amount_micro_usdc, opening_qty_reserved FROM orders.orders WHERE order_id=$1")
+    let order = sqlx::query("SELECT status, ticker, hold_id, hold_amount_micro_usdc, opening_qty_reserved, closing_qty_reserved FROM orders.orders WHERE order_id=$1")
         .bind(order_id)
         .fetch_optional(pool)
         .await
