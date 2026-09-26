@@ -82,6 +82,23 @@ Common HTTP statuses:
 | `502` | Internal service or matching-engine failure |
 | `503` | Gateway, database, or matching-engine unavailable |
 
+### Implemented endpoint inventory
+
+The current REST gateway exposes these routes:
+
+| Method | Path | Auth | Idempotency key |
+|---|---|---|---|
+| `GET` | `/healthz`, `/readyz`, `/metrics`, `/v1/health/overview` | No | No |
+| `POST` | `/v1/auth/login` | No | No |
+| `GET` | `/v1/markets`, `/v1/markets/{ticker}`, `/v1/markets/{ticker}/orderbook`, `/v1/markets/{ticker}/fills`, `/v1/markets/{ticker}/open-interest` | No | No |
+| `GET` | `/v1/orders`, `/v1/orders/{order_id}`, `/v1/account/balance`, `/v1/account/history`, `/v1/positions`, `/v1/positions/{ticker}` | Yes | No |
+| `POST` | `/v1/orders`, `/v1/orders/{order_id}/cancel` | Yes | Yes |
+| `POST` | `/v1/demo/deposits/credit` | Yes | Yes |
+| `POST` | `/v1/rfqs`, `/v1/rfqs/{rfq_id}/quotes`, `/v1/rfqs/{rfq_id}/cancel`, `/v1/rfqs/{rfq_id}/quotes/{quote_id}/cancel`, `/v1/rfqs/{rfq_id}/quotes/{quote_id}/accept` | Yes | Yes |
+| `GET` | `/v1/rfqs/{rfq_id}`, `/v1/rfqs/{rfq_id}/quotes` | Yes | No |
+
+The WebSocket gateway is documented separately in [WebSocket API](#websocket-api).
+
 ## Authentication
 
 ### Login
@@ -807,8 +824,6 @@ Known codes include `INVALID_MESSAGE`, `CHANNEL_REQUIRED`, `TICKER_REQUIRED`,
 9. Never expose private fill/order fields received from authenticated feeds to
    another user.
 
-## Current Scope and Deferred API Work
-
 ## RFQ API
 
 RFQ endpoints use the same authenticated demo/JWT bearer token and require an
@@ -856,12 +871,101 @@ Quote submission body:
 }
 ```
 
+Create response `200`:
+
+```json
+{
+  "rfq": {
+    "rfq_id": "rfq-123",
+    "client_rfq_id": "client-rfq-123",
+    "creator_user_id": "demo-user-1",
+    "ticker": "SX-FEDDEC-26OCT-H25",
+    "side": "YES",
+    "action": "BUY",
+    "requested_count": 20,
+    "expires_at": "2026-09-26T12:00:00Z",
+    "status": "OPEN",
+    "accepted_quote_id": "",
+    "created_at": "2026-09-26T11:55:00Z",
+    "updated_at": "2026-09-26T11:55:00Z"
+  }
+}
+```
+
+`GET /v1/rfqs/{rfq_id}` returns the RFQ object directly. `GET
+/v1/rfqs/{rfq_id}/quotes` returns an object with `quotes` and `next_cursor`.
+Both reads remain private to the RFQ participants.
+
+Submit quote response `200`:
+
+```json
+{
+  "quote": {
+    "quote_id": "quote-123",
+    "rfq_id": "rfq-123",
+    "maker_user_id": "demo-maker-1",
+    "bid_price_ticks": 48,
+    "offer_price_ticks": 52,
+    "available_count": 20,
+    "expires_at": "2026-09-26T11:59:00Z",
+    "status": "PENDING",
+    "created_at": "2026-09-26T11:56:00Z",
+    "updated_at": "2026-09-26T11:56:00Z"
+  }
+}
+```
+
+Cancel an RFQ or quote:
+
+```http
+POST /v1/rfqs/{rfq_id}/cancel
+POST /v1/rfqs/{rfq_id}/quotes/{quote_id}/cancel
+Authorization: Bearer <token>
+Idempotency-Key: rfq-cancel-123
+Content-Type: application/json
+
+{}
+```
+
+The first route returns `{ "rfq": { ... } }`; the second returns
+`{ "quote": { ... } }`, each with its updated terminal status.
+
+Accept a quote:
+
+```http
+POST /v1/rfqs/{rfq_id}/quotes/{quote_id}/accept
+Authorization: Bearer <token>
+Idempotency-Key: rfq-accept-123
+Content-Type: application/json
+
+{}
+```
+
+Response `200`:
+
+```json
+{
+  "rfq": {
+    "rfq_id": "rfq-123",
+    "accepted_quote_id": "quote-123",
+    "status": "ACCEPTED_PENDING_EXECUTION"
+  },
+  "execution_pending": true
+}
+```
+
+RFQ status values are `OPEN`, `ACCEPTED_PENDING_EXECUTION`, `EXECUTED`,
+`CANCELLED`, `EXPIRED`, and `REJECTED`. Quote status values are `PENDING`,
+`ACCEPTED`, `REJECTED`, `CANCELLED`, and `EXPIRED`.
+
 Accepting a quote atomically selects one quote and cancels the remaining
 pending quotes. The initial implementation returns
 `RFQ_STATUS_ACCEPTED_PENDING_EXECUTION`; it deliberately does not create a
 fill outside me-core. RFQ execution is complete only after the future me-core
 execution bridge submits the corresponding sequenced order flow and the RFQ
 state is advanced to `EXECUTED`.
+
+## Deferred API Work
 
 The following are intentionally not public REST endpoints yet:
 
