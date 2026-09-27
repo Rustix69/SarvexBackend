@@ -91,6 +91,10 @@ message ListFillsRequest {
   uint64 to_global_seq = 3;
   int32 limit = 4;
   string cursor = 5;
+  string user_id = 6;
+  string order_id = 7;
+  google.protobuf.Timestamp from_time = 8;
+  google.protobuf.Timestamp to_time = 9;
 }
 
 message ListFillsResponse {

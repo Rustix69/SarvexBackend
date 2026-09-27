@@ -242,6 +242,9 @@ services:
       REFDATA_ADDR: http://refdata-svc:50051
       ORDER_ROUTER_ADDR: http://order-router:50055
       LEDGER_ADDR: http://ledger-svc:50052
+      RISK_ADDR: http://risk-svc:50053
+      ORACLE_ADDR: http://oracle-svc:50057
+      SETTLEMENT_ADDR: http://settlement-svc:50058
       POSITION_ADDR: http://position-svc:50056
       RFQ_ADDR: http://rfq-svc:50059
       ME_CORE_ADDR: http://me-core:50054
@@ -259,7 +262,13 @@ services:
         condition: service_started
       ledger-svc:
         condition: service_started
+      risk-svc:
+        condition: service_started
       position-svc:
+        condition: service_started
+      oracle-svc:
+        condition: service_started
+      settlement-svc:
         condition: service_started
       rfq-svc:
         condition: service_started

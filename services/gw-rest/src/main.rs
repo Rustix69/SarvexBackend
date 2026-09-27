@@ -11,15 +11,18 @@ use chrono::{DateTime, Utc};
 use prost_types::Timestamp;
 use sarvex_auth::{AuthMode, Authenticator};
 use sarvex_contracts::sarvex::v1::{
-    get_order_request, ledger_client::LedgerClient, order_router_client::OrderRouterClient,
-    position_client::PositionClient, ref_data_client::RefDataClient,
-    rfq_service_client::RfqServiceClient, AcceptQuoteRequest, Action, Balance, BookSnapshot,
-    CancelOrderRequest, CancelQuoteRequest, CancelRfqRequest, Contract, ContractState,
-    CreateRfqRequest, Fill, GetAccountHistoryRequest, GetBalanceRequest, GetContractRequest,
-    GetOpenInterestRequest, GetOrderRequest, GetPositionRequest, GetRfqRequest,
-    ListContractsRequest, ListFillsRequest, ListOrdersRequest, ListPositionsRequest,
-    ListQuotesRequest, Order, OrderStatus, Rfq, RfqQuote, RfqQuoteStatus, RfqStatus,
-    SelfTradePreventionType, Side, SubmitOrderRequest, SubmitQuoteRequest, TimeInForce,
+    get_order_request, ledger_client::LedgerClient, oracle_client::OracleClient,
+    order_router_client::OrderRouterClient, position_client::PositionClient,
+    ref_data_client::RefDataClient, rfq_service_client::RfqServiceClient, risk_client::RiskClient,
+    settlement_client::SettlementClient, AcceptQuoteRequest, Action, Balance, BookSnapshot,
+    CancelOrderRequest, CancelQuoteRequest, CancelRfqRequest, Contract, ContractKind,
+    ContractState, CreateRfqRequest, Event, Fill, GetAccountHistoryRequest, GetBalanceRequest,
+    GetContractRequest, GetOpenInterestRequest, GetOrderRequest, GetPositionRequest,
+    GetResolutionRequest, GetRfqRequest, GetSettlementRequest, GetUserLimitsRequest,
+    ListContractsRequest, ListEventsRequest, ListFillsRequest, ListOrdersRequest,
+    ListPositionsRequest, ListQuotesRequest, ListSeriesRequest, Order, OrderStatus, Resolution,
+    Rfq, RfqQuote, RfqQuoteStatus, RfqStatus, SelfTradePreventionType, Series, SettlementResult,
+    Side, SubmitOrderRequest, SubmitQuoteRequest, TimeInForce, UserLimits,
 };
 use sarvex_db::connect;
 use sarvex_me_client::{MeCoreClient, MeCoreError};
@@ -47,6 +50,9 @@ struct AppState {
     refdata: RefDataClient<Channel>,
     orders: OrderRouterClient<Channel>,
     ledger: LedgerClient<Channel>,
+    risk: RiskClient<Channel>,
+    oracle: OracleClient<Channel>,
+    settlement: SettlementClient<Channel>,
     positions: PositionClient<Channel>,
     rfq: RfqServiceClient<Channel>,
     me: MeCoreClient,
@@ -56,6 +62,20 @@ struct AppState {
 struct MarketQuery {
     state: Option<String>,
     series_ticker: Option<String>,
+    kind: Option<String>,
+    event_ticker: Option<String>,
+    underlying: Option<String>,
+    category: Option<String>,
+    expected_resolution_from: Option<String>,
+    expected_resolution_to: Option<String>,
+    limit: Option<i32>,
+    cursor: Option<String>,
+}
+#[derive(Debug, Deserialize)]
+struct DiscoveryQuery {
+    series_ticker: Option<String>,
+    expected_resolution_from: Option<String>,
+    expected_resolution_to: Option<String>,
     limit: Option<i32>,
     cursor: Option<String>,
 }
@@ -131,8 +151,12 @@ struct RfqQuoteInput {
 }
 #[derive(Debug, Deserialize)]
 struct FillQuery {
+    ticker: Option<String>,
     from_global_seq: Option<u64>,
     to_global_seq: Option<u64>,
+    order_id: Option<String>,
+    from_time: Option<String>,
+    to_time: Option<String>,
     limit: Option<i32>,
     cursor: Option<String>,
 }
@@ -167,6 +191,12 @@ async fn main() -> anyhow::Result<()> {
             "http://127.0.0.1:50055",
         )?),
         ledger: LedgerClient::new(grpc_channel("LEDGER_ADDR", "http://127.0.0.1:50052")?),
+        risk: RiskClient::new(grpc_channel("RISK_ADDR", "http://127.0.0.1:50053")?),
+        oracle: OracleClient::new(grpc_channel("ORACLE_ADDR", "http://127.0.0.1:50057")?),
+        settlement: SettlementClient::new(grpc_channel(
+            "SETTLEMENT_ADDR",
+            "http://127.0.0.1:50058",
+        )?),
         positions: PositionClient::new(grpc_channel("POSITION_ADDR", "http://127.0.0.1:50056")?),
         rfq: RfqServiceClient::new(grpc_channel("RFQ_ADDR", "http://127.0.0.1:50059")?),
         me: MeCoreClient::connect_lazy(
@@ -184,16 +214,23 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/auth/login", post(login))
         .route("/v1/markets", get(list_markets))
         .route("/v1/markets/{ticker}", get(get_market))
+        .route("/v1/series", get(list_series))
+        .route("/v1/events", get(list_events))
+        .route("/v1/events/{event_ticker}", get(get_event))
+        .route("/v1/events/{event_ticker}/resolution", get(get_resolution))
         .route("/v1/markets/{ticker}/orderbook", get(get_orderbook))
         .route("/v1/markets/{ticker}/fills", get(list_market_fills))
+        .route("/v1/account/fills", get(list_account_fills))
         .route("/v1/orders", get(list_orders).post(submit_order))
         .route("/v1/orders/{order_id}", get(get_order))
         .route("/v1/orders/{order_id}/cancel", post(cancel_order))
         .route("/v1/account/balance", get(get_balance))
+        .route("/v1/account/risk", get(get_account_risk))
         .route("/v1/account/history", get(get_history))
         .route("/v1/positions", get(list_positions))
         .route("/v1/positions/{ticker}", get(get_position))
         .route("/v1/markets/{ticker}/open-interest", get(get_open_interest))
+        .route("/v1/markets/{ticker}/settlement", get(get_settlement))
         .route("/v1/rfqs", post(create_rfq))
         .route("/v1/rfqs/{rfq_id}", get(get_rfq))
         .route(
@@ -353,13 +390,129 @@ async fn login(State(state): State<AppState>, Json(input): Json<LoginRequest>) -
 }
 
 async fn list_markets(State(state): State<AppState>, Query(query): Query<MarketQuery>) -> Response {
+    let expected_resolution_from = match query_timestamp(
+        query.expected_resolution_from.as_deref(),
+        "expected_resolution_from",
+    ) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let expected_resolution_to = match query_timestamp(
+        query.expected_resolution_to.as_deref(),
+        "expected_resolution_to",
+    ) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let kind = match query.kind.as_deref() {
+        None => 0,
+        Some(value) => match kind_value(value) {
+            Some(value) => value,
+            None => {
+                return error_response(StatusCode::BAD_REQUEST, "INVALID_ARGUMENT", "invalid kind")
+            }
+        },
+    };
     let mut client = state.refdata;
     match rpc(client.list_contracts(ListContractsRequest {
         state: query.state.as_deref().and_then(state_value).unwrap_or(0),
-        series_ticker: query.series_ticker.unwrap_or_default(), limit: query.limit.unwrap_or(50).clamp(1,500),
+        series_ticker: query.series_ticker.unwrap_or_default(),
+        kind,
+        event_ticker: query.event_ticker.unwrap_or_default(),
+        underlying: query.underlying.unwrap_or_default(),
+        category: query.category.unwrap_or_default(),
+        expected_resolution_from,
+        expected_resolution_to,
+        limit: query.limit.unwrap_or(50).clamp(1,500),
         cursor: query.cursor.unwrap_or_default(),
     })).await {
         Ok(response) => Json(json!({"contracts":response.contracts.iter().map(contract_json).collect::<Vec<_>>(),"next_cursor":response.next_cursor})).into_response(),
+        Err(error) => grpc_error(error),
+    }
+}
+
+async fn list_series(
+    State(state): State<AppState>,
+    Query(query): Query<DiscoveryQuery>,
+) -> Response {
+    let mut client = state.refdata;
+    match rpc(client.list_series(ListSeriesRequest {
+        limit: query.limit.unwrap_or(100).clamp(1, 200),
+        cursor: query.cursor.unwrap_or_default(),
+    }))
+    .await
+    {
+        Ok(response) => Json(json!({
+            "series": response.series.iter().map(series_json).collect::<Vec<_>>(),
+            "next_cursor": response.next_cursor,
+        }))
+        .into_response(),
+        Err(error) => grpc_error(error),
+    }
+}
+
+async fn list_events(
+    State(state): State<AppState>,
+    Query(query): Query<DiscoveryQuery>,
+) -> Response {
+    let expected_resolution_from = match query_timestamp(
+        query.expected_resolution_from.as_deref(),
+        "expected_resolution_from",
+    ) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let expected_resolution_to = match query_timestamp(
+        query.expected_resolution_to.as_deref(),
+        "expected_resolution_to",
+    ) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let mut client = state.refdata;
+    match rpc(client.list_events(ListEventsRequest {
+        series_ticker: query.series_ticker.unwrap_or_default(),
+        expected_resolution_from,
+        expected_resolution_to,
+        limit: query.limit.unwrap_or(100).clamp(1, 200),
+        cursor: query.cursor.unwrap_or_default(),
+    }))
+    .await
+    {
+        Ok(response) => Json(json!({
+            "events": response.events.iter().map(event_json).collect::<Vec<_>>(),
+            "next_cursor": response.next_cursor,
+        }))
+        .into_response(),
+        Err(error) => grpc_error(error),
+    }
+}
+
+async fn get_event(State(state): State<AppState>, Path(event_ticker): Path<String>) -> Response {
+    let mut client = state.refdata;
+    match rpc(client.get_event(sarvex_contracts::sarvex::v1::GetEventRequest { event_ticker }))
+        .await
+    {
+        Ok(event) => Json(event_json(&event)).into_response(),
+        Err(error) => grpc_error(error),
+    }
+}
+
+async fn get_resolution(
+    State(state): State<AppState>,
+    Path(event_ticker): Path<String>,
+) -> Response {
+    let mut client = state.oracle;
+    match rpc(client.get_resolution(GetResolutionRequest { event_ticker })).await {
+        Ok(resolution) => Json(resolution_json(&resolution)).into_response(),
+        Err(error) => grpc_error(error),
+    }
+}
+
+async fn get_settlement(State(state): State<AppState>, Path(ticker): Path<String>) -> Response {
+    let mut client = state.settlement;
+    match rpc(client.get_settlement(GetSettlementRequest { ticker })).await {
+        Ok(settlement) => Json(settlement_json(&settlement)).into_response(),
         Err(error) => grpc_error(error),
     }
 }
@@ -390,8 +543,51 @@ async fn list_market_fills(
     Query(query): Query<FillQuery>,
 ) -> Response {
     let mut client = state.orders;
-    match rpc(client.list_fills(ListFillsRequest { ticker, from_global_seq: query.from_global_seq.unwrap_or(0), to_global_seq: query.to_global_seq.unwrap_or(0), limit: query.limit.unwrap_or(100).clamp(1,500), cursor: query.cursor.unwrap_or_default() })).await {
+    match rpc(client.list_fills(ListFillsRequest { ticker, from_global_seq: query.from_global_seq.unwrap_or(0), to_global_seq: query.to_global_seq.unwrap_or(0), limit: query.limit.unwrap_or(100).clamp(1,500), cursor: query.cursor.unwrap_or_default(), user_id: String::new(), order_id: String::new(), from_time: None, to_time: None })).await {
         Ok(response) => Json(json!({"fills":response.fills.iter().map(fill_record_json).collect::<Vec<_>>(),"next_cursor":response.next_cursor})).into_response(),
+        Err(error) => grpc_error(error),
+    }
+}
+
+async fn list_account_fills(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<FillQuery>,
+) -> Response {
+    let user_id = match authenticated_user(&headers, &state.auth) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let from_time = match query_timestamp(query.from_time.as_deref(), "from_time") {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let to_time = match query_timestamp(query.to_time.as_deref(), "to_time") {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let mut client = state.orders;
+    let request = ListFillsRequest {
+        ticker: query.ticker.unwrap_or_default(),
+        from_global_seq: query.from_global_seq.unwrap_or(0),
+        to_global_seq: query.to_global_seq.unwrap_or(0),
+        limit: query.limit.unwrap_or(100).clamp(1, 500),
+        cursor: query.cursor.unwrap_or_default(),
+        user_id: user_id.clone(),
+        order_id: query.order_id.unwrap_or_default(),
+        from_time,
+        to_time,
+    };
+    match rpc(client.list_fills(request)).await {
+        Ok(response) => Json(json!({
+            "fills": response
+                .fills
+                .iter()
+                .filter_map(|fill| private_fill_record_json(fill, &user_id))
+                .collect::<Vec<_>>(),
+            "next_cursor": response.next_cursor,
+        }))
+        .into_response(),
         Err(error) => grpc_error(error),
     }
 }
@@ -646,6 +842,131 @@ async fn get_balance(State(state): State<AppState>, headers: HeaderMap) -> Respo
         Ok(balance) => Json(balance_json(&balance)).into_response(),
         Err(error) => grpc_error(error),
     }
+}
+
+async fn get_account_risk(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let user_id = match authenticated_user(&headers, &state.auth) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+
+    let mut ledger = state.ledger;
+    let balance = match rpc(ledger.get_balance(GetBalanceRequest {
+        user_id: user_id.clone(),
+    }))
+    .await
+    {
+        Ok(value) => value,
+        Err(error) => return grpc_error(error),
+    };
+
+    let mut positions = state.positions;
+    let positions_response = match rpc(positions.list_positions(ListPositionsRequest {
+        user_id: user_id.clone(),
+        include_closed: false,
+        limit: 500,
+        cursor: String::new(),
+    }))
+    .await
+    {
+        Ok(value) => value,
+        Err(error) => return grpc_error(error),
+    };
+
+    let mut orders = state.orders;
+    let orders_response = match rpc(orders.list_orders(ListOrdersRequest {
+        user_id: user_id.clone(),
+        ticker: String::new(),
+        status: 0,
+        limit: 500,
+        cursor: String::new(),
+    }))
+    .await
+    {
+        Ok(value) => value,
+        Err(error) => return grpc_error(error),
+    };
+
+    let mut risk = state.risk;
+    let limits = match rpc(risk.get_user_limits(GetUserLimitsRequest {
+        user_id: user_id.clone(),
+    }))
+    .await
+    {
+        Ok(value) => value,
+        Err(error) => return grpc_error(error),
+    };
+
+    let realized_pnl = match checked_position_sum(
+        positions_response
+            .positions
+            .iter()
+            .map(|position| position.realized_pnl_micro_usdc),
+    ) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let unrealized_pnl = match checked_position_sum(
+        positions_response
+            .positions
+            .iter()
+            .map(|position| position.unrealized_pnl_micro_usdc),
+    ) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let position_cost = match checked_position_cost(&positions_response.positions) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let equity = match balance.total_micro_usdc.checked_add(unrealized_pnl) {
+        Some(value) => value,
+        None => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "NUMERIC_OVERFLOW",
+                "account equity exceeds supported range",
+            )
+        }
+    };
+    let open_orders = orders_response
+        .orders
+        .iter()
+        .filter(|order| {
+            matches!(
+                OrderStatus::try_from(order.status).ok(),
+                Some(OrderStatus::Pending | OrderStatus::Open | OrderStatus::Partial)
+            )
+        })
+        .count();
+    let as_of_global_seq = positions_response
+        .positions
+        .iter()
+        .map(|position| position.last_global_seq)
+        .max()
+        .unwrap_or_default();
+
+    Json(json!({
+        "user_id": user_id,
+        "cash_micro_usdc": balance.cash_micro_usdc,
+        "held_micro_usdc": balance.held_micro_usdc,
+        "total_micro_usdc": balance.total_micro_usdc,
+        "available_collateral_micro_usdc": balance.cash_micro_usdc,
+        "equity_micro_usdc": equity,
+        "position_cost_micro_usdc": position_cost,
+        "realized_pnl_micro_usdc": realized_pnl,
+        "unrealized_pnl_micro_usdc": unrealized_pnl,
+        "open_positions": positions_response.positions.len(),
+        "open_orders": open_orders,
+        "as_of_global_seq": as_of_global_seq,
+        "limits": user_limits_json(&limits),
+        "calculation_basis": {
+            "available_collateral": "ledger cash balance; held collateral is reported separately",
+            "equity": "ledger total balance plus position unrealized P&L",
+            "position_cost": "sum of absolute net quantity multiplied by absolute average cost"
+        }
+    }))
+    .into_response()
 }
 
 async fn get_history(
@@ -1378,6 +1699,13 @@ fn state_value(value: &str) -> Option<i32> {
         _ => None,
     }
 }
+fn kind_value(value: &str) -> Option<i32> {
+    match value.to_ascii_uppercase().as_str() {
+        "BINARY" => Some(ContractKind::Binary as i32),
+        "FUTURE" | "FUTURES" | "SCALAR" => Some(ContractKind::Scalar as i32),
+        _ => None,
+    }
+}
 fn order_status_value(value: &str) -> Option<i32> {
     Some(match value.trim().to_ascii_uppercase().as_str() {
         "PENDING" => OrderStatus::Pending,
@@ -1399,9 +1727,63 @@ fn parse_timestamp(value: &str) -> Result<Option<Timestamp>, ()> {
         nanos: parsed.timestamp_subsec_nanos() as i32,
     }))
 }
+fn query_timestamp(value: Option<&str>, field: &str) -> Result<Option<Timestamp>, Response> {
+    match value {
+        Some(value) => parse_timestamp(value).map_err(|_| {
+            error_response(
+                StatusCode::BAD_REQUEST,
+                "INVALID_ARGUMENT",
+                &format!("{field} must be RFC3339"),
+            )
+        }),
+        None => Ok(None),
+    }
+}
 
 fn contract_json(contract: &Contract) -> Value {
     json!({"ticker":contract.ticker,"event_ticker":contract.event_ticker,"series_ticker":contract.series_ticker,"kind":contract.kind,"question":contract.question,"underlying":contract.underlying,"tick_size":contract.tick_size,"min_price_ticks":contract.min_price_ticks,"max_price_ticks":contract.max_price_ticks,"lower_bound_ticks":contract.lower_bound_ticks,"upper_bound_ticks":contract.upper_bound_ticks,"multiplier_micro_usdc":contract.multiplier_micro_usdc,"divider":contract.divider,"multiplier_micro_per_display_unit":contract.multiplier_micro_per_display_unit,"tick_value_micro":contract.tick_value_micro,"max_order_size":contract.max_order_size,"position_limit_per_user":contract.position_limit_per_user,"state":contract.state,"listed_at":timestamp_json(contract.listed_at.as_ref()),"open_at":timestamp_json(contract.open_at.as_ref()),"close_at":timestamp_json(contract.close_at.as_ref()),"expected_resolution_at":timestamp_json(contract.expected_resolution_at.as_ref()),"settlement_source":contract.settlement_source,"oracle_policy":contract.oracle_policy,"settlement_rule":contract.settlement_rule.as_ref().map(struct_json),"close_global_seq":contract.close_global_seq})
+}
+fn series_json(series: &Series) -> Value {
+    json!({
+        "series_ticker": series.series_ticker,
+        "title": series.title,
+        "description": series.description,
+    })
+}
+fn event_json(event: &Event) -> Value {
+    json!({
+        "event_ticker": event.event_ticker,
+        "series_ticker": event.series_ticker,
+        "title": event.title,
+        "description": event.description,
+        "expected_resolution_at": timestamp_json(event.expected_resolution_at.as_ref()),
+    })
+}
+fn resolution_json(resolution: &Resolution) -> Value {
+    json!({
+        "event_ticker": resolution.event_ticker,
+        "numeric_value": resolution.numeric_value,
+        "categorical_value": resolution.categorical_value,
+        "status": enum_name(sarvex_contracts::sarvex::v1::ResolutionStatus::try_from(resolution.status).ok()),
+        "attestations": resolution.attestations.iter().map(|attestation| json!({
+            "attestor_id": attestation.attestor_id,
+            "source": attestation.source,
+            "numeric_value": attestation.numeric_value,
+            "categorical_value": attestation.categorical_value,
+            "observed_at": timestamp_json(attestation.observed_at.as_ref()),
+        })).collect::<Vec<_>>(),
+        "proposed_at": timestamp_json(resolution.proposed_at.as_ref()),
+        "finalized_at": timestamp_json(resolution.finalized_at.as_ref()),
+    })
+}
+fn settlement_json(settlement: &SettlementResult) -> Value {
+    json!({
+        "ticker": settlement.ticker,
+        "settled_at": timestamp_json(settlement.settled_at.as_ref()),
+        "winner_payout_per_contract_micro_usdc": settlement.winner_payout_per_contract_micro_usdc,
+        "total_payout_micro_usdc": settlement.total_payout_micro_usdc,
+        "positions_settled": settlement.positions_settled,
+    })
 }
 fn order_json(order: &Order) -> Value {
     json!({"order_id":order.order_id,"client_order_id":order.client_order_id,"user_id":order.user_id,"ticker":order.ticker,"side":enum_name(Side::try_from(order.side).ok()),"action":enum_name(Action::try_from(order.action).ok()),"price_ticks":order.price_ticks,"count":order.count,"filled_count":order.filled_count,"remaining_count":order.remaining_count,"cancelled_count":order.cancelled_count,"expired_count":order.expired_count,"tif":enum_name(TimeInForce::try_from(order.tif).ok()),"post_only":order.post_only,"reduce_only":order.reduce_only,"stp":enum_name(SelfTradePreventionType::try_from(order.stp).ok()),"status":enum_name(OrderStatus::try_from(order.status).ok()),"created_at":timestamp_json(order.created_at.as_ref()),"updated_at":timestamp_json(order.updated_at.as_ref()),"expires_at":timestamp_json(order.expires_at.as_ref()),"hold_id":order.hold_id,"avg_fill_price_ticks":order.avg_fill_price_ticks})
@@ -1442,8 +1824,89 @@ fn fill_json(fill: &Fill) -> Value {
 fn fill_record_json(fill: &sarvex_contracts::sarvex::v1::FillRecord) -> Value {
     json!({"fill_id":fill.fill_id,"ticker":fill.ticker,"global_seq":fill.global_seq,"contract_seq":fill.contract_seq,"maker_order_id":fill.maker_order_id,"taker_order_id":fill.taker_order_id,"maker_user_id":fill.maker_user_id,"taker_user_id":fill.taker_user_id,"maker_side":enum_name(Side::try_from(fill.maker_side).ok()),"maker_action":enum_name(Action::try_from(fill.maker_action).ok()),"taker_side":enum_name(Side::try_from(fill.taker_side).ok()),"taker_action":enum_name(Action::try_from(fill.taker_action).ok()),"price_ticks":fill.price_ticks,"count":fill.count,"aggressor_side":enum_name(Side::try_from(fill.aggressor_side).ok()),"maker_fee_micro_usdc":fill.maker_fee_micro_usdc,"taker_fee_micro_usdc":fill.taker_fee_micro_usdc,"ts":timestamp_json(fill.ts.as_ref())})
 }
+fn private_fill_record_json(
+    fill: &sarvex_contracts::sarvex::v1::FillRecord,
+    user_id: &str,
+) -> Option<Value> {
+    let (role, order_id, side, action, fee_micro_usdc) = if fill.maker_user_id == user_id {
+        (
+            "MAKER",
+            &fill.maker_order_id,
+            fill.maker_side,
+            fill.maker_action,
+            fill.maker_fee_micro_usdc,
+        )
+    } else if fill.taker_user_id == user_id {
+        (
+            "TAKER",
+            &fill.taker_order_id,
+            fill.taker_side,
+            fill.taker_action,
+            fill.taker_fee_micro_usdc,
+        )
+    } else {
+        return None;
+    };
+    Some(json!({
+        "fill_id": fill.fill_id,
+        "ticker": fill.ticker,
+        "global_seq": fill.global_seq,
+        "contract_seq": fill.contract_seq,
+        "order_id": order_id,
+        "role": role,
+        "side": enum_name(Side::try_from(side).ok()),
+        "action": enum_name(Action::try_from(action).ok()),
+        "price_ticks": fill.price_ticks,
+        "count": fill.count,
+        "aggressor_side": enum_name(Side::try_from(fill.aggressor_side).ok()),
+        "fee_micro_usdc": fee_micro_usdc,
+        "ts": timestamp_json(fill.ts.as_ref()),
+    }))
+}
 fn balance_json(balance: &Balance) -> Value {
     json!({"user_id":balance.user_id,"cash_micro_usdc":balance.cash_micro_usdc,"held_micro_usdc":balance.held_micro_usdc,"total_micro_usdc":balance.total_micro_usdc})
+}
+fn checked_position_sum(mut values: impl Iterator<Item = i64>) -> Result<i64, Response> {
+    values.try_fold(0_i64, |total, value| {
+        total.checked_add(value).ok_or_else(|| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "NUMERIC_OVERFLOW",
+                "position P&L exceeds supported range",
+            )
+        })
+    })
+}
+fn checked_position_cost(
+    positions: &[sarvex_contracts::sarvex::v1::UserPosition],
+) -> Result<i64, Response> {
+    let total = positions.iter().try_fold(0_i128, |total, position| {
+        let cost =
+            i128::from(position.net_qty).abs() * i128::from(position.avg_cost_micro_usdc).abs();
+        total.checked_add(cost).ok_or_else(|| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "NUMERIC_OVERFLOW",
+                "position cost exceeds supported range",
+            )
+        })
+    })?;
+    i64::try_from(total).map_err(|_| {
+        error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "NUMERIC_OVERFLOW",
+            "position cost exceeds supported range",
+        )
+    })
+}
+fn user_limits_json(limits: &UserLimits) -> Value {
+    json!({
+        "user_id": limits.user_id,
+        "kyc_tier": limits.kyc_tier,
+        "max_order_size_micro_usdc": limits.max_order_size_micro_usdc,
+        "daily_loss_limit_micro_usdc": limits.daily_loss_limit_micro_usdc,
+        "per_contract_position_limit": limits.per_contract_position_limit,
+    })
 }
 fn history_entry_json(entry: &sarvex_contracts::sarvex::v1::LedgerEntryRecord) -> Value {
     json!({"tx_id":entry.tx_id,"account_code":entry.account_code,"direction":entry.direction,"amount_micro_usdc":entry.amount_micro_usdc,"running_balance_micro_usdc":entry.running_balance_micro_usdc,"reason_code":entry.reason_code,"posted_at":timestamp_json(entry.posted_at.as_ref()),"memo":entry.memo})
@@ -1567,5 +2030,35 @@ mod tests {
         assert_eq!(action_value("SELL"), Some(Action::Sell as i32));
         assert_eq!(tif_value("IOC"), TimeInForce::Ioc as i32);
         assert_eq!(stp_value("maker"), SelfTradePreventionType::Maker as i32);
+    }
+
+    #[test]
+    fn account_risk_aggregation_is_integer_and_signed() {
+        let positions = vec![
+            sarvex_contracts::sarvex::v1::UserPosition {
+                net_qty: 3,
+                avg_cost_micro_usdc: 12,
+                realized_pnl_micro_usdc: 7,
+                unrealized_pnl_micro_usdc: -2,
+                ..Default::default()
+            },
+            sarvex_contracts::sarvex::v1::UserPosition {
+                net_qty: -2,
+                avg_cost_micro_usdc: 20,
+                realized_pnl_micro_usdc: -4,
+                unrealized_pnl_micro_usdc: 5,
+                ..Default::default()
+            },
+        ];
+
+        assert_eq!(
+            checked_position_sum(positions.iter().map(|p| p.realized_pnl_micro_usdc)).ok(),
+            Some(3)
+        );
+        assert_eq!(
+            checked_position_sum(positions.iter().map(|p| p.unrealized_pnl_micro_usdc)).ok(),
+            Some(3)
+        );
+        assert_eq!(checked_position_cost(&positions).ok(), Some(76));
     }
 }

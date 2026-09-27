@@ -73,6 +73,12 @@ struct WireBookDelta {
     new_order_count: Option<i32>,
 }
 
+#[derive(Debug, Clone)]
+enum MarketEvent {
+    Book(WireBookEnvelope),
+    Trade(WireEnvelope),
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     sarvex_runtime::init_tracing("gw-ws");
@@ -277,8 +283,12 @@ async fn run_market_subscription(
     ticker: String,
     tx: mpsc::Sender<Value>,
 ) {
-    let subject = format!("md.book.{ticker}");
-    let Ok(mut subscription) = nats.subscribe(subject).await else {
+    let book_subject = format!("md.book.{ticker}");
+    let trade_subject = format!("md.trade.{ticker}");
+    let Ok(mut book_subscription) = nats.subscribe(book_subject).await else {
+        return;
+    };
+    let Ok(mut trade_subscription) = nats.subscribe(trade_subject).await else {
         return;
     };
     let Ok(me) = MeCoreClient::connect_lazy(me_addr, Duration::from_secs(3)) else {
@@ -289,10 +299,16 @@ async fn run_market_subscription(
     let mut buffered = Vec::new();
     let snapshot = loop {
         tokio::select! {
-            message = subscription.next() => {
+            message = book_subscription.next() => {
                 let Some(message) = message else { return };
                 if let Ok(event) = serde_json::from_slice::<WireBookEnvelope>(&message.payload) {
-                    buffered.push(event);
+                    buffered.push(MarketEvent::Book(event));
+                }
+            }
+            message = trade_subscription.next() => {
+                let Some(message) = message else { return };
+                if let Ok(event) = serde_json::from_slice::<WireEnvelope>(&message.payload) {
+                    buffered.push(MarketEvent::Trade(event));
                 }
             }
             result = &mut snapshot => break result,
@@ -307,28 +323,51 @@ async fn run_market_subscription(
         "bids": snapshot.bids.iter().map(|level| json!({"price_ticks":level.price_ticks,"total_qty":level.total_qty,"order_count":level.order_count})).collect::<Vec<_>>(),
         "asks": snapshot.asks.iter().map(|level| json!({"price_ticks":level.price_ticks,"total_qty":level.total_qty,"order_count":level.order_count})).collect::<Vec<_>>(),
     })).await.is_err() { return; }
-    buffered.sort_by_key(|event: &WireBookEnvelope| {
-        (
-            event
-                .book_seq()
-                .unwrap_or_else(|| event.contract_seq.unwrap_or(0)),
-            event.global_seq,
-        )
-    });
+    buffered.sort_by_key(market_event_sequence);
     for event in buffered {
-        if event.contract_seq.unwrap_or(0) > snapshot.seq
-            && tx.send(book_delta_event(event)).await.is_err()
-        {
-            return;
+        match event {
+            MarketEvent::Book(event) => {
+                if event.contract_seq.unwrap_or(0) > snapshot.seq
+                    && tx.send(book_delta_event(event)).await.is_err()
+                {
+                    return;
+                }
+            }
+            MarketEvent::Trade(event) => {
+                if tx.send(public_event(event)).await.is_err() {
+                    return;
+                }
+            }
         }
     }
-    while let Some(message) = subscription.next().await {
-        let Ok(event) = serde_json::from_slice::<WireBookEnvelope>(&message.payload) else {
-            continue;
-        };
-        if tx.send(book_delta_event(event)).await.is_err() {
-            return;
+    loop {
+        tokio::select! {
+            message = book_subscription.next() => {
+                let Some(message) = message else { return };
+                let Ok(event) = serde_json::from_slice::<WireBookEnvelope>(&message.payload) else {
+                    continue;
+                };
+                if tx.send(book_delta_event(event)).await.is_err() {
+                    return;
+                }
+            }
+            message = trade_subscription.next() => {
+                let Some(message) = message else { return };
+                let Ok(event) = serde_json::from_slice::<WireEnvelope>(&message.payload) else {
+                    continue;
+                };
+                if tx.send(public_event(event)).await.is_err() {
+                    return;
+                }
+            }
         }
+    }
+}
+
+fn market_event_sequence(event: &MarketEvent) -> (u64, u8) {
+    match event {
+        MarketEvent::Book(event) => (event.global_seq, 1),
+        MarketEvent::Trade(event) => (event.global_seq, 0),
     }
 }
 
@@ -347,12 +386,6 @@ fn book_delta_event(event: WireBookEnvelope) -> Value {
         "new_total_qty": event.payload.new_total_qty,
         "new_order_count": event.payload.new_order_count,
     })
-}
-
-impl WireBookEnvelope {
-    fn book_seq(&self) -> Option<u64> {
-        self.payload.book_seq.or(self.contract_seq)
-    }
 }
 
 fn book_side_name(value: i32) -> Option<&'static str> {
@@ -395,6 +428,28 @@ mod tests {
         assert!(value.get("maker_user_id").is_none());
         assert!(value.get("maker_order_id").is_none());
         assert_eq!(value["price_ticks"], 42);
+    }
+
+    #[test]
+    fn market_events_are_ordered_by_global_sequence() {
+        let trade = MarketEvent::Trade(fill());
+        let WireFill { ticker, .. } = fill().payload;
+        let book = WireBookEnvelope {
+            event_id: "book-1".to_owned(),
+            global_seq: 8,
+            contract_seq: Some(4),
+            payload: WireBookDelta {
+                ticker,
+                side: 1,
+                book_side: Some(1),
+                book_seq: Some(4),
+                price_ticks: 42,
+                qty_delta: 1,
+                new_total_qty: 1,
+                new_order_count: Some(1),
+            },
+        };
+        assert!(market_event_sequence(&trade) < market_event_sequence(&MarketEvent::Book(book)));
     }
 
     #[test]

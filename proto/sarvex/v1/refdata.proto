@@ -12,6 +12,8 @@ import "sarvex/v1/common.proto";
 service RefData {
   rpc GetContract(GetContractRequest) returns (Contract);
   rpc ListContracts(ListContractsRequest) returns (ListContractsResponse);
+  rpc ListSeries(ListSeriesRequest) returns (ListSeriesResponse);
+  rpc ListEvents(ListEventsRequest) returns (ListEventsResponse);
   rpc TransitionState(TransitionStateRequest) returns (google.protobuf.Empty);
   rpc UpsertContract(UpsertContractRequest) returns (Contract);
   rpc GetEvent(GetEventRequest) returns (Event);
@@ -57,6 +59,12 @@ message Event {
   google.protobuf.Timestamp expected_resolution_at = 5;
 }
 
+message Series {
+  string series_ticker = 1;
+  string title = 2;
+  string description = 3;
+}
+
 message GetContractRequest {
   string ticker = 1;
 }
@@ -66,10 +74,39 @@ message ListContractsRequest {
   string series_ticker = 2;
   int32 limit = 3;
   string cursor = 4;
+  ContractKind kind = 5;
+  string event_ticker = 6;
+  string underlying = 7;
+  string category = 8;
+  google.protobuf.Timestamp expected_resolution_from = 9;
+  google.protobuf.Timestamp expected_resolution_to = 10;
 }
 
 message ListContractsResponse {
   repeated Contract contracts = 1;
+  string next_cursor = 2;
+}
+
+message ListSeriesRequest {
+  int32 limit = 1;
+  string cursor = 2;
+}
+
+message ListSeriesResponse {
+  repeated Series series = 1;
+  string next_cursor = 2;
+}
+
+message ListEventsRequest {
+  string series_ticker = 1;
+  google.protobuf.Timestamp expected_resolution_from = 2;
+  google.protobuf.Timestamp expected_resolution_to = 3;
+  int32 limit = 4;
+  string cursor = 5;
+}
+
+message ListEventsResponse {
+  repeated Event events = 1;
   string next_cursor = 2;
 }
 

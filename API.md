@@ -90,8 +90,8 @@ The current REST gateway exposes these routes:
 |---|---|---|---|
 | `GET` | `/healthz`, `/readyz`, `/metrics`, `/v1/health/overview` | No | No |
 | `POST` | `/v1/auth/login` | No | No |
-| `GET` | `/v1/markets`, `/v1/markets/{ticker}`, `/v1/markets/{ticker}/orderbook`, `/v1/markets/{ticker}/fills`, `/v1/markets/{ticker}/open-interest` | No | No |
-| `GET` | `/v1/orders`, `/v1/orders/{order_id}`, `/v1/account/balance`, `/v1/account/history`, `/v1/positions`, `/v1/positions/{ticker}` | Yes | No |
+| `GET` | `/v1/markets`, `/v1/markets/{ticker}`, `/v1/markets/{ticker}/orderbook`, `/v1/markets/{ticker}/fills`, `/v1/markets/{ticker}/open-interest`, `/v1/markets/{ticker}/settlement`, `/v1/series`, `/v1/events`, `/v1/events/{event_ticker}`, `/v1/events/{event_ticker}/resolution` | No | No |
+| `GET` | `/v1/orders`, `/v1/orders/{order_id}`, `/v1/account/balance`, `/v1/account/risk`, `/v1/account/history`, `/v1/account/fills`, `/v1/positions`, `/v1/positions/{ticker}` | Yes | No |
 | `POST` | `/v1/orders`, `/v1/orders/{order_id}/cancel` | Yes | Yes |
 | `POST` | `/v1/demo/deposits/credit` | Yes | Yes |
 | `POST` | `/v1/rfqs`, `/v1/rfqs/{rfq_id}/quotes`, `/v1/rfqs/{rfq_id}/cancel`, `/v1/rfqs/{rfq_id}/quotes/{quote_id}/cancel`, `/v1/rfqs/{rfq_id}/quotes/{quote_id}/accept` | Yes | Yes |
@@ -151,7 +151,7 @@ The Prometheus endpoint is plain text.
 ### List markets
 
 ```http
-GET /v1/markets?state=OPEN&series_ticker=XLSX-STANDARD&limit=50&cursor=<cursor>
+GET /v1/markets?state=OPEN&series_ticker=XLSX-STANDARD&kind=BINARY&event_ticker=XEV-STD-ECO-01&underlying=bitcoin&category=Crypto&expected_resolution_from=<RFC3339>&expected_resolution_to=<RFC3339>&limit=50&cursor=<cursor>
 ```
 
 All query parameters are optional:
@@ -160,6 +160,12 @@ All query parameters are optional:
 |---|---|---|
 | `state` | string | `DRAFT`, `LISTED`, `OPEN`, `HALTED`, `CLOSED`, `RESOLVING`, `SETTLED`, or `CANCELLED` |
 | `series_ticker` | string | Restrict to one series |
+| `kind` | string | `BINARY`, `FUTURES`, or `SCALAR` |
+| `event_ticker` | string | Restrict to one event |
+| `underlying` | string | Case-insensitive underlying search |
+| `category` | string | Settlement-rule category |
+| `expected_resolution_from` | RFC3339 | Earliest expected resolution time |
+| `expected_resolution_to` | RFC3339 | Latest expected resolution time |
 | `limit` | integer | `1` to `500`; default `50` |
 | `cursor` | string | Cursor returned by the previous response |
 
@@ -227,6 +233,52 @@ GET /v1/markets/{ticker}
 
 Response `200` is one contract object with the same fields as an item in the
 list response.
+
+### Discover series
+
+```http
+GET /v1/series?limit=100&cursor=<cursor>
+```
+
+Response `200`:
+
+```json
+{
+  "series": [
+    {
+      "series_ticker": "XLSX-STANDARD",
+      "title": "Standard demo contracts",
+      "description": "Deterministic Sarvex catalog"
+    }
+  ],
+  "next_cursor": ""
+}
+```
+
+### Discover events
+
+```http
+GET /v1/events?series_ticker=XLSX-STANDARD&expected_resolution_from=<RFC3339>&expected_resolution_to=<RFC3339>&limit=100&cursor=<cursor>
+GET /v1/events/{event_ticker}
+```
+
+The event response includes `event_ticker`, `series_ticker`, `title`,
+`description`, and `expected_resolution_at`. Event discovery is public market
+metadata and does not require authentication.
+
+### Read resolution and settlement
+
+```http
+GET /v1/events/{event_ticker}/resolution
+GET /v1/markets/{ticker}/settlement
+```
+
+The resolution response includes its status, numeric or categorical outcome,
+attestations, sources, and proposal/finalization timestamps. The settlement
+response is available after settlement completes and includes the payout per
+contract, total payout, and number of positions settled. These are read-only
+endpoints; resolution proposal, finalization, and settlement execution remain
+internal/admin workflows.
 
 ### Get an order-book snapshot
 
@@ -566,6 +618,42 @@ Response `200`:
 
 Values are micro-USDC. Divide by `1_000_000` for display only.
 
+### Get private fill history
+
+```http
+GET /v1/account/fills?ticker=SX-FEDDEC-26OCT-H25&order_id=ord-123&from_global_seq=0&to_global_seq=0&from_time=<RFC3339>&to_time=<RFC3339>&limit=100&cursor=<cursor>
+Authorization: Bearer <token>
+```
+
+The endpoint returns only fills involving the authenticated account. It is
+safe to use for reconciliation after a WebSocket disconnect. Counterparty user,
+order, and hold identifiers are never returned.
+
+Response `200`:
+
+```json
+{
+  "fills": [
+    {
+      "fill_id": "fill-123",
+      "ticker": "SX-FEDDEC-26OCT-H25",
+      "global_seq": 8201,
+      "contract_seq": 421,
+      "order_id": "ord-123",
+      "role": "TAKER",
+      "side": "YES",
+      "action": "BUY",
+      "price_ticks": 51,
+      "count": 10,
+      "aggressor_side": "YES",
+      "fee_micro_usdc": 0,
+      "ts": "2026-09-25T09:10:00Z"
+    }
+  ],
+  "next_cursor": "8201"
+}
+```
+
 ### Get account ledger history
 
 ```http
@@ -592,6 +680,55 @@ Response `200`:
   "next_cursor": ""
 }
 ```
+
+### Get aggregate account risk
+
+```http
+GET /v1/account/risk
+Authorization: Bearer <token>
+```
+
+This read-only view combines the authenticated account's ledger balance, open
+positions, working orders, and configured risk limits. It does not replace the
+risk service's pre-trade decision and does not create or modify holds.
+
+Response `200`:
+
+```json
+{
+  "user_id": "demo-user-1",
+  "cash_micro_usdc": 10000000000,
+  "held_micro_usdc": 5100000,
+  "total_micro_usdc": 10005100000,
+  "available_collateral_micro_usdc": 10000000000,
+  "equity_micro_usdc": 10005100000,
+  "position_cost_micro_usdc": 5100000,
+  "realized_pnl_micro_usdc": 0,
+  "unrealized_pnl_micro_usdc": 0,
+  "open_positions": 1,
+  "open_orders": 1,
+  "as_of_global_seq": 8201,
+  "limits": {
+    "user_id": "demo-user-1",
+    "kyc_tier": 1,
+    "max_order_size_micro_usdc": 100000000,
+    "daily_loss_limit_micro_usdc": 10000000,
+    "per_contract_position_limit": {
+      "SX-FEDDEC-26OCT-H25": 100
+    }
+  },
+  "calculation_basis": {
+    "available_collateral": "ledger cash balance; held collateral is reported separately",
+    "equity": "ledger total balance plus position unrealized P&L",
+    "position_cost": "sum of absolute net quantity multiplied by absolute average cost"
+  }
+}
+```
+
+The endpoint returns the configured limits from `risk-svc`; it does not invent
+defaults when a user has no risk profile. A missing profile is returned as the
+upstream error so account risk cannot be mistaken for an approved trading
+limit.
 
 ### Credit demo funds
 
@@ -739,6 +876,26 @@ The server first sends a snapshot:
 }
 ```
 
+The market channel also emits anonymised public trades as they arrive:
+
+```json
+{
+  "type": "market_trade",
+  "event_id": "fill-123",
+  "ticker": "SX-FEDDEC-26OCT-H25",
+  "global_seq": 8201,
+  "contract_seq": 421,
+  "price_ticks": 51,
+  "count": 10,
+  "aggressor_side": 1
+}
+```
+
+Trade events contain no user, order, or hold identifiers. They are ordered by
+the matching-engine sequence and share the market subscription with book
+events. Clients should use `global_seq` for cross-event ordering and retain
+their existing `book_seq` check for book deltas.
+
 It then sends deltas:
 
 ```json
@@ -763,9 +920,8 @@ is authoritative and `qty_delta` is a consistency check. A zero total removes
 the level. On a gap, discard the local book and fetch a fresh REST snapshot
 before applying newer deltas.
 
-The current market channel emits book snapshots and book deltas. Use the REST
-fills endpoint for public recent trades. The private channel below emits the
-authenticated user's own execution events.
+The market channel emits book snapshots, book deltas, and public trades. The
+private channel below emits the authenticated user's own execution events.
 
 ### Subscribe to private fills
 

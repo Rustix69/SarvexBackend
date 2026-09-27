@@ -340,6 +340,10 @@ async fn replay_gap(
                     to_global_seq: to,
                     limit: 500,
                     cursor: cursor.clone(),
+                    user_id: String::new(),
+                    order_id: String::new(),
+                    from_time: None,
+                    to_time: None,
                 },
             ))
             .await

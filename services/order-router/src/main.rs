@@ -541,7 +541,7 @@ impl OrderRouter for OrderRouterService {
         let mut query = QueryBuilder::new(ORDER_SELECT);
         query.push(" WHERE user_id = ").push_bind(request.user_id);
         if !request.ticker.trim().is_empty() {
-            query.push(" AND ticker = ").push_bind(request.ticker);
+            query.push(" AND ticker = ").push_bind(&request.ticker);
         }
         if request.status != OrderStatus::Unspecified as i32 {
             query
@@ -590,6 +590,28 @@ impl OrderRouter for OrderRouterService {
         }
         if !request.ticker.trim().is_empty() {
             query.push(" AND ticker = ").push_bind(request.ticker);
+        }
+        if !request.user_id.trim().is_empty() {
+            query
+                .push(" AND (maker_user_id = ")
+                .push_bind(&request.user_id)
+                .push(" OR taker_user_id = ")
+                .push_bind(&request.user_id)
+                .push(")");
+        }
+        if !request.order_id.trim().is_empty() {
+            query
+                .push(" AND (maker_order_id = ")
+                .push_bind(&request.order_id)
+                .push(" OR taker_order_id = ")
+                .push_bind(&request.order_id)
+                .push(")");
+        }
+        if let Some(from_time) = request.from_time.as_ref().and_then(timestamp_to_datetime) {
+            query.push(" AND created_at >= ").push_bind(from_time);
+        }
+        if let Some(to_time) = request.to_time.as_ref().and_then(timestamp_to_datetime) {
+            query.push(" AND created_at <= ").push_bind(to_time);
         }
         query
             .push(" ORDER BY global_seq ASC LIMIT ")

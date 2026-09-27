@@ -5,7 +5,8 @@ use prost_types::{value::Kind, ListValue, Struct, Timestamp, Value};
 use sarvex_contracts::sarvex::v1::{
     ref_data_server::{RefData, RefDataServer},
     Contract, Event, GetContractRequest, GetEventRequest, ListContractsRequest,
-    ListContractsResponse, TransitionStateRequest, UpsertContractRequest,
+    ListContractsResponse, ListEventsRequest, ListEventsResponse, ListSeriesRequest,
+    ListSeriesResponse, Series, TransitionStateRequest, UpsertContractRequest,
 };
 use sarvex_db::connect;
 use serde_json::Value as JsonValue;
@@ -130,6 +131,52 @@ impl RefData for RefDataService {
                 .push_bind(request.series_ticker.trim().to_owned());
             has_where = true;
         }
+        if request.kind != 0 {
+            let kind = contract_kind_name(request.kind)
+                .ok_or_else(|| Status::invalid_argument("invalid contract kind"))?;
+            query.push(if has_where { " AND " } else { " WHERE " });
+            query.push("kind::text = ").push_bind(kind);
+            has_where = true;
+        }
+        if !request.event_ticker.trim().is_empty() {
+            query.push(if has_where { " AND " } else { " WHERE " });
+            query
+                .push("event_ticker = ")
+                .push_bind(request.event_ticker.trim().to_owned());
+            has_where = true;
+        }
+        if !request.underlying.trim().is_empty() {
+            query.push(if has_where { " AND " } else { " WHERE " });
+            query
+                .push("underlying ILIKE ")
+                .push_bind(format!("%{}%", request.underlying.trim()));
+            has_where = true;
+        }
+        if !request.category.trim().is_empty() {
+            query.push(if has_where { " AND " } else { " WHERE " });
+            query
+                .push("settlement_rule->>'category' = ")
+                .push_bind(request.category.trim().to_owned());
+            has_where = true;
+        }
+        if let Some(value) = request
+            .expected_resolution_from
+            .as_ref()
+            .and_then(timestamp_to_datetime)
+        {
+            query.push(if has_where { " AND " } else { " WHERE " });
+            query.push("expected_resolution_at >= ").push_bind(value);
+            has_where = true;
+        }
+        if let Some(value) = request
+            .expected_resolution_to
+            .as_ref()
+            .and_then(timestamp_to_datetime)
+        {
+            query.push(if has_where { " AND " } else { " WHERE " });
+            query.push("expected_resolution_at <= ").push_bind(value);
+            has_where = true;
+        }
         if !request.cursor.trim().is_empty() {
             query.push(if has_where { " AND " } else { " WHERE " });
             query
@@ -153,6 +200,105 @@ impl RefData for RefDataService {
         };
         Ok(Response::new(ListContractsResponse {
             contracts: rows.iter().map(contract_from_row).collect(),
+            next_cursor,
+        }))
+    }
+
+    async fn list_series(
+        &self,
+        request: Request<ListSeriesRequest>,
+    ) -> Result<Response<ListSeriesResponse>, Status> {
+        let request = request.into_inner();
+        let limit = request.limit.clamp(1, 200) as i64;
+        let mut query =
+            QueryBuilder::new("SELECT series_ticker, title, description FROM refdata.series");
+        if !request.cursor.trim().is_empty() {
+            query
+                .push(" WHERE series_ticker > ")
+                .push_bind(request.cursor.trim().to_owned());
+        }
+        query
+            .push(" ORDER BY series_ticker LIMIT ")
+            .push_bind(limit + 1);
+        let rows = query
+            .build()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(internal)?;
+        let has_next = rows.len() > limit as usize;
+        let rows = rows.into_iter().take(limit as usize).collect::<Vec<_>>();
+        let next_cursor = if has_next {
+            rows.last()
+                .map(|row| row.get::<String, _>("series_ticker"))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        Ok(Response::new(ListSeriesResponse {
+            series: rows.iter().map(series_from_row).collect(),
+            next_cursor,
+        }))
+    }
+
+    async fn list_events(
+        &self,
+        request: Request<ListEventsRequest>,
+    ) -> Result<Response<ListEventsResponse>, Status> {
+        let request = request.into_inner();
+        let limit = request.limit.clamp(1, 200) as i64;
+        let mut query = QueryBuilder::new(
+            "SELECT event_ticker, series_ticker, title, description, expected_resolution_at FROM refdata.events",
+        );
+        let mut has_where = false;
+        if !request.series_ticker.trim().is_empty() {
+            query
+                .push(" WHERE series_ticker = ")
+                .push_bind(request.series_ticker.trim().to_owned());
+            has_where = true;
+        }
+        if let Some(value) = request
+            .expected_resolution_from
+            .as_ref()
+            .and_then(timestamp_to_datetime)
+        {
+            query.push(if has_where { " AND " } else { " WHERE " });
+            query.push("expected_resolution_at >= ").push_bind(value);
+            has_where = true;
+        }
+        if let Some(value) = request
+            .expected_resolution_to
+            .as_ref()
+            .and_then(timestamp_to_datetime)
+        {
+            query.push(if has_where { " AND " } else { " WHERE " });
+            query.push("expected_resolution_at <= ").push_bind(value);
+            has_where = true;
+        }
+        if !request.cursor.trim().is_empty() {
+            query.push(if has_where { " AND " } else { " WHERE " });
+            query
+                .push("event_ticker > ")
+                .push_bind(request.cursor.trim().to_owned());
+        }
+        query
+            .push(" ORDER BY event_ticker LIMIT ")
+            .push_bind(limit + 1);
+        let rows = query
+            .build()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(internal)?;
+        let has_next = rows.len() > limit as usize;
+        let rows = rows.into_iter().take(limit as usize).collect::<Vec<_>>();
+        let next_cursor = if has_next {
+            rows.last()
+                .map(|row| row.get::<String, _>("event_ticker"))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        Ok(Response::new(ListEventsResponse {
+            events: rows.iter().map(event_from_row).collect(),
             next_cursor,
         }))
     }
@@ -286,6 +432,36 @@ fn contract_state_value(value: &str) -> i32 {
         "CANCELLED" => 7,
         "HALTED" => 8,
         _ => 0,
+    }
+}
+
+fn contract_kind_name(value: i32) -> Option<&'static str> {
+    match value {
+        1 => Some("BINARY"),
+        2 => Some("SCALAR"),
+        _ => None,
+    }
+}
+
+fn timestamp_to_datetime(value: &Timestamp) -> Option<DateTime<Utc>> {
+    DateTime::from_timestamp(value.seconds, value.nanos as u32)
+}
+
+fn series_from_row(row: &sqlx::postgres::PgRow) -> Series {
+    Series {
+        series_ticker: row.get("series_ticker"),
+        title: row.get("title"),
+        description: row.get("description"),
+    }
+}
+
+fn event_from_row(row: &sqlx::postgres::PgRow) -> Event {
+    Event {
+        event_ticker: row.get("event_ticker"),
+        series_ticker: row.get("series_ticker"),
+        title: row.get("title"),
+        description: row.get("description"),
+        expected_resolution_at: timestamp(row.get("expected_resolution_at")),
     }
 }
 
