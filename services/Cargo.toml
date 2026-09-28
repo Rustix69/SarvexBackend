@@ -33,6 +33,7 @@ license = "UNLICENSED"
 
 [workspace.dependencies]
 anyhow = "1.0"
+argon2 = "0.5"
 async-nats = "0.38"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["ws"] }

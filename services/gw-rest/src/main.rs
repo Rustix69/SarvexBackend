@@ -4,12 +4,14 @@ use axum::{
     extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
 use prost_types::Timestamp;
-use sarvex_auth::{AuthMode, Authenticator};
+use sarvex_auth::{
+    generate_api_key, hash_password, verify_password, AuthMethod, AuthMode, Authenticator,
+};
 use sarvex_contracts::sarvex::v1::{
     get_order_request, ledger_client::LedgerClient, oracle_client::OracleClient,
     order_router_client::OrderRouterClient, position_client::PositionClient,
@@ -42,6 +44,7 @@ use tonic::{
     Code,
 };
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use uuid::Uuid;
 
 #[derive(Clone)]
 struct AppState {
@@ -81,8 +84,21 @@ struct DiscoveryQuery {
 }
 #[derive(Debug, Deserialize)]
 struct LoginRequest {
-    user_id: String,
+    user_id: Option<String>,
+    email: Option<String>,
     password: Option<String>,
+}
+#[derive(Debug, Deserialize)]
+struct RegisterRequest {
+    user_id: String,
+    email: String,
+    password: String,
+}
+#[derive(Debug, Deserialize)]
+struct ApiKeyCreateRequest {
+    name: String,
+    scopes: Option<Vec<String>>,
+    expires_at: Option<String>,
 }
 #[derive(Debug, Deserialize, Serialize)]
 struct OrderInput {
@@ -180,8 +196,9 @@ struct HealthItem {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     sarvex_runtime::init_tracing("gw-rest");
-    let auth = Arc::new(Authenticator::from_env()?);
     let pool = connect().await?;
+    let auth = Arc::new(Authenticator::from_env()?);
+    load_api_keys(&auth, &pool).await?;
     let state = AppState {
         auth,
         pool,
@@ -211,7 +228,16 @@ async fn main() -> anyhow::Result<()> {
         .route("/readyz", get(readyz))
         .route("/metrics", get(metrics))
         .route("/v1/health/overview", get(health_overview))
+        .route("/v1/auth/register", post(register))
         .route("/v1/auth/login", post(login))
+        .route(
+            "/v1/account/api-keys",
+            get(list_api_keys).post(create_api_key),
+        )
+        .route(
+            "/v1/account/api-keys/{key_id}",
+            delete(revoke_api_key).post(revoke_api_key),
+        )
         .route("/v1/markets", get(list_markets))
         .route("/v1/markets/{ticker}", get(get_market))
         .route("/v1/series", get(list_series))
@@ -358,28 +384,108 @@ async fn metrics() -> Response {
     ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], "# HELP sarvex_gateway_up Gateway health state.\n# TYPE sarvex_gateway_up gauge\nsarvex_gateway_up{service=\"gw-rest\"} 1\n").into_response()
 }
 
-async fn login(State(state): State<AppState>, Json(input): Json<LoginRequest>) -> Response {
-    let user_id = input.user_id.trim();
-    if user_id.is_empty() {
+async fn register(State(state): State<AppState>, Json(input): Json<RegisterRequest>) -> Response {
+    let user_id = input.user_id.trim().to_owned();
+    let email = input.email.trim().to_owned();
+    let email_normalized = email.to_ascii_lowercase();
+    if !valid_user_id(&user_id) {
         return error_response(
             StatusCode::BAD_REQUEST,
             "INVALID_ARGUMENT",
-            "user_id is required",
+            "user_id must be 3-32 characters using letters, numbers, '_' or '-'",
         );
     }
-    if state.auth.mode() == AuthMode::Jwt {
-        let expected = env::var("AUTH_LOGIN_SECRET").unwrap_or_default();
-        if expected.is_empty() || input.password.as_deref() != Some(expected.as_str()) {
+    if !valid_email(&email_normalized) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "INVALID_ARGUMENT",
+            "a valid email is required",
+        );
+    }
+    if input.password.len() < 10 || input.password.len() > 128 {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "INVALID_ARGUMENT",
+            "password must be 10-128 characters",
+        );
+    }
+    let password_hash = match hash_password(&input.password) {
+        Ok(value) => value,
+        Err(error) => {
             return error_response(
-                StatusCode::UNAUTHORIZED,
-                "UNAUTHENTICATED",
-                "invalid credentials",
-            );
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "AUTH_ERROR",
+                &error.to_string(),
+            )
+        }
+    };
+    let mut tx = match state.pool.begin().await {
+        Ok(value) => value,
+        Err(error) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DATABASE_ERROR",
+                &error.to_string(),
+            )
+        }
+    };
+    let subject_id = match sqlx::query_scalar::<_, uuid::Uuid>("INSERT INTO auth.users (user_id, email, email_normalized) VALUES ($1,$2,$3) RETURNING subject_id")
+        .bind(&user_id).bind(&email).bind(&email_normalized).fetch_one(&mut *tx).await {
+        Ok(value) => value,
+        Err(error) if is_unique_violation(&error) => return error_response(StatusCode::CONFLICT, "ALREADY_EXISTS", "user_id or email is already registered"),
+        Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, "DATABASE_ERROR", &error.to_string()),
+    };
+    if let Err(error) =
+        sqlx::query("INSERT INTO auth.credentials (subject_id, password_hash) VALUES ($1,$2)")
+            .bind(subject_id)
+            .bind(&password_hash)
+            .execute(&mut *tx)
+            .await
+    {
+        return error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DATABASE_ERROR",
+            &error.to_string(),
+        );
+    }
+    if let Err(error) = sqlx::query(
+        "INSERT INTO risk.user_limits (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING",
+    )
+    .bind(&user_id)
+    .execute(&mut *tx)
+    .await
+    {
+        return error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DATABASE_ERROR",
+            &error.to_string(),
+        );
+    }
+    for code in [
+        format!("LIAB:USER:{user_id}:CASH"),
+        format!("LIAB:USER:{user_id}:HOLDS"),
+    ] {
+        if let Err(error) = sqlx::query("INSERT INTO ledger.accounts (account_code, account_type, currency, user_id) VALUES ($1,'LIABILITY','USDC',$2) ON CONFLICT (account_code) DO NOTHING")
+            .bind(code).bind(&user_id).execute(&mut *tx).await {
+            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "DATABASE_ERROR", &error.to_string());
         }
     }
-    match state.auth.issue(user_id, "trader") {
+    if let Err(error) = sqlx::query("INSERT INTO auth.audit_events (subject_id, user_id, event_type) VALUES ($1,$2,'USER_REGISTERED')")
+        .bind(subject_id).bind(&user_id).execute(&mut *tx).await {
+        return error_response(StatusCode::INTERNAL_SERVER_ERROR, "DATABASE_ERROR", &error.to_string());
+    }
+    if let Err(error) = tx.commit().await {
+        return error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DATABASE_ERROR",
+            &error.to_string(),
+        );
+    }
+    let scopes = default_jwt_scopes();
+    match state.auth.issue_with_scopes(&user_id, "trader", &scopes) {
         Ok(token) => {
-            Json(json!({"token":token,"token_type":"Bearer","user_id":user_id})).into_response()
+            Json(json!({"token":token,"token_type":"Bearer","user_id":user_id,"email":email}))
+                .into_response()
         }
         Err(error) => error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -387,6 +493,268 @@ async fn login(State(state): State<AppState>, Json(input): Json<LoginRequest>) -
             &error.to_string(),
         ),
     }
+}
+
+async fn login(State(state): State<AppState>, Json(input): Json<LoginRequest>) -> Response {
+    let identifier = input
+        .user_id
+        .as_deref()
+        .or(input.email.as_deref())
+        .unwrap_or_default()
+        .trim();
+    if identifier.is_empty() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "INVALID_ARGUMENT",
+            "user_id or email is required",
+        );
+    }
+    if state.auth.mode() == AuthMode::Demo {
+        return match state.auth.issue(identifier, "trader") {
+            Ok(token) => Json(json!({"token":token,"token_type":"Bearer","user_id":identifier}))
+                .into_response(),
+            Err(error) => error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "AUTH_ERROR",
+                &error.to_string(),
+            ),
+        };
+    }
+    let normalized = identifier.to_ascii_lowercase();
+    let row = match sqlx::query("SELECT u.user_id, u.email, u.status, c.password_hash FROM auth.users u JOIN auth.credentials c ON c.subject_id=u.subject_id WHERE u.user_id=$1 OR u.email_normalized=$2")
+        .bind(identifier).bind(&normalized).fetch_optional(&state.pool).await {
+        Ok(Some(value)) => value,
+        Ok(None) => return error_response(StatusCode::UNAUTHORIZED, "UNAUTHENTICATED", "invalid credentials"),
+        Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, "DATABASE_ERROR", &error.to_string()),
+    };
+    let status: String = row.get("status");
+    if status != "ACTIVE" {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "ACCOUNT_INACTIVE",
+            "account is not active",
+        );
+    }
+    let password = input.password.as_deref().unwrap_or_default();
+    if verify_password(password, row.get::<String, _>("password_hash").as_str()).is_err() {
+        return error_response(
+            StatusCode::UNAUTHORIZED,
+            "UNAUTHENTICATED",
+            "invalid credentials",
+        );
+    }
+    let user_id: String = row.get("user_id");
+    match state.auth.issue_with_scopes(&user_id, "trader", &default_jwt_scopes()) {
+        Ok(token) => Json(json!({"token":token,"token_type":"Bearer","user_id":user_id,"email":row.get::<String, _>("email")})).into_response(),
+        Err(error) => error_response(StatusCode::INTERNAL_SERVER_ERROR, "AUTH_ERROR", &error.to_string()),
+    }
+}
+
+async fn load_api_keys(auth: &Authenticator, pool: &PgPool) -> anyhow::Result<()> {
+    let rows = sqlx::query("SELECT k.key_hash, u.user_id, k.scopes, k.expires_at FROM auth.api_keys k JOIN auth.users u ON u.subject_id=k.subject_id WHERE k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > now())")
+        .fetch_all(pool).await?;
+    for row in rows {
+        let expires_at = row
+            .try_get::<Option<DateTime<Utc>>, _>("expires_at")?
+            .map(|value| value.timestamp());
+        auth.register_api_key(
+            row.try_get("key_hash")?,
+            row.try_get("user_id")?,
+            row.try_get("scopes")?,
+            expires_at,
+        );
+    }
+    Ok(())
+}
+
+async fn list_api_keys(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let principal = match authenticated_principal(&headers, &state.auth) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let user_id = principal.user_id.clone();
+    match sqlx::query("SELECT k.key_id, k.key_prefix, k.name, k.scopes, k.created_at, k.expires_at, k.last_used_at, k.revoked_at FROM auth.api_keys k JOIN auth.users u ON u.subject_id=k.subject_id WHERE u.user_id=$1 ORDER BY k.created_at DESC")
+        .bind(&user_id).fetch_all(&state.pool).await {
+        Ok(rows) => Json(json!({"api_keys": rows.iter().map(|row| json!({"key_id":row.get::<Uuid,_>("key_id"),"key_prefix":row.get::<String,_>("key_prefix"),"name":row.get::<String,_>("name"),"scopes":row.get::<Vec<String>,_>("scopes"),"created_at":row.get::<DateTime<Utc>,_>("created_at"),"expires_at":row.get::<Option<DateTime<Utc>>,_>("expires_at"),"last_used_at":row.get::<Option<DateTime<Utc>>,_>("last_used_at"),"revoked_at":row.get::<Option<DateTime<Utc>>,_>("revoked_at")})).collect::<Vec<_>>() })).into_response(),
+        Err(error) => error_response(StatusCode::INTERNAL_SERVER_ERROR, "DATABASE_ERROR", &error.to_string()),
+    }
+}
+
+async fn create_api_key(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<ApiKeyCreateRequest>,
+) -> Response {
+    let principal = match authenticated_principal(&headers, &state.auth) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let user_id = principal.user_id.clone();
+    let name = input.name.trim();
+    if name.is_empty() || name.len() > 80 {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "INVALID_ARGUMENT",
+            "name must be 1-80 characters",
+        );
+    }
+    let scopes = match validate_api_key_scopes(input.scopes.unwrap_or_else(default_api_key_scopes))
+    {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    if principal.method == AuthMethod::ApiKey
+        && scopes.iter().any(|scope| {
+            !principal
+                .scopes
+                .iter()
+                .any(|owned| owned == "*" || owned == scope)
+        })
+    {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "PERMISSION_DENIED",
+            "an api key cannot grant scopes it does not own",
+        );
+    }
+    let expires_at = match input.expires_at.as_deref() {
+        Some(value) => match DateTime::parse_from_rfc3339(value) {
+            Ok(value) => Some(value.with_timezone(&Utc)),
+            Err(_) => {
+                return error_response(
+                    StatusCode::BAD_REQUEST,
+                    "INVALID_ARGUMENT",
+                    "invalid expires_at",
+                )
+            }
+        },
+        None => None,
+    };
+    let (raw, prefix, hash) = generate_api_key();
+    let row =
+        match sqlx::query("SELECT subject_id FROM auth.users WHERE user_id=$1 AND status='ACTIVE'")
+            .bind(&user_id)
+            .fetch_optional(&state.pool)
+            .await
+        {
+            Ok(Some(value)) => value,
+            Ok(None) => {
+                return error_response(
+                    StatusCode::UNAUTHORIZED,
+                    "UNAUTHENTICATED",
+                    "user account not found",
+                )
+            }
+            Err(error) => {
+                return error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DATABASE_ERROR",
+                    &error.to_string(),
+                )
+            }
+        };
+    let subject_id: Uuid = row.get("subject_id");
+    let inserted = sqlx::query("INSERT INTO auth.api_keys (subject_id,key_prefix,key_hash,name,scopes,expires_at) VALUES ($1,$2,$3,$4,$5,$6) RETURNING key_id,created_at,expires_at")
+        .bind(subject_id).bind(&prefix).bind(&hash).bind(name).bind(&scopes).bind(expires_at).fetch_one(&state.pool).await;
+    match inserted {
+        Ok(row) => {
+            state.auth.register_api_key(
+                hash,
+                user_id.clone(),
+                scopes.clone(),
+                expires_at.map(|value| value.timestamp()),
+            );
+            Json(json!({"key_id":row.get::<Uuid,_>("key_id"),"name":name,"key":raw,"key_prefix":prefix,"scopes":scopes,"created_at":row.get::<DateTime<Utc>,_>("created_at"),"expires_at":row.get::<Option<DateTime<Utc>>,_>("expires_at")})).into_response()
+        }
+        Err(error) if is_unique_violation(&error) => error_response(
+            StatusCode::CONFLICT,
+            "ALREADY_EXISTS",
+            "api key collision; retry",
+        ),
+        Err(error) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DATABASE_ERROR",
+            &error.to_string(),
+        ),
+    }
+}
+
+async fn revoke_api_key(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(key_id): Path<Uuid>,
+) -> Response {
+    let user_id = match authenticated_user(&headers, &state.auth) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let row = match sqlx::query("UPDATE auth.api_keys k SET revoked_at=now() FROM auth.users u WHERE k.key_id=$1 AND k.subject_id=u.subject_id AND u.user_id=$2 AND k.revoked_at IS NULL RETURNING k.key_hash")
+        .bind(key_id).bind(&user_id).fetch_optional(&state.pool).await {
+        Ok(Some(value)) => value,
+        Ok(None) => return error_response(StatusCode::NOT_FOUND, "NOT_FOUND", "api key not found"),
+        Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, "DATABASE_ERROR", &error.to_string()),
+    };
+    state.auth.revoke_api_key(&row.get::<String, _>("key_hash"));
+    Json(json!({"key_id":key_id,"revoked":true})).into_response()
+}
+
+fn default_jwt_scopes() -> Vec<String> {
+    vec![
+        "markets:read".into(),
+        "account:read".into(),
+        "orders:read".into(),
+        "fills:read".into(),
+        "trading:write".into(),
+        "websocket:read".into(),
+    ]
+}
+fn default_api_key_scopes() -> Vec<String> {
+    vec![
+        "markets:read".into(),
+        "account:read".into(),
+        "orders:read".into(),
+        "fills:read".into(),
+    ]
+}
+fn validate_api_key_scopes(scopes: Vec<String>) -> Result<Vec<String>, Response> {
+    let allowed = [
+        "markets:read",
+        "account:read",
+        "orders:read",
+        "fills:read",
+        "trading:write",
+        "websocket:read",
+    ];
+    if scopes.is_empty()
+        || scopes
+            .iter()
+            .any(|scope| !allowed.contains(&scope.as_str()))
+    {
+        return Err(error_response(
+            StatusCode::BAD_REQUEST,
+            "INVALID_ARGUMENT",
+            "unsupported api key scope",
+        ));
+    }
+    Ok(scopes)
+}
+fn valid_user_id(value: &str) -> bool {
+    (3..=32).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+}
+fn valid_email(value: &str) -> bool {
+    value.len() <= 254
+        && value.contains('@')
+        && value.split('@').count() == 2
+        && value
+            .rsplit('@')
+            .next()
+            .is_some_and(|domain| domain.contains('.'))
+}
+fn is_unique_violation(error: &sqlx::Error) -> bool {
+    matches!(error, sqlx::Error::Database(database) if database.code().as_deref() == Some("23505"))
 }
 
 async fn list_markets(State(state): State<AppState>, Query(query): Query<MarketQuery>) -> Response {
@@ -597,7 +965,7 @@ async fn submit_order(
     headers: HeaderMap,
     Json(input): Json<OrderInput>,
 ) -> Response {
-    let user_id = match authenticated_user(&headers, &state.auth) {
+    let user_id = match authenticated_user_with_scope(&headers, &state.auth, "trading:write") {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -777,7 +1145,7 @@ async fn cancel_order(
     headers: HeaderMap,
     Path(order_id): Path<String>,
 ) -> Response {
-    let user_id = match authenticated_user(&headers, &state.auth) {
+    let user_id = match authenticated_user_with_scope(&headers, &state.auth, "trading:write") {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -1042,7 +1410,7 @@ async fn create_rfq(
     headers: HeaderMap,
     Json(input): Json<RfqInput>,
 ) -> Response {
-    let user_id = match authenticated_user(&headers, &state.auth) {
+    let user_id = match authenticated_user_with_scope(&headers, &state.auth, "trading:write") {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -1161,7 +1529,7 @@ async fn submit_rfq_quote(
     Path(rfq_id): Path<String>,
     Json(input): Json<RfqQuoteInput>,
 ) -> Response {
-    let user_id = match authenticated_user(&headers, &state.auth) {
+    let user_id = match authenticated_user_with_scope(&headers, &state.auth, "trading:write") {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -1227,7 +1595,7 @@ async fn cancel_rfq(
     headers: HeaderMap,
     Path(rfq_id): Path<String>,
 ) -> Response {
-    let user_id = match authenticated_user(&headers, &state.auth) {
+    let user_id = match authenticated_user_with_scope(&headers, &state.auth, "trading:write") {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -1278,7 +1646,7 @@ async fn cancel_rfq_quote(
     headers: HeaderMap,
     Path((rfq_id, quote_id)): Path<(String, String)>,
 ) -> Response {
-    let user_id = match authenticated_user(&headers, &state.auth) {
+    let user_id = match authenticated_user_with_scope(&headers, &state.auth, "trading:write") {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -1329,7 +1697,7 @@ async fn accept_rfq_quote(
     headers: HeaderMap,
     Path((rfq_id, quote_id)): Path<(String, String)>,
 ) -> Response {
-    let user_id = match authenticated_user(&headers, &state.auth) {
+    let user_id = match authenticated_user_with_scope(&headers, &state.auth, "trading:write") {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -1471,17 +1839,48 @@ async fn rpc<T>(
 }
 
 fn authenticated_user(headers: &HeaderMap, auth: &Authenticator) -> Result<String, Response> {
-    let raw = headers
+    authenticated_principal(headers, auth).map(|principal| principal.user_id)
+}
+
+fn authenticated_user_with_scope(
+    headers: &HeaderMap,
+    auth: &Authenticator,
+    required_scope: &str,
+) -> Result<String, Response> {
+    let principal = authenticated_principal(headers, auth)?;
+    if principal
+        .scopes
+        .iter()
+        .any(|scope| scope == "*" || scope == required_scope)
+    {
+        Ok(principal.user_id)
+    } else {
+        Err(error_response(
+            StatusCode::FORBIDDEN,
+            "PERMISSION_DENIED",
+            "credential does not have the required scope",
+        ))
+    }
+}
+
+fn authenticated_principal(
+    headers: &HeaderMap,
+    auth: &Authenticator,
+) -> Result<sarvex_auth::Principal, Response> {
+    let authorization = headers
         .get("authorization")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
-    auth.verify_authorization(raw).map_err(|error| {
-        error_response(
-            StatusCode::UNAUTHORIZED,
-            "UNAUTHENTICATED",
-            &error.to_string(),
-        )
-    })
+        .and_then(|value| value.to_str().ok());
+    let api_key = headers
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok());
+    auth.verify_request(authorization, api_key)
+        .map_err(|_error| {
+            error_response(
+                StatusCode::UNAUTHORIZED,
+                "UNAUTHENTICATED",
+                "invalid or missing credentials",
+            )
+        })
 }
 
 fn required_header(headers: &HeaderMap, name: &str) -> Result<String, Response> {

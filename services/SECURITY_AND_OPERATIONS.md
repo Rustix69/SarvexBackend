@@ -9,15 +9,21 @@ The gateway uses `sarvex-auth`.
   exposed as production authentication.
 - `AUTH_MODE=jwt` is the production code path currently implemented. It issues
   and verifies HS256 JWTs using `JWT_SECRET`, `JWT_ISSUER`, `JWT_AUDIENCE`, and
-  `JWT_TTL_SECONDS`. `JWT_SECRET` must be at least 32 bytes. JWT login also
-  requires `AUTH_LOGIN_SECRET` until an external identity provider is connected.
-- REST and WebSocket gateways use the same verifier, so a token cannot be
-  accepted by one gateway and rejected by the other because of different token
-  parsing rules.
+  `JWT_TTL_SECONDS`. `JWT_SECRET` must be at least 32 bytes. Users register with
+  a user ID, email, and password; passwords are stored as Argon2id hashes in
+  PostgreSQL and are never stored or returned in plaintext.
+- API clients can authenticate with `X-API-Key: svx_live_<secret>`. Only the
+  one-time create response contains the plaintext key. The database stores a
+  SHA-256 hash, prefix, owner, scopes, expiry, and revocation timestamp.
+- API keys are scoped. Trading mutations require `trading:write`, and WebSocket
+  connections require `websocket:read`. Revoked or expired keys are rejected.
+- REST and WebSocket gateways use the same credential conventions, so a token
+  cannot be accepted by one gateway and rejected by the other because of
+  different token parsing rules.
 
-The next deployment hardening step is replacing the login-secret bootstrap with
-an OIDC/RS256 issuer and key rotation. That does not change gateway ownership or
-the Bearer-token contract.
+Password reset, email verification, MFA, and an external OIDC/RS256 issuer with
+key rotation remain later hardening work. They do not change gateway ownership
+or the Bearer-token/API-key contracts.
 
 ## Event retention
 

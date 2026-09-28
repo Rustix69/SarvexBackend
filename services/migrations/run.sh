@@ -23,3 +23,4 @@ run_sql /migrations/000010_event_futures_scaling_data.up.sql
 run_sql /migrations/000011_order_position_reservations.up.sql
 run_sql /migrations/000012_api_contract_corrections.up.sql
 run_sql /migrations/000013_rfq.up.sql
+run_sql /migrations/000014_auth.up.sql

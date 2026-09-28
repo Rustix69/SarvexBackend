@@ -11,11 +11,12 @@ use axum::{
     Json, Router,
 };
 use futures_util::{SinkExt, StreamExt};
-use sarvex_auth::Authenticator;
+use sarvex_auth::{hash_api_key, Authenticator};
 use sarvex_contracts::sarvex::v1::BookSide;
 use sarvex_me_client::MeCoreClient;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sqlx::Row;
 use std::{env, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{sync::mpsc, task::JoinHandle};
 
@@ -24,6 +25,7 @@ struct AppState {
     nats_url: String,
     me_addr: String,
     auth: Arc<Authenticator>,
+    pool: sqlx::PgPool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -82,10 +84,13 @@ enum MarketEvent {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     sarvex_runtime::init_tracing("gw-ws");
+    let auth = Arc::new(Authenticator::from_env()?);
+    let pool = sarvex_db::connect().await?;
     let state = AppState {
         nats_url: env::var("NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".to_owned()),
         me_addr: env::var("ME_CORE_ADDR").unwrap_or_else(|_| "http://127.0.0.1:50054".to_owned()),
-        auth: Arc::new(Authenticator::from_env()?),
+        auth,
+        pool,
     };
     let port = env::var("HTTP_PORT").unwrap_or_else(|_| "8082".to_owned());
     let addr: SocketAddr = format!("0.0.0.0:{port}").parse()?;
@@ -130,7 +135,7 @@ async fn ws_handler(
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    let user_id = authenticated_user(&headers, &state.auth);
+    let user_id = authenticated_user(&headers, &state.auth, &state.pool).await;
     upgrade
         .on_upgrade(move |socket| handle_socket(socket, state, user_id))
         .into_response()
@@ -272,9 +277,37 @@ fn private_event(event: WireEnvelope, user_id: &str) -> Option<Value> {
     }))
 }
 
-fn authenticated_user(headers: &HeaderMap, auth: &Authenticator) -> Option<String> {
-    let raw = headers.get("authorization")?.to_str().ok()?;
-    auth.verify_authorization(raw).ok()
+async fn authenticated_user(
+    headers: &HeaderMap,
+    auth: &Authenticator,
+    pool: &sqlx::PgPool,
+) -> Option<String> {
+    let authorization = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok());
+    if let Some(value) = authorization {
+        return auth.verify_authorization(value).ok();
+    }
+    let raw = headers.get("x-api-key")?.to_str().ok()?.trim();
+    let hash = hash_api_key(raw);
+    let row = sqlx::query("SELECT u.user_id, k.scopes FROM auth.api_keys k JOIN auth.users u ON u.subject_id=k.subject_id WHERE k.key_hash=$1 AND k.revoked_at IS NULL AND u.status='ACTIVE' AND (k.expires_at IS NULL OR k.expires_at > now())")
+        .bind(&hash)
+        .fetch_optional(pool)
+        .await
+        .ok()??;
+    let user_id: String = row.try_get("user_id").ok()?;
+    let scopes: Vec<String> = row.try_get("scopes").ok()?;
+    if !scopes
+        .iter()
+        .any(|scope| scope == "*" || scope == "websocket:read")
+    {
+        return None;
+    }
+    let _ = sqlx::query("UPDATE auth.api_keys SET last_used_at=now() WHERE key_hash=$1")
+        .bind(hash)
+        .execute(pool)
+        .await;
+    Some(user_id)
 }
 
 async fn run_market_subscription(

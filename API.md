@@ -30,14 +30,25 @@ Authenticated requests use:
 Authorization: Bearer <token>
 ```
 
+External clients may use a user-scoped API key instead:
+
+```http
+X-API-Key: svx_live_<secret>
+```
+
+API keys are stored only as hashes, are shown once at creation, and can be
+revoked independently. Browser sessions should use JWTs; bots should use API
+keys. API keys are scoped to the owning account and never accept a client
+supplied replacement `user_id`.
+
 `AUTH_MODE=demo` is used for local/demo deployments. The login response token
 is an identity token in the form `demo.<base64url(user_id)>`; it is not secure
 authentication and must not be used for a real public deployment.
 
-`AUTH_MODE=jwt` is the production code path currently implemented. Login
-requires the configured `AUTH_LOGIN_SECRET`, and the gateway issues an HS256
-JWT with the configured issuer, audience, and expiration. The JWT secret must
-be at least 32 bytes.
+`AUTH_MODE=jwt` enables persistent user authentication. Passwords are stored
+as Argon2id hashes and the gateway issues an HS256 JWT with the configured
+issuer, audience, and expiration. The JWT secret must be at least 32 bytes.
+`AUTH_MODE=demo` remains available only for local/demo compatibility.
 
 ### Idempotency
 
@@ -74,7 +85,7 @@ Common HTTP statuses:
 | Status | Meaning |
 |---:|---|
 | `400` | Invalid request, enum, price, count, or contract state |
-| `401` | Missing or invalid Bearer token |
+| `401` | Missing or invalid Bearer token or API key |
 | `403` | Authenticated but not permitted |
 | `404` | Contract, order, or position was not found |
 | `409` | Idempotency conflict or state conflict |
@@ -89,9 +100,12 @@ The current REST gateway exposes these routes:
 | Method | Path | Auth | Idempotency key |
 |---|---|---|---|
 | `GET` | `/healthz`, `/readyz`, `/metrics`, `/v1/health/overview` | No | No |
-| `POST` | `/v1/auth/login` | No | No |
+| `POST` | `/v1/auth/register`, `/v1/auth/login` | No | No |
 | `GET` | `/v1/markets`, `/v1/markets/{ticker}`, `/v1/markets/{ticker}/orderbook`, `/v1/markets/{ticker}/fills`, `/v1/markets/{ticker}/open-interest`, `/v1/markets/{ticker}/settlement`, `/v1/series`, `/v1/events`, `/v1/events/{event_ticker}`, `/v1/events/{event_ticker}/resolution` | No | No |
 | `GET` | `/v1/orders`, `/v1/orders/{order_id}`, `/v1/account/balance`, `/v1/account/risk`, `/v1/account/history`, `/v1/account/fills`, `/v1/positions`, `/v1/positions/{ticker}` | Yes | No |
+| `GET` | `/v1/account/api-keys` | Yes | No |
+| `POST` | `/v1/account/api-keys` | Yes | No |
+| `DELETE` | `/v1/account/api-keys/{key_id}` | Yes | No |
 | `POST` | `/v1/orders`, `/v1/orders/{order_id}/cancel` | Yes | Yes |
 | `POST` | `/v1/demo/deposits/credit` | Yes | Yes |
 | `POST` | `/v1/rfqs`, `/v1/rfqs/{rfq_id}/quotes`, `/v1/rfqs/{rfq_id}/cancel`, `/v1/rfqs/{rfq_id}/quotes/{quote_id}/cancel`, `/v1/rfqs/{rfq_id}/quotes/{quote_id}/accept` | Yes | Yes |
@@ -100,6 +114,27 @@ The current REST gateway exposes these routes:
 The WebSocket gateway is documented separately in [WebSocket API](#websocket-api).
 
 ## Authentication
+
+### Register
+
+```http
+POST /v1/auth/register
+Content-Type: application/json
+```
+
+Request:
+
+```json
+{
+  "user_id": "alice_1",
+  "email": "alice@example.com",
+  "password": "a-long-password-12"
+}
+```
+
+Registration creates the authenticated user, zero-balance ledger accounts,
+default risk limits, and a JWT. User IDs and normalized email addresses are
+unique. No demo funds are granted automatically.
 
 ### Login
 
@@ -112,23 +147,54 @@ Request:
 
 ```json
 {
-  "user_id": "demo-user-1",
-  "password": "<AUTH_LOGIN_SECRET>"
+  "email": "alice@example.com",
+  "password": "a-long-password-12"
 }
 ```
 
-`password` is optional in demo mode and required in JWT mode. The server does
-not create users; `user_id` identifies the existing demo/trading account.
+The login identifier may be either `email` or `user_id`. Password is required
+in JWT mode and ignored in demo mode.
 
 Response `200`:
 
 ```json
 {
-  "token": "demo.ZGVtby11c2VyLTE",
+  "token": "<jwt-or-demo-token>",
   "token_type": "Bearer",
-  "user_id": "demo-user-1"
+  "user_id": "alice_1",
+  "email": "alice@example.com"
 }
 ```
+
+### Manage API keys
+
+```http
+POST /v1/account/api-keys
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+Request:
+
+```json
+{
+  "name": "trading-bot",
+  "scopes": ["markets:read", "account:read", "orders:read", "fills:read", "trading:write"],
+  "expires_at": "2027-01-01T00:00:00Z"
+}
+```
+
+The response contains the plaintext `key` exactly once. Store it securely.
+Later list calls return metadata and the key prefix, never the secret:
+
+```http
+GET /v1/account/api-keys
+DELETE /v1/account/api-keys/{key_id}
+```
+
+The delete operation revokes a key. Supported scopes are
+`markets:read`, `account:read`, `orders:read`, `fills:read`, `trading:write`,
+and `websocket:read`.
 
 ## Service Health
 
@@ -1126,7 +1192,7 @@ state is advanced to `EXECUTED`.
 The following are intentionally not public REST endpoints yet:
 
 - Order amendment (`AmendOrder` exists only in the internal protobuf service).
-- User registration, password reset, and external identity-provider login.
+- Password reset and external identity-provider login.
 - Production deposits and withdrawals.
 - Oracle submission, resolution approval, and settlement administration.
 - Arbitrary historical candles; charts currently derive from fills.
