@@ -8,6 +8,7 @@ import {
   CircleDollarSign,
   ChevronDown,
   Clock3,
+  Copy,
   Gift,
   Hexagon,
   KeyRound,
@@ -985,7 +986,7 @@ function ProfilePage({ api, account, onLogout }) {
             <div className="scope-picker"><span>Permissions</span><div>{API_KEY_SCOPES.map(([scope, label]) => <label className="scope-option" key={scope}><input type="checkbox" checked={scopes.includes(scope)} onChange={() => toggleScope(scope)} /><span>{label}</span></label>)}</div></div>
             <button className="auth-submit api-create" type="submit" disabled={busy || !scopes.length}><Plus size={16} /> Create API key</button>
           </form>
-          {revealedKey ? <div className="key-reveal"><div><span>New API key</span><strong>{revealedKey}</strong><small>Copy it now. It cannot be viewed again.</small></div><button type="button" onClick={copyKey}>{copied ? 'Copied' : 'Copy'}</button></div> : null}
+          {revealedKey ? <div className="key-reveal"><div><span>Copy your new API key</span><strong>{revealedKey}</strong><small>This secret is shown once and cannot be recovered later.</small></div><button type="button" onClick={copyKey}><Copy size={14} /> {copied ? 'Copied' : 'Copy key'}</button></div> : null}
           <div className="api-key-list">
             {keys.length ? keys.map((key) => <div className="api-key-row" key={key.key_id}><div className="api-key-icon"><KeyRound size={15} /></div><div className="api-key-meta"><strong>{key.name}</strong><span>{key.key_prefix} · {(key.scopes || []).join(', ')}</span></div><div className="api-key-date">{key.revoked_at ? 'Revoked' : key.expires_at ? `Expires ${formatProfileDate(key.expires_at)}` : 'Active'}</div><button className="icon-btn api-revoke" type="button" title={`Revoke ${key.name}`} aria-label={`Revoke ${key.name}`} disabled={busy || Boolean(key.revoked_at)} onClick={() => revokeKey(key.key_id)}><Trash2 size={15} /></button></div>) : <div className="api-empty">No API keys yet.</div>}
           </div>
