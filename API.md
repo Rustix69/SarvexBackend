@@ -41,6 +41,21 @@ revoked independently. Browser sessions should use JWTs; bots should use API
 keys. API keys are scoped to the owning account and never accept a client
 supplied replacement `user_id`.
 
+For every endpoint marked `Yes` in the authentication column, send exactly one
+of these credential headers. API clients should use the second form:
+
+```http
+Authorization: Bearer <token>
+```
+
+```http
+X-API-Key: svx_live_<secret>
+```
+
+The gateway derives `user_id` from the validated credential. Do not send a
+client-supplied `user_id` to identify another account. Mutating requests also
+require an `Idempotency-Key` header.
+
 `AUTH_MODE=demo` is used for local/demo deployments. The login response token
 is an identity token in the form `demo.<base64url(user_id)>`; it is not secure
 authentication and must not be used for a real public deployment.
@@ -454,7 +469,7 @@ Response `200`:
 
 ```http
 POST /v1/orders
-Authorization: Bearer <token>
+X-API-Key: svx_live_<secret>
 Idempotency-Key: order-20260925-000001
 Content-Type: application/json
 ```
@@ -815,7 +830,7 @@ This endpoint is for demo/devnet accounts only.
 
 ```http
 POST /v1/demo/deposits/credit
-Authorization: Bearer <token>
+X-API-Key: svx_live_<secret>
 Idempotency-Key: deposit-20260925-000001
 Content-Type: application/json
 ```
