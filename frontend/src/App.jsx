@@ -10,14 +10,20 @@ import {
   Clock3,
   Gift,
   Hexagon,
+  KeyRound,
   Link2,
+  LockKeyhole,
   Loader2,
   LogOut,
+  Mail,
+  Plus,
   RefreshCw,
   Share2,
   SlidersHorizontal,
   Search,
+  Trash2,
   UserRound,
+  X,
 } from 'lucide-react'
 import { dispose as disposeKlineChart, init as initKlineChart, registerStyles } from 'klinecharts'
 import { contractsCatalog } from './contractsCatalog'
@@ -78,17 +84,11 @@ const DEMO_CONTRACT_ASSUMPTIONS = {
   'SX-N225-26OCT30-ATM': 'Nikkei above 42,000 on 30 Oct 2026?',
   'SX-TTF-26OCT30-ATM': 'EU gas (TTF) above EUR 35 end-Oct?',
 }
-const DEMO_USERS = [
-  { id: 'u_retail_1', label: 'Demo Retail', badge: 'Retail' },
-  { id: 'u_mm_1', label: 'Market Maker', badge: 'MM' },
-  { id: 'u_inst_1', label: 'Institutional', badge: 'Inst' },
-  { id: 'u_admin', label: 'Demo Admin', badge: 'Admin' },
-]
-
 function viewFromPath(pathname) {
   if (pathname === '/health') return 'health'
   if (pathname === '/futures') return 'futures'
   if (pathname === '/portfolio') return 'portfolio'
+  if (pathname === '/profile') return 'profile'
   return 'markets'
 }
 
@@ -96,6 +96,7 @@ function pathForView(view) {
   if (view === 'health') return '/health'
   if (view === 'futures') return '/futures'
   if (view === 'portfolio') return '/portfolio'
+  if (view === 'profile') return '/profile'
   return '/'
 }
 
@@ -107,7 +108,22 @@ function pushViewPath(view) {
 }
 
 function App() {
-  const [token, setToken] = useState(() => localStorage.getItem('sarvex_token') || '')
+  const [token, setToken] = useState(() => {
+    const stored = localStorage.getItem('sarvex_token') || ''
+    if (stored.startsWith('demo.')) {
+      localStorage.removeItem('sarvex_token')
+      localStorage.removeItem('sarvex_user_id')
+      localStorage.removeItem('sarvex_user_email')
+      localStorage.removeItem('sarvex_user_name')
+      return ''
+    }
+    return stored
+  })
+  const [account, setAccount] = useState(() => ({
+    userId: localStorage.getItem('sarvex_user_id') || '',
+    email: localStorage.getItem('sarvex_user_email') || '',
+    name: localStorage.getItem('sarvex_user_name') || '',
+  }))
   const [markets, setMarkets] = useState([])
   const [futures, setFutures] = useState([])
   const [selectedTicker, setSelectedTicker] = useState('')
@@ -131,6 +147,8 @@ function App() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [authOpen, setAuthOpen] = useState(false)
+  const [authMode, setAuthMode] = useState('login')
   const [activeView, setActiveView] = useState(() => viewFromPath(window.location.pathname))
   const fillCursorRef = useRef({})
   const lastMarketListRefreshRef = useRef(0)
@@ -202,24 +220,33 @@ function App() {
     [token],
   )
 
-  const login = useCallback(
-    async () => {
+  const authenticate = useCallback(
+    async ({ mode, userId, email, name, password }) => {
       setBusy(true)
       setError('')
       try {
-        const nextUserId = DEMO_USERS[0].id
-        const body = await fetch(`${API_BASE}/v1/auth/login`, {
+        const payload = mode === 'register'
+          ? { user_id: userId, email, name, password }
+          : email.includes('@') ? { email, password } : { user_id: userId, password }
+        const body = await fetch(`${API_BASE}/v1/auth/${mode === 'register' ? 'register' : 'login'}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ user_id: nextUserId }),
+          body: JSON.stringify(payload),
         }).then(async (response) => {
           const data = await response.json()
-          if (!response.ok) throw new Error(data?.error?.message || 'Login failed')
+          if (!response.ok) throw new Error(data?.error?.message || (mode === 'register' ? 'Account creation failed' : 'Login failed'))
           return data
         })
+        const nextUserId = body.user_id || userId || email
+        const nextEmail = body.email || email
+        const nextName = body.name || name || userId || email
         localStorage.setItem('sarvex_token', body.token)
         localStorage.setItem('sarvex_user_id', nextUserId)
+        if (nextEmail) localStorage.setItem('sarvex_user_email', nextEmail)
+        localStorage.setItem('sarvex_user_name', nextName)
+        setAccount({ userId: nextUserId, email: nextEmail, name: nextName })
         setToken(body.token)
+        setAuthOpen(false)
       } catch (err) {
         setError(err.message)
       } finally {
@@ -232,11 +259,22 @@ function App() {
   const logout = useCallback(() => {
     localStorage.removeItem('sarvex_token')
     localStorage.removeItem('sarvex_user_id')
+    localStorage.removeItem('sarvex_user_email')
+    localStorage.removeItem('sarvex_user_name')
     setToken('')
+    setAccount({ userId: '', email: '', name: '' })
     setBalance(null)
     setPositions([])
     setOrders([])
     setHistory([])
+    setActiveView('markets')
+    pushViewPath('markets')
+  }, [])
+
+  const openAuth = useCallback((mode = 'login') => {
+    setAuthMode(mode)
+    setAuthOpen(true)
+    setError('')
   }, [])
 
   const fetchMarketFills = useCallback(async (ticker) => {
@@ -578,7 +616,10 @@ function App() {
     }
   }
 
-  const selectedUser = DEMO_USERS[0]
+  const selectedUser = {
+    label: account.name || account.userId || 'Account',
+    email: account.email,
+  }
   const selectedFills = selectedMarket ? fills.filter((fill) => fill.ticker === selectedMarket.ticker) : []
 
   return (
@@ -587,8 +628,9 @@ function App() {
         selectedUser={selectedUser}
         token={token}
         busy={busy}
-        onLogin={login}
+        onLogin={openAuth}
         onLogout={logout}
+        onProfile={() => handleViewNav('profile')}
         onMarkets={handleMarketsNav}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
@@ -608,7 +650,9 @@ function App() {
 
       {error && <div className="notice error">{error}</div>}
 
-      {activeView === 'trade' && selectedMarket && selectedIsFuture ? (
+      {activeView === 'profile' ? (
+        <ProfilePage api={api} account={account} onLogout={logout} />
+      ) : activeView === 'trade' && selectedMarket && selectedIsFuture ? (
         <FutureDetail
           market={selectedMarket}
           watchlist={futures}
@@ -709,11 +753,12 @@ function App() {
           searchQuery={searchQuery}
         />
       )}
+      {authOpen ? <AuthDialog mode={authMode} busy={busy} error={error} onClose={() => setAuthOpen(false)} onModeChange={setAuthMode} onSubmit={authenticate} /> : null}
     </div>
   )
 }
 
-function TopNav({ selectedUser, token, busy, onLogin, onLogout, onMarkets, onTerminal, onNavigateView, activeView, searchQuery, onSearchChange, searchMarkets, onSelectMarket }) {
+function TopNav({ selectedUser, token, busy, onLogin, onLogout, onProfile, onMarkets, onTerminal, onNavigateView, activeView, searchQuery, onSearchChange, searchMarkets, onSelectMarket }) {
   const normalizedQuery = searchQuery.trim().toLowerCase()
   const searchResults = normalizedQuery
     ? searchMarkets.filter((market) => marketMatchesSearch(market, normalizedQuery)).slice(0, 6)
@@ -755,17 +800,205 @@ function TopNav({ selectedUser, token, busy, onLogin, onLogout, onMarkets, onTer
       <div className="user-cluster">
         {token ? (
           <>
-            <span className="account-icon" title={`${selectedUser.label} account`} aria-label={`${selectedUser.label} account`}><UserRound size={17} /></span>
+            <button className="account-icon" type="button" title={`${selectedUser.label} profile`} aria-label="Open profile" onClick={onProfile}><UserRound size={17} /></button>
             <button className="logout-btn" type="button" onClick={onLogout}><LogOut size={15} /> Log out</button>
           </>
         ) : (
-          <button className="demo-login-btn" type="button" onClick={onLogin} disabled={busy}>
-            {busy ? <Loader2 className="spin" size={15} /> : null}Log in demo
+          <button className="login-btn" type="button" onClick={() => onLogin('login')} disabled={busy}>
+            {busy ? <Loader2 className="spin" size={15} /> : null}Log in
           </button>
         )}
       </div>
     </header>
   )
+}
+
+function AuthDialog({ mode, busy, error, onClose, onModeChange, onSubmit }) {
+  const [identifier, setIdentifier] = useState('')
+  const [userId, setUserId] = useState('')
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+
+  const submit = (event) => {
+    event.preventDefault()
+    if (mode === 'register') {
+      onSubmit({ mode, userId: userId.trim(), name: name.trim(), email: email.trim(), password })
+      return
+    }
+    const value = identifier.trim()
+    onSubmit({ mode, userId: value.includes('@') ? '' : value, email: value.includes('@') ? value : '', password })
+  }
+
+  return (
+    <div className="auth-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+        <div className="auth-dialog-head">
+          <div>
+            <span className="auth-kicker">Sarvaex account</span>
+            <h2 id="auth-title">{mode === 'register' ? 'Create your account' : 'Welcome back'}</h2>
+          </div>
+          <button className="icon-btn auth-close" type="button" title="Close" aria-label="Close" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="auth-switcher" role="tablist" aria-label="Authentication mode">
+          <button className={mode === 'login' ? 'active' : ''} type="button" onClick={() => onModeChange('login')}>Log in</button>
+          <button className={mode === 'register' ? 'active' : ''} type="button" onClick={() => onModeChange('register')}>Create account</button>
+        </div>
+        <form className="auth-form" onSubmit={submit}>
+          {mode === 'register' ? (
+            <>
+              <label>Name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name" autoComplete="name" maxLength={80} /></label>
+              <label>User ID<input value={userId} onChange={(event) => setUserId(event.target.value)} placeholder="your-name" autoComplete="username" minLength={3} maxLength={32} required /></label>
+              <label>Email<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" autoComplete="email" required /></label>
+            </>
+          ) : (
+            <label>Email or user ID<input value={identifier} onChange={(event) => setIdentifier(event.target.value)} placeholder="you@example.com" autoComplete="username" required /></label>
+          )}
+          <label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 10 characters" autoComplete={mode === 'register' ? 'new-password' : 'current-password'} minLength={10} required /></label>
+          {error ? <p className="auth-error">{error}</p> : null}
+          <button className="auth-submit" type="submit" disabled={busy}>
+            {busy ? <Loader2 className="spin" size={16} /> : mode === 'register' ? <UserRound size={16} /> : <LockKeyhole size={16} />}
+            {mode === 'register' ? 'Create account' : 'Log in'}
+          </button>
+        </form>
+        <p className="auth-footnote">Your password is stored securely and is never shown in the platform.</p>
+      </section>
+    </div>
+  )
+}
+
+const API_KEY_SCOPES = [
+  ['markets:read', 'Market data'],
+  ['account:read', 'Account data'],
+  ['orders:read', 'Order history'],
+  ['fills:read', 'Fill history'],
+  ['trading:write', 'Place and cancel trades'],
+  ['websocket:read', 'Live updates'],
+]
+
+function ProfilePage({ api, account, onLogout }) {
+  const [profile, setProfile] = useState(null)
+  const [keys, setKeys] = useState([])
+  const [keyName, setKeyName] = useState('')
+  const [scopes, setScopes] = useState(API_KEY_SCOPES.map(([scope]) => scope))
+  const [revealedKey, setRevealedKey] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [copied, setCopied] = useState(false)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [profileBody, keyBody] = await Promise.all([
+        api('/v1/account/profile'),
+        api('/v1/account/api-keys'),
+      ])
+      setProfile(profileBody)
+      setKeys(keyBody?.api_keys || [])
+      setError('')
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [api])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  const createKey = async (event) => {
+    event.preventDefault()
+    if (!keyName.trim() || !scopes.length) return
+    setBusy(true)
+    setError('')
+    setRevealedKey('')
+    try {
+      const body = await api('/v1/account/api-keys', {
+        method: 'POST',
+        body: JSON.stringify({ name: keyName.trim(), scopes }),
+      })
+      setKeyName('')
+      setRevealedKey(body.key || '')
+      await load()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const revokeKey = async (keyId) => {
+    setBusy(true)
+    setError('')
+    try {
+      await api(`/v1/account/api-keys/${keyId}`, { method: 'DELETE' })
+      await load()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const toggleScope = (scope) => {
+    setScopes((current) => current.includes(scope) ? current.filter((item) => item !== scope) : [...current, scope])
+  }
+
+  const copyKey = async () => {
+    if (!revealedKey || !navigator.clipboard) return
+    await navigator.clipboard.writeText(revealedKey)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1600)
+  }
+
+  const name = profile?.name || account.name || account.userId
+  const userId = profile?.user_id || account.userId
+  const email = profile?.email || account.email
+
+  return (
+    <main className="profile-page">
+      <div className="profile-heading">
+        <div><span className="profile-kicker">Account settings</span><h1>Profile</h1><p>Manage your identity and API access.</p></div>
+        <button className="logout-btn" type="button" onClick={onLogout}><LogOut size={15} /> Log out</button>
+      </div>
+      {error ? <div className="profile-error">{error}</div> : null}
+      <section className="profile-grid">
+        <article className="profile-card identity-card">
+          <div className="profile-card-head"><div><span className="profile-card-kicker">Identity</span><h2>Account details</h2></div><span className="status-pill">{profile?.status || 'ACTIVE'}</span></div>
+          <div className="identity-avatar"><UserRound size={24} /></div>
+          <div className="profile-fields">
+            <div><span>Name</span><strong>{loading ? 'Loading...' : name || '--'}</strong></div>
+            <div><span>User ID</span><strong>{loading ? 'Loading...' : userId || '--'}</strong></div>
+            <div><span>Email</span><strong><Mail size={14} /> {loading ? 'Loading...' : email || '--'}</strong></div>
+            <div><span>Password</span><strong><LockKeyhole size={14} /> ••••••••••</strong><small>Password is securely stored and never displayed.</small></div>
+            <div><span>Created</span><strong>{formatProfileDate(profile?.created_at)}</strong></div>
+          </div>
+        </article>
+
+        <article className="profile-card api-card">
+          <div className="profile-card-head"><div><span className="profile-card-kicker">Developer access</span><h2>API keys</h2></div><KeyRound size={20} /></div>
+          <p className="profile-description">Create scoped keys for bots and integrations. The secret is shown only once.</p>
+          <form className="api-key-form" onSubmit={createKey}>
+            <label>Key name<input value={keyName} onChange={(event) => setKeyName(event.target.value)} placeholder="production-bot" maxLength={80} required /></label>
+            <div className="scope-picker"><span>Permissions</span><div>{API_KEY_SCOPES.map(([scope, label]) => <label className="scope-option" key={scope}><input type="checkbox" checked={scopes.includes(scope)} onChange={() => toggleScope(scope)} /><span>{label}</span></label>)}</div></div>
+            <button className="auth-submit api-create" type="submit" disabled={busy || !scopes.length}><Plus size={16} /> Create API key</button>
+          </form>
+          {revealedKey ? <div className="key-reveal"><div><span>New API key</span><strong>{revealedKey}</strong><small>Copy it now. It cannot be viewed again.</small></div><button type="button" onClick={copyKey}>{copied ? 'Copied' : 'Copy'}</button></div> : null}
+          <div className="api-key-list">
+            {keys.length ? keys.map((key) => <div className="api-key-row" key={key.key_id}><div className="api-key-icon"><KeyRound size={15} /></div><div className="api-key-meta"><strong>{key.name}</strong><span>{key.key_prefix} · {(key.scopes || []).join(', ')}</span></div><div className="api-key-date">{key.revoked_at ? 'Revoked' : key.expires_at ? `Expires ${formatProfileDate(key.expires_at)}` : 'Active'}</div><button className="icon-btn api-revoke" type="button" title={`Revoke ${key.name}`} aria-label={`Revoke ${key.name}`} disabled={busy || Boolean(key.revoked_at)} onClick={() => revokeKey(key.key_id)}><Trash2 size={15} /></button></div>) : <div className="api-empty">No API keys yet.</div>}
+          </div>
+        </article>
+      </section>
+    </main>
+  )
+}
+
+function formatProfileDate(value) {
+  if (!value) return '--'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '--' : date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
 function HealthPage({ api }) {
@@ -1486,7 +1719,7 @@ function PositionSnapshot({ position, mark, market, authed }) {
 
   return (
     <section className="position-card">
-      <div className="panel-head compact"><h2>Your position</h2><span>{authed ? 'Live mark' : 'Demo login'}</span></div>
+      <div className="panel-head compact"><h2>Your position</h2><span>{authed ? 'Live mark' : 'Sign in to view'}</span></div>
       {authed && position ? (
         <div className="position-stat-grid">
           <div><span>Qty</span><strong>{qty}</strong></div>
@@ -1526,7 +1759,7 @@ function PortfolioPage({ balance, authed, busy, positions, orders, history, mark
       </section>
 
       <section className="portfolio-account-strip">
-        <div className="portfolio-account-name"><strong>{selectedUser.label}</strong><span>Demo account</span></div>
+        <div className="portfolio-account-name"><strong>{selectedUser.label}</strong><span>Account</span></div>
         <PortfolioAccountMetric label="Portfolio" value={authed ? formatUSDC(total) : '--'} />
         <PortfolioAccountMetric label="Positions" value={authed ? formatUSDC(held) : '--'} />
         <PortfolioAccountMetric label="Live PnL" value={authed ? formatSignedUSDC(livePnl) : '--'} tone={pnlClassName(livePnl)} />

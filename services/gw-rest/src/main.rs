@@ -93,6 +93,7 @@ struct RegisterRequest {
     user_id: String,
     email: String,
     password: String,
+    name: Option<String>,
 }
 #[derive(Debug, Deserialize)]
 struct ApiKeyCreateRequest {
@@ -230,6 +231,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/health/overview", get(health_overview))
         .route("/v1/auth/register", post(register))
         .route("/v1/auth/login", post(login))
+        .route("/v1/account/profile", get(get_profile))
         .route(
             "/v1/account/api-keys",
             get(list_api_keys).post(create_api_key),
@@ -388,6 +390,7 @@ async fn register(State(state): State<AppState>, Json(input): Json<RegisterReque
     let user_id = input.user_id.trim().to_owned();
     let email = input.email.trim().to_owned();
     let email_normalized = email.to_ascii_lowercase();
+    let requested_name = input.name.as_deref().unwrap_or_default().trim();
     if !valid_user_id(&user_id) {
         return error_response(
             StatusCode::BAD_REQUEST,
@@ -409,6 +412,18 @@ async fn register(State(state): State<AppState>, Json(input): Json<RegisterReque
             "password must be 10-128 characters",
         );
     }
+    if requested_name.len() > 80 {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "INVALID_ARGUMENT",
+            "name must be at most 80 characters",
+        );
+    }
+    let display_name = if requested_name.is_empty() {
+        user_id.clone()
+    } else {
+        requested_name.to_owned()
+    };
     let password_hash = match hash_password(&input.password) {
         Ok(value) => value,
         Err(error) => {
@@ -429,8 +444,8 @@ async fn register(State(state): State<AppState>, Json(input): Json<RegisterReque
             )
         }
     };
-    let subject_id = match sqlx::query_scalar::<_, uuid::Uuid>("INSERT INTO auth.users (user_id, email, email_normalized) VALUES ($1,$2,$3) RETURNING subject_id")
-        .bind(&user_id).bind(&email).bind(&email_normalized).fetch_one(&mut *tx).await {
+    let subject_id = match sqlx::query_scalar::<_, uuid::Uuid>("INSERT INTO auth.users (user_id, email, email_normalized, display_name) VALUES ($1,$2,$3,$4) RETURNING subject_id")
+        .bind(&user_id).bind(&email).bind(&email_normalized).bind(&display_name).fetch_one(&mut *tx).await {
         Ok(value) => value,
         Err(error) if is_unique_violation(&error) => return error_response(StatusCode::CONFLICT, "ALREADY_EXISTS", "user_id or email is already registered"),
         Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, "DATABASE_ERROR", &error.to_string()),
@@ -484,7 +499,7 @@ async fn register(State(state): State<AppState>, Json(input): Json<RegisterReque
     let scopes = default_jwt_scopes();
     match state.auth.issue_with_scopes(&user_id, "trader", &scopes) {
         Ok(token) => {
-            Json(json!({"token":token,"token_type":"Bearer","user_id":user_id,"email":email}))
+            Json(json!({"token":token,"token_type":"Bearer","user_id":user_id,"name":display_name,"email":email}))
                 .into_response()
         }
         Err(error) => error_response(
@@ -521,7 +536,7 @@ async fn login(State(state): State<AppState>, Json(input): Json<LoginRequest>) -
         };
     }
     let normalized = identifier.to_ascii_lowercase();
-    let row = match sqlx::query("SELECT u.user_id, u.email, u.status, c.password_hash FROM auth.users u JOIN auth.credentials c ON c.subject_id=u.subject_id WHERE u.user_id=$1 OR u.email_normalized=$2")
+    let row = match sqlx::query("SELECT u.user_id, u.display_name, u.email, u.status, c.password_hash FROM auth.users u JOIN auth.credentials c ON c.subject_id=u.subject_id WHERE u.user_id=$1 OR u.email_normalized=$2")
         .bind(identifier).bind(&normalized).fetch_optional(&state.pool).await {
         Ok(Some(value)) => value,
         Ok(None) => return error_response(StatusCode::UNAUTHORIZED, "UNAUTHENTICATED", "invalid credentials"),
@@ -545,8 +560,42 @@ async fn login(State(state): State<AppState>, Json(input): Json<LoginRequest>) -
     }
     let user_id: String = row.get("user_id");
     match state.auth.issue_with_scopes(&user_id, "trader", &default_jwt_scopes()) {
-        Ok(token) => Json(json!({"token":token,"token_type":"Bearer","user_id":user_id,"email":row.get::<String, _>("email")})).into_response(),
+        Ok(token) => Json(json!({"token":token,"token_type":"Bearer","user_id":user_id,"name":row.get::<String, _>("display_name"),"email":row.get::<String, _>("email")})).into_response(),
         Err(error) => error_response(StatusCode::INTERNAL_SERVER_ERROR, "AUTH_ERROR", &error.to_string()),
+    }
+}
+
+async fn get_profile(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let principal = match authenticated_principal(&headers, &state.auth) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    match sqlx::query(
+        "SELECT user_id, display_name, email, status, created_at FROM auth.users WHERE user_id=$1",
+    )
+    .bind(&principal.user_id)
+    .fetch_optional(&state.pool)
+    .await
+    {
+        Ok(Some(row)) => Json(json!({
+            "user_id": row.get::<String, _>("user_id"),
+            "name": row.get::<String, _>("display_name"),
+            "email": row.get::<String, _>("email"),
+            "status": row.get::<String, _>("status"),
+            "created_at": row.get::<DateTime<Utc>, _>("created_at"),
+            "password": { "configured": true, "returned": false },
+        }))
+        .into_response(),
+        Ok(None) => error_response(
+            StatusCode::UNAUTHORIZED,
+            "UNAUTHENTICATED",
+            "user account not found",
+        ),
+        Err(error) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "DATABASE_ERROR",
+            &error.to_string(),
+        ),
     }
 }
 

@@ -102,7 +102,7 @@ The current REST gateway exposes these routes:
 | `GET` | `/healthz`, `/readyz`, `/metrics`, `/v1/health/overview` | No | No |
 | `POST` | `/v1/auth/register`, `/v1/auth/login` | No | No |
 | `GET` | `/v1/markets`, `/v1/markets/{ticker}`, `/v1/markets/{ticker}/orderbook`, `/v1/markets/{ticker}/fills`, `/v1/markets/{ticker}/open-interest`, `/v1/markets/{ticker}/settlement`, `/v1/series`, `/v1/events`, `/v1/events/{event_ticker}`, `/v1/events/{event_ticker}/resolution` | No | No |
-| `GET` | `/v1/orders`, `/v1/orders/{order_id}`, `/v1/account/balance`, `/v1/account/risk`, `/v1/account/history`, `/v1/account/fills`, `/v1/positions`, `/v1/positions/{ticker}` | Yes | No |
+| `GET` | `/v1/orders`, `/v1/orders/{order_id}`, `/v1/account/profile`, `/v1/account/balance`, `/v1/account/risk`, `/v1/account/history`, `/v1/account/fills`, `/v1/positions`, `/v1/positions/{ticker}` | Yes | No |
 | `GET` | `/v1/account/api-keys` | Yes | No |
 | `POST` | `/v1/account/api-keys` | Yes | No |
 | `DELETE` | `/v1/account/api-keys/{key_id}` | Yes | No |
@@ -126,6 +126,7 @@ Request:
 
 ```json
 {
+  "name": "Alice Trader",
   "user_id": "alice_1",
   "email": "alice@example.com",
   "password": "a-long-password-12"
@@ -161,6 +162,7 @@ Response `200`:
 {
   "token": "<jwt-or-demo-token>",
   "token_type": "Bearer",
+  "name": "Alice Trader",
   "user_id": "alice_1",
   "email": "alice@example.com"
 }
@@ -195,6 +197,17 @@ DELETE /v1/account/api-keys/{key_id}
 The delete operation revokes a key. Supported scopes are
 `markets:read`, `account:read`, `orders:read`, `fills:read`, `trading:write`,
 and `websocket:read`.
+
+### Get profile
+
+```http
+GET /v1/account/profile
+Authorization: Bearer <token>
+```
+
+The response contains the authenticated display name, user ID, email, account
+status, and creation time. Password material is never returned; the profile
+only reports that a password is configured.
 
 ## Service Health
 
