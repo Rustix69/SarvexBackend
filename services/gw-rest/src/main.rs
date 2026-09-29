@@ -526,13 +526,19 @@ async fn login(State(state): State<AppState>, Json(input): Json<LoginRequest>) -
     }
     if state.auth.mode() == AuthMode::Demo {
         // Demo bots intentionally omit a password and use ephemeral identities.
-        // Interactive logins include a password, so resolve the identifier first
-        // and issue the token for the canonical account user_id. This keeps an
-        // unknown login from succeeding and failing later on /account/profile.
+        // Interactive logins must resolve a real account and verify its password
+        // before issuing a token, so failures stay inside the login window.
+        if input.password.is_none() && !identifier.starts_with("u_bot_") {
+            return error_response(
+                StatusCode::UNAUTHORIZED,
+                "UNAUTHENTICATED",
+                "invalid credentials",
+            );
+        }
         if input.password.is_some() {
             let normalized = identifier.to_ascii_lowercase();
             let row = match sqlx::query(
-                "SELECT user_id, display_name, email, status FROM auth.users WHERE user_id=$1 OR email_normalized=$2",
+                "SELECT u.user_id, u.display_name, u.email, u.status, c.password_hash FROM auth.users u JOIN auth.credentials c ON c.subject_id=u.subject_id WHERE u.user_id=$1 OR u.email_normalized=$2",
             )
             .bind(identifier)
             .bind(&normalized)
@@ -561,6 +567,14 @@ async fn login(State(state): State<AppState>, Json(input): Json<LoginRequest>) -
                     StatusCode::FORBIDDEN,
                     "ACCOUNT_INACTIVE",
                     "account is not active",
+                );
+            }
+            let password = input.password.as_deref().unwrap_or_default();
+            if verify_password(password, row.get::<String, _>("password_hash").as_str()).is_err() {
+                return error_response(
+                    StatusCode::UNAUTHORIZED,
+                    "UNAUTHENTICATED",
+                    "invalid credentials",
                 );
             }
             let user_id: String = row.get("user_id");
