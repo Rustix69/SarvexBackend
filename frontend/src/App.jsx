@@ -34,6 +34,7 @@ import MidPriceChart from '../test/chart desin 1/MidPriceChart'
 import { BinaryCard } from '../test/binary card design/BinaryMarkets'
 import { BINARY_CSS } from '../test/binary card design/binary-core'
 import { CARD_CSS } from '../test/futures card design/cards-core'
+import TradingApiPage from './TradingApiPage'
 import './App.css'
 
 registerStyles('sarvexKlineTheme', {
@@ -90,6 +91,7 @@ function viewFromPath(pathname) {
   if (pathname === '/futures') return 'futures'
   if (pathname === '/portfolio') return 'portfolio'
   if (pathname === '/profile') return 'profile'
+  if (pathname === '/trading-api') return 'trading-api'
   return 'markets'
 }
 
@@ -98,6 +100,7 @@ function pathForView(view) {
   if (view === 'futures') return '/futures'
   if (view === 'portfolio') return '/portfolio'
   if (view === 'profile') return '/profile'
+  if (view === 'trading-api') return '/trading-api'
   return '/'
 }
 
@@ -653,6 +656,8 @@ function App() {
 
       {activeView === 'profile' ? (
         <ProfilePage api={api} account={account} onLogout={logout} />
+      ) : activeView === 'trading-api' ? (
+        <TradingApiPage baseUrl={API_BASE} token={token} />
       ) : activeView === 'trade' && selectedMarket && selectedIsFuture ? (
         <FutureDetail
           market={selectedMarket}
@@ -796,6 +801,7 @@ function TopNav({ selectedUser, token, busy, onLogin, onLogout, onProfile, onMar
           <button className={activeView === 'trade' ? 'nav-link active' : 'nav-link'} type="button" onClick={onTerminal}>Terminal</button>
           <button className={activeView === 'portfolio' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => onNavigateView('portfolio')}>Portfolio</button>
           <button className={activeView === 'health' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => onNavigateView('health')}>Health</button>
+          <button className={activeView === 'trading-api' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => onNavigateView('trading-api')}>Trading API</button>
         </nav>
       </div>
       <div className="user-cluster">
