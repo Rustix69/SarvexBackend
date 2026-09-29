@@ -28,8 +28,11 @@ const API_GROUPS = [
     tone: 'guide',
     items: [
       { id: 'guide-overview', title: 'API overview', kind: 'guide', description: 'HTTPS JSON endpoints for markets, accounts, orders and fills. Use the live console on any route to validate your integration.' },
+      { id: 'guide-quickstart', title: 'Quickstart', kind: 'guide', description: 'Register or log in, create an API key, check that a market is open, then place an idempotent order and inspect its status.' },
       { id: 'guide-auth', title: 'Authentication', kind: 'guide', description: 'Private routes accept exactly one X-API-Key or Authorization: Bearer credential. The gateway derives the account from that credential.' },
       { id: 'guide-idempotency', title: 'Idempotency', kind: 'guide', description: 'Every mutating request uses a fresh Idempotency-Key. Reuse the same key only when retrying the same logical operation after a timeout.' },
+      { id: 'guide-errors', title: 'Errors', kind: 'guide', description: 'Every error uses one stable envelope. Branch on error.code and log error.message.' },
+      { id: 'guide-units', title: 'Prices & units', kind: 'guide', description: 'Prices, counts, sequence values and money are integer-based. Convert only at the display boundary.' },
     ],
   },
   {
@@ -345,15 +348,30 @@ export default function TradingApiPage({ baseUrl, token }) {
 }
 
 function GuideContent({ item }) {
+  if (item.id === 'guide-units') return <UnitsGuide />
+  if (item.id === 'guide-errors') return <ErrorGuide />
   const guideBlocks = {
     'guide-overview': [['Base URL', 'Production: https://api.sarvaex.com\nLocal Docker: http://localhost:18080'], ['Request model', 'JSON over HTTPS. Prices, counts and monetary values use integer units defined by the contract.'], ['Integration path', 'Fetch contract metadata, initialize the order book, submit idempotent orders, then reconcile private fills and positions.']],
+    'guide-quickstart': [['1. Authenticate', 'POST /v1/auth/register or POST /v1/auth/login to receive a JWT.'], ['2. Create a bot key', 'POST /v1/account/api-keys with only the scopes your integration needs. The plaintext key is shown once.'], ['3. Validate and trade', 'GET /v1/markets/{ticker}, confirm state is OPEN, then POST /v1/orders with X-API-Key and a fresh Idempotency-Key. Read order.status after submission.']],
     'guide-auth': [['Public routes', 'Health, market data, series, events and settlement reads do not require authentication.'], ['API keys', 'Send X-API-Key: svx_live_<secret>. Keys are user-scoped and the plaintext secret is shown only once.'], ['Browser sessions', 'Send Authorization: Bearer <jwt>. Never send a user_id to act as another account.']],
     'guide-idempotency': [['Mutating requests', 'Orders, cancellations, RFQs, quotes and demo credits require Idempotency-Key.'], ['Retry rule', 'Reuse the same key for a retry of the same logical operation. Generate a fresh key for a new operation.'], ['Expected result', 'A successful HTTP response is not the same as a fill. Read order status, filled_count and remaining_count.']],
+    'guide-errors': [['Error envelope', '{\n  "error": {\n    "code": "INVALID_ARGUMENT",\n    "message": "count must be positive"\n  }\n}'], ['400', 'Invalid request, enum, price, count or contract state.'], ['401 / 403', 'Missing or invalid credentials, or authenticated but not permitted.'], ['404 / 409', 'Resource not found, idempotency conflict or state conflict.'], ['502 / 503 / 504', 'Internal dependency failure, service unavailable or upstream deadline exceeded.']],
     'ws-connect': [['Connection', 'wss://api.sarvaex.com/ws'], ['Authentication', 'Public market subscriptions need no credential. Private fills use Authorization: Bearer <token> on the upgrade request.'], ['First message', '{ "type": "connected", "service": "gw-ws" }']],
     'ws-market': [['Subscribe', '{ "op": "subscribe", "channel": "market", "ticker": "SX-FEDDEC-26OCT-H25" }'], ['Events', 'market_book_snapshot, market_book_delta and market_trade. Use global_seq for cross-event ordering.'], ['Recovery', 'On a book_seq gap, discard the local book, fetch the REST snapshot, then apply newer deltas.']],
     'ws-private': [['Subscribe', '{ "op": "subscribe", "channel": "private", "ticker": "SX-FEDDEC-26OCT-H25" }'], ['Events', 'private_fill events contain your order and fill details while redacting counterparty identifiers.'], ['Reconciliation', 'After disconnect, reconcile with GET /v1/account/fills from the last known global sequence.']],
   }
   return <div className="api-guide-content"><p>{item.description}</p>{(guideBlocks[item.id] || []).map(([title, text]) => <div className="api-guide-block" key={title}><h3>{title}</h3><pre>{text}</pre></div>)}</div>
+}
+
+function ErrorGuide() {
+  const rows = [['400', 'Invalid request, enum, price, count or contract state'], ['401', 'Missing or invalid Bearer token or API key'], ['403', 'Authenticated but not permitted'], ['404', 'Contract, order or position not found'], ['409', 'Idempotency conflict or state conflict'], ['502', 'Internal service or matching-engine failure'], ['503', 'Gateway, database or matching engine unavailable'], ['504', 'Upstream deadline exceeded, where applicable']]
+  return <div className="api-guide-content"><p>Every error uses one envelope. Branch on <code>code</code> and log <code>message</code>.</p><div className="api-error-example"><h3>Error envelope</h3><pre>{'{\n  "error": {\n    "code": "INVALID_ARGUMENT",\n    "message": "count must be positive"\n  }\n}'}</pre></div><div className="api-error-table"><div><strong>Status</strong><strong>Meaning</strong></div>{rows.map(([status, meaning]) => <div key={status}><code>{status}</code><span>{meaning}</span></div>)}</div></div>
+}
+
+function UnitsGuide() {
+  const [price, setPrice] = useState(51)
+  const costMicro = price * 10 * 10000
+  return <div className="api-guide-content"><p>On binary contracts <code>price_ticks</code> usually means cents. YES at <code>49</code> is $0.49, the complementary NO is $0.51, and a winning contract pays $1.00. Futures and scalar contracts convert with <code>divider</code>, <code>tick_value_micro</code> and multiplier fields instead.</p><p>Money is micro-USDC. Divide by <code>1_000_000</code> only when displaying.</p><div className="api-unit-slider"><label htmlFor="api-price-ticks">Drag price_ticks</label><input id="api-price-ticks" type="range" min="1" max="99" value={price} onChange={(event) => setPrice(Number(event.target.value))} /><div className="api-unit-bar"><span style={{ width: `${price}%` }} /></div><div className="api-unit-values"><strong>YES {price}¢</strong><strong>NO {100 - price}¢</strong></div></div><div className="api-unit-table"><span>For 10 contracts</span><div><strong>Cost</strong><b>${(costMicro / 1_000_000).toFixed(2)} · {costMicro.toLocaleString()} micro-USDC</b></div><div><strong>Pays if right</strong><b>$10.00 · 10,000,000 micro-USDC</b></div></div><div className="api-guide-block"><h3>Python conversion</h3><pre>{'MICRO = 1_000_000\n\ndef ticks_to_usd(price_ticks: int) -> str:\n    return f"${price_ticks / 100:.2f}"\n\ndef micro_to_usdc(micro: int) -> str:\n    return f"{micro / MICRO:,.2f} USDC"'}</pre></div></div>
 }
 
 function RequestOutput({ tab, onTabChange, result, samples, onCopy, copied }) {
