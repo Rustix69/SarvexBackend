@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   BookOpen,
   Check,
@@ -147,6 +147,9 @@ export default function TradingApiPage({ baseUrl, token }) {
   const [credential, setCredential] = useState(token || '')
   const [drafts, setDrafts] = useState({})
   const [copied, setCopied] = useState('')
+  const [wsTicker, setWsTicker] = useState(SAMPLE_TICKER)
+  const [wsState, setWsState] = useState({ status: 'disconnected', events: [], error: '' })
+  const wsRef = useRef(null)
 
   const selected = API_ITEMS.find((item) => item.id === selectedId) || API_ITEMS[0]
   const draft = drafts[selected.id] || initialDraft(selected)
@@ -171,6 +174,39 @@ export default function TradingApiPage({ baseUrl, token }) {
     setSelectedId(item.id)
     if (!drafts[item.id]) setDrafts((current) => ({ ...current, [item.id]: initialDraft(item) }))
   }
+
+  const wsUrl = baseUrl.startsWith('http')
+    ? `${baseUrl.replace(/^http/, 'ws')}/ws`
+    : `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.hostname}:18082/ws`
+
+  const disconnectWebSocket = () => {
+    wsRef.current?.close()
+    wsRef.current = null
+    setWsState((current) => ({ ...current, status: 'disconnected' }))
+  }
+
+  const connectWebSocket = () => {
+    disconnectWebSocket()
+    setWsState({ status: 'connecting', events: [], error: '' })
+    const socket = new WebSocket(wsUrl)
+    wsRef.current = socket
+    socket.onopen = () => {
+      setWsState((current) => ({ ...current, status: 'connected' }))
+      socket.send(JSON.stringify({ op: 'subscribe', channel: 'market', ticker: wsTicker.trim() }))
+    }
+    socket.onmessage = (event) => {
+      let message = event.data
+      try { message = JSON.parse(event.data) } catch { /* keep plain text */ }
+      setWsState((current) => ({ ...current, events: [...current.events, message].slice(-40) }))
+    }
+    socket.onerror = () => setWsState((current) => ({ ...current, status: 'error', error: 'WebSocket connection failed.' }))
+    socket.onclose = () => {
+      wsRef.current = null
+      setWsState((current) => ({ ...current, status: 'disconnected' }))
+    }
+  }
+
+  useEffect(() => () => wsRef.current?.close(), [])
 
   const runRequest = async () => {
     if (!selected.path) return
@@ -246,7 +282,7 @@ export default function TradingApiPage({ baseUrl, token }) {
             <button className="api-run-button" type="button" onClick={runRequest}><Send size={14} /> Send request <span>⌘ ↵</span></button>
             <div className="api-response"><div className="api-console-label"><span>Response</span>{draft.result && !draft.result.pending ? <small>{draft.result.duration} ms</small> : null}</div>{draft.result?.pending ? <div className="api-response-empty"><span className="api-spinner" />Sending request...</div> : draft.result ? <><div className={`api-response-status ${draft.result.status >= 200 && draft.result.status < 300 ? 'ok' : 'error'}`}><strong>{draft.result.status || 'ERR'}</strong><span>{draft.result.status >= 200 && draft.result.status < 300 ? 'Request completed' : 'Request failed'}</span><button type="button" onClick={() => copyText('response', JSON.stringify(draft.result.body, null, 2))}>{copied === 'response' ? <Check size={12} /> : <Copy size={12} />} {copied === 'response' ? 'Copied' : 'Copy'}</button></div><pre>{JSON.stringify(draft.result.body, null, 2)}</pre></> : <div className="api-response-empty">Run the request to see the live response.</div>}</div>
             <div className="api-generated"><div className="api-console-label"><span>cURL</span><button type="button" className="api-inline-button" onClick={() => copyText('curl', curl)}>{copied === 'curl' ? 'Copied' : 'Copy'}</button></div><pre>{curl}</pre></div>
-          </> : <div className="api-console-guide"><Wifi size={20} /><strong>Reference only</strong><p>This section documents the streaming contract. Use the REST console for live requests; connect to the WebSocket URL from your application.</p><code>wss://api.sarvaex.com/ws</code></div>}
+          </> : selected.method === 'WS' ? <WebSocketConsole wsUrl={wsUrl} ticker={wsTicker} onTickerChange={setWsTicker} state={wsState} onConnect={connectWebSocket} onDisconnect={disconnectWebSocket} /> : <div className="api-console-guide"><Wifi size={20} /><strong>Reference only</strong><p>This section documents the streaming contract. Use the REST console for live requests; connect to the WebSocket URL from your application.</p><code>wss://api.sarvaex.com/ws</code></div>}
         </aside>
       </div>
     </main>
@@ -271,4 +307,9 @@ function EndpointContent({ item }) {
 
 function FieldTable({ title, fields }) {
   return <div className="api-field-table"><div className="api-section-title"><span>{title}</span><span className="api-muted">{fields.length} fields</span></div>{fields.map((entry) => <div className="api-field-row" key={entry.name}><div><code>{entry.name}</code>{entry.required ? <b>required</b> : null}</div><span>{entry.type}</span><p>{entry.description}</p></div>)}</div>
+}
+
+function WebSocketConsole({ wsUrl, ticker, onTickerChange, state, onConnect, onDisconnect }) {
+  const connected = state.status === 'connected' || state.status === 'connecting'
+  return <div className="api-ws-console"><div className="api-ws-url"><Wifi size={14} /><code>{wsUrl}</code></div><div className="api-console-block"><div className="api-console-label"><span>Public market channel</span><small>no credential required</small></div><label className="api-console-field"><span>ticker</span><input value={ticker} onChange={(event) => onTickerChange(event.target.value)} disabled={connected} /></label></div><div className="api-ws-actions">{connected ? <button className="api-ws-disconnect" type="button" onClick={onDisconnect}>Disconnect</button> : <button className="api-run-button" type="button" onClick={onConnect}><Wifi size={14} /> Connect and subscribe</button>}<span className={`api-ws-state ${state.status}`}>{state.status}</span></div>{state.error ? <p className="api-ws-error">{state.error}</p> : null}<div className="api-ws-log"><div className="api-console-label"><span>Event log</span><small>{state.events.length} events</small></div>{state.events.length ? <pre>{state.events.map((event, index) => `${JSON.stringify(event, null, 2)}${index < state.events.length - 1 ? '\n\n' : ''}`).join('')}</pre> : <div className="api-response-empty">Connect to receive connected, snapshot, delta and trade events.</div>}</div><div className="api-ws-note"><ShieldCheck size={14} /><span>Browser tester covers the public market channel. Private fills require an application WebSocket client that sends the Bearer header during upgrade.</span></div></div>
 }
