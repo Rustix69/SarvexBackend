@@ -525,6 +525,61 @@ async fn login(State(state): State<AppState>, Json(input): Json<LoginRequest>) -
         );
     }
     if state.auth.mode() == AuthMode::Demo {
+        // Demo bots intentionally omit a password and use ephemeral identities.
+        // Interactive logins include a password, so resolve the identifier first
+        // and issue the token for the canonical account user_id. This keeps an
+        // unknown login from succeeding and failing later on /account/profile.
+        if input.password.is_some() {
+            let normalized = identifier.to_ascii_lowercase();
+            let row = match sqlx::query(
+                "SELECT user_id, display_name, email, status FROM auth.users WHERE user_id=$1 OR email_normalized=$2",
+            )
+            .bind(identifier)
+            .bind(&normalized)
+            .fetch_optional(&state.pool)
+            .await
+            {
+                Ok(Some(value)) => value,
+                Ok(None) => {
+                    return error_response(
+                        StatusCode::UNAUTHORIZED,
+                        "UNAUTHENTICATED",
+                        "invalid credentials",
+                    )
+                }
+                Err(error) => {
+                    return error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "DATABASE_ERROR",
+                        &error.to_string(),
+                    )
+                }
+            };
+            let status: String = row.get("status");
+            if status != "ACTIVE" {
+                return error_response(
+                    StatusCode::FORBIDDEN,
+                    "ACCOUNT_INACTIVE",
+                    "account is not active",
+                );
+            }
+            let user_id: String = row.get("user_id");
+            return match state.auth.issue(&user_id, "trader") {
+                Ok(token) => Json(json!({
+                    "token": token,
+                    "token_type": "Bearer",
+                    "user_id": user_id,
+                    "name": row.get::<String, _>("display_name"),
+                    "email": row.get::<String, _>("email"),
+                }))
+                .into_response(),
+                Err(error) => error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "AUTH_ERROR",
+                    &error.to_string(),
+                ),
+            };
+        }
         return match state.auth.issue(identifier, "trader") {
             Ok(token) => Json(json!({"token":token,"token_type":"Bearer","user_id":identifier}))
                 .into_response(),
