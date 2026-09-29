@@ -140,6 +140,54 @@ function displayBase(baseUrl) {
   return `${window.location.origin}${baseUrl}`
 }
 
+function parseDraftBody(draft) {
+  if (!draft.body) return undefined
+  try { return JSON.parse(draft.body) } catch { return null }
+}
+
+function pythonLiteral(value) {
+  return JSON.stringify(value, null, 2)
+    .replace(/\btrue\b/g, 'True')
+    .replace(/\bfalse\b/g, 'False')
+    .replace(/\bnull\b/g, 'None')
+}
+
+function authHeader(credentialMode, credential) {
+  if (credentialMode === 'apikey') return ['X-API-Key', credential || 'svx_live_<your-key>']
+  return ['Authorization', `Bearer ${credential || '<jwt>'}`]
+}
+
+function generatedPython({ method, url, auth, credentialMode, credential, idem, body }) {
+  const headers = []
+  if (auth) {
+    const [name, value] = authHeader(credentialMode, credential)
+    headers.push(`        "${name}": "${value}",`)
+  }
+  if (idem) headers.push(`        "Idempotency-Key": "${idem}",`)
+  if (body !== undefined) headers.push('        "Content-Type": "application/json",')
+  const lines = ['import requests', '', `resp = requests.${method.toLowerCase()}(`, `    "${url}",`]
+  if (headers.length) lines.push('    headers={', ...headers, '    },')
+  if (body !== undefined) lines.push(`    json=${pythonLiteral(body).split('\n').join('\n    ')},`)
+  lines.push('    timeout=10,', ')', 'resp.raise_for_status()', 'print(resp.status_code, resp.text)')
+  return lines.join('\n')
+}
+
+function generatedJavaScript({ method, url, auth, credentialMode, credential, idem, body }) {
+  const headers = []
+  if (auth) {
+    const [name, value] = authHeader(credentialMode, credential)
+    headers.push(`    "${name}": "${value}",`)
+  }
+  if (idem) headers.push(`    "Idempotency-Key": "${idem}",`)
+  if (body !== undefined) headers.push('    "Content-Type": "application/json",')
+  const lines = [`const res = await fetch("${url}", {`]
+  if (method !== 'GET') lines.push(`  method: "${method}",`)
+  if (headers.length) lines.push('  headers: {', ...headers, '  },')
+  if (body !== undefined) lines.push(`  body: JSON.stringify(${JSON.stringify(body, null, 2).split('\n').join('\n  ')}),`)
+  lines.push('});', 'console.log(res.status, await res.text());')
+  return lines.join('\n')
+}
+
 export default function TradingApiPage({ baseUrl, token }) {
   const [selectedId, setSelectedId] = useState('guide-overview')
   const [query, setQuery] = useState('')
@@ -147,6 +195,7 @@ export default function TradingApiPage({ baseUrl, token }) {
   const [credential, setCredential] = useState(token || '')
   const [drafts, setDrafts] = useState({})
   const [copied, setCopied] = useState('')
+  const [codeTab, setCodeTab] = useState('response')
   const [wsTicker, setWsTicker] = useState(SAMPLE_TICKER)
   const [wsState, setWsState] = useState({ status: 'disconnected', events: [], error: '' })
   const wsRef = useRef(null)
@@ -245,6 +294,13 @@ export default function TradingApiPage({ baseUrl, token }) {
     try { await navigator.clipboard.writeText(value); setCopied(key); window.setTimeout(() => setCopied(''), 1400) } catch { setCopied('') }
   }
 
+  const codeBody = parseDraftBody(draft)
+  const codeSamples = {
+    curl,
+    python: isRestEndpoint ? generatedPython({ method: selected.method, url: displayBase(requestUrl), auth: selected.auth, credentialMode, credential, idem: selected.idem ? draft.idem : '', body: codeBody }) : '',
+    javascript: isRestEndpoint ? generatedJavaScript({ method: selected.method, url: displayBase(requestUrl), auth: selected.auth, credentialMode, credential, idem: selected.idem ? draft.idem : '', body: codeBody }) : '',
+  }
+
   return (
     <main className="api-docs-page">
       <header className="api-docs-header">
@@ -280,8 +336,7 @@ export default function TradingApiPage({ baseUrl, token }) {
             {selected.idem ? <div className="api-console-block"><div className="api-console-label"><span>Idempotency-Key</span><button type="button" className="api-inline-button" onClick={() => updateDraft({ idem: randomId('svx') })}>New key</button></div><input className="api-console-input mono" value={draft.idem} onChange={(event) => updateDraft({ idem: event.target.value })} /></div> : null}
             {selected.body ? <div className="api-console-block"><div className="api-console-label"><span>JSON body</span><small>application/json</small></div><textarea className="api-body-editor" value={draft.body} onChange={(event) => updateDraft({ body: event.target.value })} spellCheck="false" /></div> : null}
             <button className="api-run-button" type="button" onClick={runRequest}><Send size={14} /> Send request <span>⌘ ↵</span></button>
-            <div className="api-response"><div className="api-console-label"><span>Response</span>{draft.result && !draft.result.pending ? <small>{draft.result.duration} ms</small> : null}</div>{draft.result?.pending ? <div className="api-response-empty"><span className="api-spinner" />Sending request...</div> : draft.result ? <><div className={`api-response-status ${draft.result.status >= 200 && draft.result.status < 300 ? 'ok' : 'error'}`}><strong>{draft.result.status || 'ERR'}</strong><span>{draft.result.status >= 200 && draft.result.status < 300 ? 'Request completed' : 'Request failed'}</span><button type="button" onClick={() => copyText('response', JSON.stringify(draft.result.body, null, 2))}>{copied === 'response' ? <Check size={12} /> : <Copy size={12} />} {copied === 'response' ? 'Copied' : 'Copy'}</button></div><pre>{JSON.stringify(draft.result.body, null, 2)}</pre></> : <div className="api-response-empty">Run the request to see the live response.</div>}</div>
-            <div className="api-generated"><div className="api-console-label"><span>cURL</span><button type="button" className="api-inline-button" onClick={() => copyText('curl', curl)}>{copied === 'curl' ? 'Copied' : 'Copy'}</button></div><pre>{curl}</pre></div>
+            <RequestOutput tab={codeTab} onTabChange={setCodeTab} result={draft.result} samples={codeSamples} onCopy={copyText} copied={copied} />
           </> : selected.method === 'WS' ? <WebSocketConsole wsUrl={wsUrl} ticker={wsTicker} onTickerChange={setWsTicker} state={wsState} onConnect={connectWebSocket} onDisconnect={disconnectWebSocket} /> : <div className="api-console-guide"><Wifi size={20} /><strong>Reference only</strong><p>This section documents the streaming contract. Use the REST console for live requests; connect to the WebSocket URL from your application.</p><code>wss://api.sarvaex.com/ws</code></div>}
         </aside>
       </div>
@@ -299,6 +354,13 @@ function GuideContent({ item }) {
     'ws-private': [['Subscribe', '{ "op": "subscribe", "channel": "private", "ticker": "SX-FEDDEC-26OCT-H25" }'], ['Events', 'private_fill events contain your order and fill details while redacting counterparty identifiers.'], ['Reconciliation', 'After disconnect, reconcile with GET /v1/account/fills from the last known global sequence.']],
   }
   return <div className="api-guide-content"><p>{item.description}</p>{(guideBlocks[item.id] || []).map(([title, text]) => <div className="api-guide-block" key={title}><h3>{title}</h3><pre>{text}</pre></div>)}</div>
+}
+
+function RequestOutput({ tab, onTabChange, result, samples, onCopy, copied }) {
+  const isCode = tab !== 'response'
+  const responseText = result ? JSON.stringify(result.body, null, 2) : '// Run the request to see the live response.'
+  const outputText = isCode ? samples[tab] : responseText
+  return <div className="api-output"><div className="api-output-tabs" role="tablist" aria-label="Generated request output">{[['response', 'Response'], ['curl', 'cURL'], ['python', 'Python'], ['javascript', 'JavaScript']].map(([value, label]) => <button key={value} type="button" className={tab === value ? 'active' : ''} onClick={() => onTabChange(value)}>{label}</button>)}<button className="api-output-copy" type="button" onClick={() => onCopy(tab, outputText)}>{copied === tab ? <Check size={12} /> : <Copy size={12} />} {copied === tab ? 'Copied' : 'Copy'}</button></div>{tab === 'response' && result ? <div className="api-response-status"><strong className={result.status >= 200 && result.status < 300 ? 'ok' : 'error'}>{result.status || 'ERR'}</strong><span>{result.status >= 200 && result.status < 300 ? 'Request completed' : 'Request failed'} · {result.duration} ms</span></div> : isCode ? <div className="api-generated-label"><span>{tab === 'curl' ? 'shell' : tab}</span><span>Generated from the fields above</span></div> : null}<pre className={isCode ? 'api-code-output' : 'api-response-output'}>{outputText}</pre></div>
 }
 
 function EndpointContent({ item }) {
