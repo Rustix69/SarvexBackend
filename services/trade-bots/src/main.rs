@@ -229,6 +229,11 @@ async fn run_worker(client: Client, config: Config) -> Result<()> {
         }
 
         round = round.saturating_add(1);
+        for bot in &bots {
+            if let Err(error) = cancel_working_orders(&client, &config.rest_url, bot).await {
+                tracing::warn!(user = %bot.user_id, error = %error, "working-order refresh failed");
+            }
+        }
         let seeded_market_count = markets.len().min(round as usize * config.market_batch_size);
         let quotes = seed_books(
             &client,
@@ -326,51 +331,54 @@ async fn provision_bots(client: &Client, config: &Config) -> Result<Vec<Bot>> {
 }
 
 async fn cancel_working_orders(client: &Client, rest_url: &str, bot: &Bot) -> Result<()> {
-    let mut cursor = String::new();
-    loop {
-        let mut request = client
-            .get(format!("{rest_url}/v1/orders"))
-            .bearer_auth(&bot.token)
-            .query(&[("status", "OPEN"), ("limit", "500")]);
-        if !cursor.is_empty() {
-            request = request.query(&[("cursor", cursor.as_str())]);
-        }
-        let response = request
-            .send()
-            .await
-            .context("working-order listing request failed")?
-            .error_for_status()
-            .context("working-order listing returned an error")?
-            .json::<serde_json::Value>()
-            .await
-            .context("invalid working-order listing response")?;
-        let orders = response
-            .get("orders")
-            .and_then(serde_json::Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        for order in orders {
-            let Some(order_id) = order.get("order_id").and_then(serde_json::Value::as_str) else {
-                continue;
-            };
-            let key = format!("bot-startup-cleanup-v1:{order_id}");
-            let _: serde_json::Value = post_json(
-                client,
-                &format!("{rest_url}/v1/orders/{order_id}/cancel"),
-                Some(&bot.token),
-                Some(&key),
-                serde_json::json!({}),
-            )
-            .await
-            .with_context(|| format!("working-order cancellation failed for {order_id}"))?;
-        }
-        cursor = response
-            .get("next_cursor")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        if cursor.is_empty() {
-            break;
+    for status in ["OPEN", "PARTIAL"] {
+        let mut cursor = String::new();
+        loop {
+            let mut request = client
+                .get(format!("{rest_url}/v1/orders"))
+                .bearer_auth(&bot.token)
+                .query(&[("status", status), ("limit", "500")]);
+            if !cursor.is_empty() {
+                request = request.query(&[("cursor", cursor.as_str())]);
+            }
+            let response = request
+                .send()
+                .await
+                .context("working-order listing request failed")?
+                .error_for_status()
+                .context("working-order listing returned an error")?
+                .json::<serde_json::Value>()
+                .await
+                .context("invalid working-order listing response")?;
+            let orders = response
+                .get("orders")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            for order in orders {
+                let Some(order_id) = order.get("order_id").and_then(serde_json::Value::as_str)
+                else {
+                    continue;
+                };
+                let key = format!("bot-refresh-v1:{order_id}");
+                let _: serde_json::Value = post_json(
+                    client,
+                    &format!("{rest_url}/v1/orders/{order_id}/cancel"),
+                    Some(&bot.token),
+                    Some(&key),
+                    serde_json::json!({}),
+                )
+                .await
+                .with_context(|| format!("working-order cancellation failed for {order_id}"))?;
+            }
+            cursor = response
+                .get("next_cursor")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            if cursor.is_empty() {
+                break;
+            }
         }
     }
     Ok(())

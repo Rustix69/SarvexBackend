@@ -1,7 +1,7 @@
 #![allow(clippy::result_large_err)]
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{rejection::JsonRejection, Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
@@ -1012,8 +1012,19 @@ async fn list_account_fills(
 async fn submit_order(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(input): Json<OrderInput>,
+    body: Result<Json<OrderInput>, JsonRejection>,
 ) -> Response {
+    let input = match body {
+        Ok(Json(input)) => input,
+        Err(error) => {
+            let status = match error {
+                JsonRejection::JsonSyntaxError(_) => StatusCode::BAD_REQUEST,
+                JsonRejection::JsonDataError(_) => StatusCode::UNPROCESSABLE_ENTITY,
+                _ => StatusCode::BAD_REQUEST,
+            };
+            return error_response(status, "INVALID_ARGUMENT", "invalid JSON request body");
+        }
+    };
     let user_id = match authenticated_user_with_scope(&headers, &state.auth, "trading:write") {
         Ok(value) => value,
         Err(response) => return response,
@@ -1038,6 +1049,27 @@ async fn submit_order(
     } {
         return response;
     }
+    if input.client_order_id.len() > 128 {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "INVALID_ARGUMENT",
+            "client_order_id must be 128 characters or fewer",
+        );
+    }
+    if input.side.trim() != input.side || input.side != input.side.to_ascii_uppercase() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "INVALID_ARGUMENT",
+            "side must use an uppercase enum value",
+        );
+    }
+    if input.action.trim() != input.action || input.action != input.action.to_ascii_uppercase() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "INVALID_ARGUMENT",
+            "action must use an uppercase enum value",
+        );
+    }
     let side = match side_value(&input.side) {
         Some(value) => value,
         None => return error_response(StatusCode::BAD_REQUEST, "INVALID_ARGUMENT", "invalid side"),
@@ -1052,23 +1084,63 @@ async fn submit_order(
             )
         }
     };
-    let market = input
+    let order_type = input
         .order_type
         .as_deref()
         .or(input.type_alias.as_deref())
-        .is_some_and(|value| value.eq_ignore_ascii_case("market"));
+        .unwrap_or("LIMIT");
+    if !matches!(order_type, "LIMIT" | "MARKET") {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "INVALID_ARGUMENT",
+            "invalid order_type",
+        );
+    }
+    let market = order_type == "MARKET";
+    if !input.tif.is_empty() && !matches!(input.tif.as_str(), "GTC" | "IOC" | "FOK") {
+        return error_response(StatusCode::BAD_REQUEST, "INVALID_ARGUMENT", "invalid tif");
+    }
+    if !input.stp.is_empty()
+        && !matches!(
+            input.stp.as_str(),
+            "UNSPECIFIED" | "TAKER_AT_CROSS" | "MAKER"
+        )
+    {
+        return error_response(StatusCode::BAD_REQUEST, "INVALID_ARGUMENT", "invalid stp");
+    }
+    let contract = match state
+        .refdata
+        .clone()
+        .get_contract(GetContractRequest {
+            ticker: input.ticker.clone(),
+        })
+        .await
+    {
+        Ok(contract) => contract.into_inner(),
+        Err(error) if error.code() == Code::NotFound => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "INVALID_ARGUMENT",
+                "unknown ticker",
+            )
+        }
+        Err(error) => return grpc_error(error),
+    };
+    let side_is_binary = side == Side::Yes as i32 || side == Side::No as i32;
+    let side_is_futures = side == Side::Long as i32 || side == Side::Short as i32;
+    let valid_side = match ContractKind::try_from(contract.kind).ok() {
+        Some(ContractKind::Binary) => side_is_binary,
+        Some(ContractKind::Scalar) => side_is_futures,
+        _ => false,
+    };
+    if !valid_side {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "INVALID_ARGUMENT",
+            "side does not match the contract kind",
+        );
+    }
     let price_ticks = if market {
-        let contract = match state
-            .refdata
-            .clone()
-            .get_contract(GetContractRequest {
-                ticker: input.ticker.clone(),
-            })
-            .await
-        {
-            Ok(contract) => contract.into_inner(),
-            Err(error) => return grpc_error(error),
-        };
         let snapshot = match state.me.get_book_snapshot(input.ticker.clone(), 1).await {
             Ok(snapshot) => snapshot,
             Err(error) => return me_core_error(error),
@@ -1095,8 +1167,19 @@ async fn submit_order(
         },
         None => None,
     };
+    if expires_at
+        .as_ref()
+        .and_then(|value| DateTime::<Utc>::from_timestamp(value.seconds, value.nanos as u32))
+        .is_some_and(|value| value <= Utc::now())
+    {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "INVALID_ARGUMENT",
+            "expires_at must be in the future",
+        );
+    }
     let mut client = state.orders;
-    let value = match rpc(client.submit_order(SubmitOrderRequest {
+    let (value, response_status) = match rpc(client.submit_order(SubmitOrderRequest {
         user_id: user_id.clone(),
         client_order_id: input.client_order_id,
         ticker: input.ticker,
@@ -1118,7 +1201,11 @@ async fn submit_order(
     .await
     {
         Ok(response) => {
-            json!({"order":response.order.as_ref().map(order_json),"fills":response.fills.iter().map(fill_json).collect::<Vec<_>>(),"reject_code":response.reject_code,"reject_reason":response.reject_reason})
+            let status = order_rejection_status(&response.reject_code);
+            (
+                json!({"order":response.order.as_ref().map(order_json),"fills":response.fills.iter().map(fill_json).collect::<Vec<_>>(),"reject_code":response.reject_code,"reject_reason":response.reject_reason}),
+                status,
+            )
         }
         Err(error) => return grpc_error(error),
     };
@@ -1130,13 +1217,13 @@ async fn submit_order(
         &idempotency_key,
         &request_body,
         &value,
-        StatusCode::OK,
+        response_status,
     )
     .await
     {
         return response;
     }
-    Json(value).into_response()
+    (response_status, Json(value)).into_response()
 }
 
 async fn list_orders(
@@ -1352,7 +1439,7 @@ async fn get_account_risk(State(state): State<AppState>, headers: HeaderMap) -> 
         .filter(|order| {
             matches!(
                 OrderStatus::try_from(order.status).ok(),
-                Some(OrderStatus::Pending | OrderStatus::Open | OrderStatus::Partial)
+                Some(OrderStatus::Open | OrderStatus::Partial)
             )
         })
         .count();
@@ -2426,6 +2513,15 @@ fn grpc_error(error: tonic::Status) -> Response {
         &format!("{:?}", error.code()).to_ascii_uppercase(),
         error.message(),
     )
+}
+
+fn order_rejection_status(code: &str) -> StatusCode {
+    match code {
+        "" => StatusCode::OK,
+        "UPSTREAM_NOT_FOUND" => StatusCode::BAD_REQUEST,
+        "ME_QUEUE_FULL" | "ME_CORE_UNAVAILABLE" => StatusCode::BAD_GATEWAY,
+        _ => StatusCode::BAD_REQUEST,
+    }
 }
 
 fn me_core_error(error: MeCoreError) -> Response {
