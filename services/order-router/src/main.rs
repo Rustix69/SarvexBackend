@@ -40,6 +40,9 @@ struct HealthState {
 }
 
 const ORDER_SELECT: &str = "SELECT order_id, client_order_id, user_id, ticker, side, action, price_ticks, count, filled_count, cancelled_count, expired_count, tif, post_only, reduce_only, stp, status, reject_code, hold_id, hold_amount_micro_usdc, avg_fill_price_ticks, created_at, updated_at, expires_at FROM orders.orders";
+const PENDING_RECONCILE_AFTER_SECS: i64 = 60;
+const PENDING_HARD_TIMEOUT_SECS: i64 = 3600;
+const PENDING_RECONCILE_BATCH: i64 = 100;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -80,6 +83,7 @@ async fn main() -> Result<()> {
         service.ledger.clone(),
         service.refdata.clone(),
     ));
+    tokio::spawn(run_pending_order_reconciler(service.clone()));
     if let Ok(nats_url) = env::var("NATS_URL") {
         tokio::spawn(run_execution_event_publisher(pool.clone(), nats_url));
     }
@@ -127,6 +131,86 @@ async fn readyz(State(state): State<HealthState>) -> impl IntoResponse {
             Json(serde_json::json!({ "status": "not_ready", "error": error.to_string() })),
         ),
     }
+}
+
+async fn run_pending_order_reconciler(service: OrderRouterService) {
+    loop {
+        if let Err(error) = reconcile_pending_orders(&service).await {
+            tracing::warn!(error = %error.message(), "pending order reconciliation failed");
+        }
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+}
+
+async fn reconcile_pending_orders(service: &OrderRouterService) -> Result<(), Status> {
+    let query = format!(
+        "SELECT order_id, created_at FROM orders.orders
+         WHERE status='PENDING'
+           AND updated_at < now() - interval '{} seconds'
+         ORDER BY updated_at ASC
+         LIMIT $1",
+        PENDING_RECONCILE_AFTER_SECS
+    );
+    let rows = sqlx::query(&query)
+        .bind(PENDING_RECONCILE_BATCH)
+        .fetch_all(&service.pool)
+        .await
+        .map_err(internal)?;
+
+    for row in rows {
+        let order_id: String = row.get("order_id");
+        let created_at: DateTime<Utc> = row.get("created_at");
+        let hard_timeout =
+            created_at < Utc::now() - chrono::Duration::seconds(PENDING_HARD_TIMEOUT_SECS);
+
+        if hard_timeout {
+            service
+                .mark_pending_cancelled(&order_id, "PENDING_TIMEOUT")
+                .await?;
+            if let Err(error) = service.release_order_remainder(&order_id).await {
+                tracing::warn!(order_id = %order_id, error = %error, "timed-out order hold release deferred");
+            }
+            continue;
+        }
+
+        match service
+            .me
+            .clone()
+            .cancel_order(sarvex_contracts::sarvex::v1::MeCancelOrderRequest {
+                order_id: order_id.clone(),
+            })
+            .await
+        {
+            Ok(response)
+                if response.cancelled
+                    || matches!(
+                        response.reject_code.as_str(),
+                        "ORDER_NOT_FOUND" | "ORDER_NOT_OPEN"
+                    ) =>
+            {
+                service
+                    .mark_pending_cancelled(&order_id, "PENDING_RECONCILED")
+                    .await?;
+                if let Err(error) = service.release_order_remainder(&order_id).await {
+                    tracing::warn!(order_id = %order_id, error = %error, "reconciled order hold release deferred");
+                }
+            }
+            Ok(response) => {
+                tracing::debug!(
+                    order_id = %order_id,
+                    reject_code = %response.reject_code,
+                    "pending order is still owned by matching engine"
+                );
+            }
+            Err(error) if error.is_unknown_outcome() => {
+                tracing::debug!(order_id = %order_id, "pending order cancellation outcome is unknown");
+            }
+            Err(error) => {
+                tracing::warn!(order_id = %order_id, error = %error, "pending order cancellation failed");
+            }
+        }
+    }
+    Ok(())
 }
 
 #[tonic::async_trait]
@@ -199,7 +283,7 @@ impl OrderRouter for OrderRouterService {
                 max_price_ticks: contract.max_price_ticks,
             })
             .await;
-        let risk = self
+        let risk = match self
             .risk
             .clone()
             .pre_trade_check(sarvex_contracts::sarvex::v1::PreTradeCheckRequest {
@@ -211,8 +295,14 @@ impl OrderRouter for OrderRouterService {
                 count: request.count,
             })
             .await
-            .map_err(internal)?
-            .into_inner();
+        {
+            Ok(response) => response.into_inner(),
+            Err(error) => {
+                self.mark_rejected(&order_id, upstream_code(error.code()))
+                    .await?;
+                return Err(internal(error));
+            }
+        };
         if !risk.approved {
             self.mark_rejected(&order_id, &risk.reject_code).await?;
             return Ok(Response::new(
@@ -225,10 +315,15 @@ impl OrderRouter for OrderRouterService {
                 .await?,
             ));
         }
-        self.set_position_reservations(&order_id, risk.opening_qty, risk.closing_qty)
-            .await?;
+        if let Err(error) = self
+            .set_position_reservations(&order_id, risk.opening_qty, risk.closing_qty)
+            .await
+        {
+            self.mark_rejected(&order_id, "RESERVATION_FAILED").await?;
+            return Err(error);
+        }
         let (hold_id, hold_amount) = if risk.required_hold_micro_usdc > 0 {
-            let hold = self
+            let hold = match self
                 .ledger
                 .clone()
                 .place_hold(sarvex_contracts::sarvex::v1::PlaceHoldRequest {
@@ -238,13 +333,24 @@ impl OrderRouter for OrderRouterService {
                     reason: format!("ORDER:{order_id}"),
                 })
                 .await
-                .map_err(internal)?
-                .into_inner();
+            {
+                Ok(hold) => hold.into_inner(),
+                Err(error) => {
+                    self.mark_rejected(&order_id, "HOLD_FAILED").await?;
+                    return Err(internal(error));
+                }
+            };
             (hold.hold_id, risk.required_hold_micro_usdc)
         } else {
             (String::new(), 0)
         };
-        self.attach_hold(&order_id, &hold_id, hold_amount).await?;
+        if let Err(error) = self.attach_hold(&order_id, &hold_id, hold_amount).await {
+            if !hold_id.is_empty() {
+                let _ = self.release_hold(&hold_id, hold_amount, &order_id).await;
+            }
+            self.mark_rejected(&order_id, "HOLD_ATTACH_FAILED").await?;
+            return Err(error);
+        }
         let me_response = match self
             .me
             .submit_order(sarvex_contracts::sarvex::v1::MeSubmitOrderRequest {
@@ -290,7 +396,13 @@ impl OrderRouter for OrderRouterService {
                     .await?,
                 ));
             }
-            Err(error) => return Err(internal(error.to_string())),
+            Err(error) => {
+                if !hold_id.is_empty() {
+                    self.release_hold(&hold_id, hold_amount, &order_id).await?;
+                }
+                self.mark_rejected(&order_id, "ME_REQUEST_FAILED").await?;
+                return Err(internal(error.to_string()));
+            }
         };
         if !me_response.accepted {
             if !hold_id.is_empty() {
@@ -308,9 +420,16 @@ impl OrderRouter for OrderRouterService {
                 .await?,
             ));
         }
-        let fills = self
+        let fills = match self
             .persist_fills(&request, &order_id, &hold_id, &me_response.fills)
-            .await?;
+            .await
+        {
+            Ok(fills) => fills,
+            Err(error) => {
+                tracing::error!(order_id = %order_id, error = %error.message(), "accepted order could not be persisted; reconciliation required");
+                return Err(error);
+            }
+        };
         if request.tif == 2 && fills.is_empty() && !hold_id.is_empty() {
             self.release_hold(&hold_id, hold_amount, &order_id).await?;
         }
@@ -670,6 +789,23 @@ impl OrderRouterService {
 
     async fn mark_rejected(&self, order_id: &str, code: &str) -> Result<(), Status> {
         sqlx::query("UPDATE orders.orders SET status='REJECTED', reject_code=$1, updated_at=now() WHERE order_id=$2").bind(code).bind(order_id).execute(&self.pool).await.map_err(internal)?;
+        Ok(())
+    }
+
+    async fn mark_pending_cancelled(&self, order_id: &str, code: &str) -> Result<(), Status> {
+        sqlx::query(
+            "UPDATE orders.orders
+             SET status='CANCELLED',
+                 cancelled_count=GREATEST(count-filled_count-expired_count, 0),
+                 reject_code=$1,
+                 updated_at=now()
+             WHERE order_id=$2 AND status='PENDING'",
+        )
+        .bind(code)
+        .bind(order_id)
+        .execute(&self.pool)
+        .await
+        .map_err(internal)?;
         Ok(())
     }
 
@@ -1328,7 +1464,50 @@ async fn update_order_fill(
     count: i64,
     price: i64,
 ) -> Result<(), Status> {
-    sqlx::query("UPDATE orders.orders SET filled_count=LEAST(orders.orders.count, orders.orders.filled_count+$1), avg_fill_price_ticks=CASE WHEN orders.orders.filled_count+$1 > 0 THEN ((orders.orders.avg_fill_price_ticks * orders.orders.filled_count)+($1*$2))/(orders.orders.filled_count+$1) ELSE 0 END, status=CASE WHEN orders.orders.filled_count+$1 >= orders.orders.count THEN 'FILLED' WHEN orders.orders.filled_count+$1 > 0 THEN 'PARTIAL' ELSE orders.orders.status END, updated_at=now() WHERE order_id=$3").bind(count).bind(price).bind(order_id).execute(&mut **tx).await.map_err(internal)?;
+    // A fill can race with a cancel request. Allocate the new fill against
+    // cancelled/expired remainder first so the lifecycle counters remain
+    // consistent instead of leaving the order stuck in PENDING after a 502.
+    sqlx::query(
+        "WITH delta AS (
+           SELECT order_id, count, filled_count, cancelled_count, expired_count,
+                  LEAST(GREATEST(count - filled_count, 0), $1::BIGINT) AS applied_fill
+           FROM orders.orders
+           WHERE order_id=$3
+         ), allocated AS (
+           SELECT *,
+                  LEAST(cancelled_count, applied_fill) AS cancelled_fill,
+                  LEAST(
+                    expired_count,
+                    GREATEST(applied_fill - LEAST(cancelled_count, applied_fill), 0)
+                  ) AS expired_fill
+           FROM delta
+         )
+         UPDATE orders.orders AS orders
+         SET filled_count=allocated.filled_count + allocated.applied_fill,
+             cancelled_count=orders.cancelled_count - allocated.cancelled_fill,
+             expired_count=orders.expired_count - allocated.expired_fill,
+             avg_fill_price_ticks=CASE
+               WHEN allocated.filled_count + allocated.applied_fill > 0 THEN
+                 ((orders.avg_fill_price_ticks * allocated.filled_count) +
+                  (allocated.applied_fill * $2)) /
+                 (allocated.filled_count + allocated.applied_fill)
+               ELSE 0
+             END,
+             status=CASE
+               WHEN allocated.filled_count + allocated.applied_fill >= allocated.count THEN 'FILLED'
+               WHEN allocated.filled_count + allocated.applied_fill > 0 THEN 'PARTIAL'
+               ELSE orders.status
+             END,
+             updated_at=now()
+         FROM allocated
+         WHERE orders.order_id=allocated.order_id",
+    )
+    .bind(count)
+    .bind(price)
+    .bind(order_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(internal)?;
     Ok(())
 }
 
