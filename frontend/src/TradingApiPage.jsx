@@ -1,20 +1,20 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   BookOpen,
   Check,
   ChevronDown,
   ChevronRight,
-  Clipboard,
   Copy,
+  Command,
   Globe2,
   KeyRound,
   LockKeyhole,
-  Play,
   Search,
   Send,
   ShieldCheck,
   TerminalSquare,
   Wifi,
+  X,
 } from 'lucide-react'
 
 const SAMPLE_TICKER = 'SX-FEDDEC-26OCT-H25'
@@ -126,6 +126,10 @@ function randomId(prefix) {
   return `${prefix}-${suffix}`
 }
 
+function monotonicNow() {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now()
+}
+
 function initialDraft(item) {
   const path = {}
   ;(item.pathParams || []).forEach((key) => {
@@ -194,6 +198,8 @@ function generatedJavaScript({ method, url, auth, credentialMode, credential, id
 export default function TradingApiPage({ baseUrl, token }) {
   const [selectedId, setSelectedId] = useState('guide-overview')
   const [query, setQuery] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchIndex, setSearchIndex] = useState(0)
   const [credentialMode, setCredentialMode] = useState(token ? 'bearer' : 'apikey')
   const [credential, setCredential] = useState(token || '')
   const [drafts, setDrafts] = useState({})
@@ -202,6 +208,8 @@ export default function TradingApiPage({ baseUrl, token }) {
   const [wsTicker, setWsTicker] = useState(SAMPLE_TICKER)
   const [wsState, setWsState] = useState({ status: 'disconnected', events: [], error: '' })
   const wsRef = useRef(null)
+  const searchInputRef = useRef(null)
+  const referenceRef = useRef(null)
 
   const selected = API_ITEMS.find((item) => item.id === selectedId) || API_ITEMS[0]
   const draft = drafts[selected.id] || initialDraft(selected)
@@ -210,6 +218,11 @@ export default function TradingApiPage({ baseUrl, token }) {
     if (!normalized) return API_GROUPS
     return API_GROUPS.map((group) => ({ ...group, items: group.items.filter((item) => `${group.title} ${item.title} ${item.path || ''} ${item.description}`.toLowerCase().includes(normalized)) })).filter((group) => group.items.length)
   }, [query])
+  const searchResults = useMemo(() => API_ITEMS.filter((item) => {
+    const normalized = query.trim().toLowerCase()
+    if (!normalized) return true
+    return `${item.group} ${item.title} ${item.path || ''} ${item.description || ''}`.toLowerCase().includes(normalized)
+  }), [query])
 
   const updateDraft = (changes) => setDrafts((current) => {
     const currentDraft = current[selected.id] || initialDraft(selected)
@@ -222,9 +235,18 @@ export default function TradingApiPage({ baseUrl, token }) {
   const requestUrl = isRestEndpoint ? `${baseUrl}${resolvePath(selected.path, draft.path)}${Object.entries(draft.query || {}).filter(([, value]) => value !== '' && value != null).length ? `?${new URLSearchParams(Object.entries(draft.query).filter(([, value]) => value !== '' && value != null)).toString()}` : ''}` : ''
   const curl = selected.path ? `curl -X ${selected.method} '${displayBase(requestUrl)}'${selected.auth ? ` \\\n  -H '${credentialMode === 'apikey' ? 'X-API-Key' : 'Authorization'}: ${credentialMode === 'apikey' ? credential || 'svx_live_<your-key>' : `Bearer ${credential || '<jwt>'}`}'` : ''}${selected.idem ? ` \\\n  -H 'Idempotency-Key: ${draft.idem}'` : ''}${selected.body ? ` \\\n  -H 'Content-Type: application/json' \\\n  -d '${draft.body.replace(/'/g, "'\\''")}'` : ''}` : ''
 
-  const selectItem = (item) => {
+  const selectItem = useCallback((item) => {
     setSelectedId(item.id)
-    if (!drafts[item.id]) setDrafts((current) => ({ ...current, [item.id]: initialDraft(item) }))
+    setDrafts((current) => current[item.id] ? current : ({ ...current, [item.id]: initialDraft(item) }))
+    setSearchOpen(false)
+    setQuery('')
+    setSearchIndex(0)
+  }, [])
+
+  const selectedIndex = API_ITEMS.findIndex((item) => item.id === selected.id)
+  const selectRelative = (offset) => {
+    const next = API_ITEMS[selectedIndex + offset]
+    if (next) selectItem(next)
   }
 
   const wsUrl = baseUrl.startsWith('http')
@@ -260,6 +282,37 @@ export default function TradingApiPage({ baseUrl, token }) {
 
   useEffect(() => () => wsRef.current?.close(), [])
 
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setSearchOpen(true)
+        window.setTimeout(() => searchInputRef.current?.focus(), 0)
+        return
+      }
+      if (!searchOpen) return
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setSearchOpen(false)
+      } else if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        setSearchIndex((current) => searchResults.length ? (current + 1) % searchResults.length : 0)
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        setSearchIndex((current) => searchResults.length ? (current - 1 + searchResults.length) % searchResults.length : 0)
+      } else if (event.key === 'Enter' && searchResults[searchIndex]) {
+        event.preventDefault()
+        selectItem(searchResults[searchIndex])
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [searchOpen, searchIndex, searchResults, selectItem])
+
+  useEffect(() => {
+    if (referenceRef.current) referenceRef.current.scrollTop = 0
+  }, [selectedId])
+
   const runRequest = async () => {
     if (!selected.path) return
     if (selected.auth && !credential.trim()) {
@@ -279,17 +332,17 @@ export default function TradingApiPage({ baseUrl, token }) {
     if (body !== undefined) headers['Content-Type'] = 'application/json'
     if (selected.auth) headers[credentialMode === 'apikey' ? 'X-API-Key' : 'Authorization'] = credentialMode === 'apikey' ? credential.trim() : `Bearer ${credential.trim()}`
     if (selected.idem) headers['Idempotency-Key'] = draft.idem || randomId('svx')
-    const started = performance.now()
+    const started = monotonicNow()
     updateDraft({ result: { pending: true } })
     try {
       const response = await fetch(requestUrl, { method: selected.method, headers, body: body === undefined ? undefined : JSON.stringify(body) })
       const text = await response.text()
       let parsed = text
       try { parsed = text ? JSON.parse(text) : null } catch { /* plain text response */ }
-      updateDraft({ result: { status: response.status, duration: Math.round(performance.now() - started), body: parsed } })
+      updateDraft({ result: { status: response.status, duration: Math.round(monotonicNow() - started), body: parsed } })
       if (selected.idem && response.ok) updateDraft({ idem: randomId('svx') })
     } catch (error) {
-      updateDraft({ result: { status: 0, duration: Math.round(performance.now() - started), body: { error: { code: 'NETWORK_ERROR', message: error.message } } } })
+      updateDraft({ result: { status: 0, duration: Math.round(monotonicNow() - started), body: { error: { code: 'NETWORK_ERROR', message: error.message } } } })
     }
   }
 
@@ -307,13 +360,14 @@ export default function TradingApiPage({ baseUrl, token }) {
   return (
     <main className="api-docs-page">
       <header className="api-docs-header">
-        <div className="api-docs-title"><span className="api-docs-icon"><TerminalSquare size={18} /></span><div><span className="api-docs-kicker">Developer platform</span><h1>Trading API</h1></div></div>
+        <div className="api-docs-title"><span className="api-docs-icon"><TerminalSquare size={18} /></span><div><h1>Sarvaex <span>API TERMINAL</span></h1></div></div>
+        <button className="api-global-search" type="button" onClick={() => { setSearchIndex(0); setSearchOpen(true); window.setTimeout(() => searchInputRef.current?.focus(), 0) }}><Search size={14} /><span>Jump to an endpoint or guide</span><kbd><Command size={10} /> K</kbd></button>
         <div className="api-docs-base"><Globe2 size={14} /> <span>{displayBase(baseUrl)}</span><span className="api-live-dot">Live</span></div>
       </header>
       <div className="api-docs-mobile-tabs"><button type="button" className="active"><BookOpen size={14} /> Reference</button><button type="button"><TerminalSquare size={14} /> Console</button></div>
       <div className="api-docs-layout">
         <aside className="api-docs-sidebar">
-          <div className="api-sidebar-search"><Search size={14} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search endpoints" aria-label="Search API endpoints" /></div>
+          <button className="api-sidebar-search" type="button" onClick={() => { setSearchIndex(0); setSearchOpen(true); window.setTimeout(() => searchInputRef.current?.focus(), 0) }}><Search size={14} /><span>Jump to an endpoint or guide</span><kbd>⌘K</kbd></button>
           <div className="api-index-meta"><span>API reference</span><strong>{API_ITEMS.filter((item) => item.path).length} routes</strong></div>
           <nav className="api-endpoint-tree" aria-label="API endpoints">
             {filteredGroups.map((group) => <div className="api-tree-group" key={group.title}>
@@ -323,26 +377,27 @@ export default function TradingApiPage({ baseUrl, token }) {
           </nav>
         </aside>
 
-        <section className="api-docs-reference">
+        <section className="api-docs-reference" ref={referenceRef}>
           <div className="api-breadcrumb"><span>{selected.group}</span><ChevronRight size={13} /><span>{selected.kind === 'guide' ? 'Guide' : 'Endpoint reference'}</span></div>
           <div className="api-reference-heading"><div><h2>{selected.title}</h2>{selected.path ? <div className="api-route"><span className={`api-method ${selected.method.toLowerCase()}`}>{selected.method}</span><code>{selected.path}</code></div> : null}</div><span className={`api-auth-tag ${selected.auth ? 'private' : 'public'}`}>{selected.auth ? <><LockKeyhole size={12} /> Authenticated</> : <><Globe2 size={12} /> Public</>}</span></div>
           {selected.kind === 'guide' ? <GuideContent item={selected} /> : <EndpointContent item={selected} />}
+          <div className="api-reference-pager"><button type="button" disabled={selectedIndex <= 0} onClick={() => selectRelative(-1)}><small>← Previous</small><span>{API_ITEMS[selectedIndex - 1]?.title || ''}</span></button><button type="button" disabled={selectedIndex >= API_ITEMS.length - 1} onClick={() => selectRelative(1)}><small>Next →</small><span>{API_ITEMS[selectedIndex + 1]?.title || ''}</span></button></div>
         </section>
 
         <aside className="api-docs-console">
-          <div className="api-console-heading"><div><span className="api-docs-kicker">Try it live</span><h2>Request console</h2></div><span className="api-console-status"><span /> {isRestEndpoint ? 'REST' : 'Guide'}</span></div>
+          <div className="api-console-heading"><div><span className="api-docs-kicker">Developer tools</span><h2>Console</h2></div><span className="api-console-status"><span /> {isRestEndpoint ? 'REST' : 'Guide'}</span></div>
           {isRestEndpoint ? <>
-            <div className="api-console-url"><span>{selected.method}</span><code>{requestUrl}</code></div>
+            <div className="api-console-url"><span>{selected.method}</span><code>{requestUrl}</code><button className="api-console-run-compact" type="button" onClick={runRequest}><Send size={12} /> Run <kbd>Ctrl ↵</kbd></button></div>
             {selected.auth ? <div className="api-console-block"><div className="api-console-label"><span><ShieldCheck size={13} /> Credential</span><small>one header</small></div><div className="api-credential-switch"><button type="button" className={credentialMode === 'apikey' ? 'active' : ''} onClick={() => setCredentialMode('apikey')}><KeyRound size={12} /> API key</button><button type="button" className={credentialMode === 'bearer' ? 'active' : ''} onClick={() => setCredentialMode('bearer')}>Bearer</button></div><input className="api-console-input" type={credentialMode === 'apikey' ? 'password' : 'text'} value={credential} onChange={(event) => setCredential(event.target.value)} placeholder={credentialMode === 'apikey' ? 'svx_live_...' : '<jwt>'} autoComplete="off" /></div> : null}
             {(selected.pathParams || []).length ? <div className="api-console-block"><div className="api-console-label"><span>Path parameters</span><small>required</small></div>{selected.pathParams.map((key) => <label className="api-console-field" key={key}><span>{key}</span><input value={draft.path[key] || ''} onChange={(event) => updatePath(key, event.target.value)} /></label>)}</div> : null}
             {(selected.params || []).length ? <div className="api-console-block"><div className="api-console-label"><span>Query parameters</span><small>empty fields omitted</small></div>{selected.params.map((param) => <label className="api-console-field" key={param.name}><span>{param.name}</span><input value={draft.query[param.name] || ''} onChange={(event) => updateQuery(param.name, event.target.value)} placeholder="optional" /></label>)}</div> : null}
             {selected.idem ? <div className="api-console-block"><div className="api-console-label"><span>Idempotency-Key</span><button type="button" className="api-inline-button" onClick={() => updateDraft({ idem: randomId('svx') })}>New key</button></div><input className="api-console-input mono" value={draft.idem} onChange={(event) => updateDraft({ idem: event.target.value })} /></div> : null}
             {selected.body ? <div className="api-console-block"><div className="api-console-label"><span>JSON body</span><small>application/json</small></div><textarea className="api-body-editor" value={draft.body} onChange={(event) => updateDraft({ body: event.target.value })} spellCheck="false" /></div> : null}
-            <button className="api-run-button" type="button" onClick={runRequest}><Send size={14} /> Send request <span>⌘ ↵</span></button>
             <RequestOutput tab={codeTab} onTabChange={setCodeTab} result={draft.result} samples={codeSamples} onCopy={copyText} copied={copied} />
           </> : selected.method === 'WS' ? <WebSocketConsole wsUrl={wsUrl} ticker={wsTicker} onTickerChange={setWsTicker} state={wsState} onConnect={connectWebSocket} onDisconnect={disconnectWebSocket} /> : <div className="api-console-guide"><Wifi size={20} /><strong>Reference only</strong><p>This section documents the streaming contract. Use the REST console for live requests; connect to the WebSocket URL from your application.</p><code>wss://api.sarvaex.com/ws</code></div>}
         </aside>
       </div>
+      {searchOpen ? <div className="api-search-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSearchOpen(false) }}><div className="api-search-dialog" role="dialog" aria-modal="true" aria-label="Search API endpoints"><div className="api-search-dialog-input"><Search size={17} /><input ref={searchInputRef} value={query} onChange={(event) => { setQuery(event.target.value); setSearchIndex(0) }} placeholder="Search endpoints, paths, guides" aria-label="Search endpoints, paths, guides" /><button type="button" onClick={() => { setQuery(''); setSearchOpen(false) }} aria-label="Close search"><X size={16} /></button></div><div className="api-search-results">{searchResults.length ? searchResults.map((item, index) => <button type="button" className={`api-search-result ${index === searchIndex ? 'active' : ''}`} key={item.id} onMouseEnter={() => setSearchIndex(index)} onClick={() => selectItem(item)}><span className={`api-method ${item.kind === 'guide' ? 'doc' : item.method.toLowerCase()}`}>{item.kind === 'guide' ? 'DOC' : item.method}</span><strong>{item.title}</strong><small>{item.kind === 'guide' ? item.group : item.path}</small></button>) : <div className="api-search-empty">No matching endpoints or guides.</div>}</div><div className="api-search-footer"><span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>↵</kbd> open</span><span><kbd>esc</kbd> close</span></div></div></div> : null}
     </main>
   )
 }
