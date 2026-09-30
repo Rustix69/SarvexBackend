@@ -86,6 +86,14 @@ const DEMO_CONTRACT_ASSUMPTIONS = {
   'SX-N225-26OCT30-ATM': 'Nikkei above 42,000 on 30 Oct 2026?',
   'SX-TTF-26OCT30-ATM': 'EU gas (TTF) above EUR 35 end-Oct?',
 }
+
+function clearStoredSession() {
+  localStorage.removeItem('sarvex_token')
+  localStorage.removeItem('sarvex_user_id')
+  localStorage.removeItem('sarvex_user_email')
+  localStorage.removeItem('sarvex_user_name')
+}
+
 function viewFromPath(pathname) {
   if (pathname === '/health') return 'health'
   if (pathname === '/futures') return 'futures'
@@ -112,17 +120,7 @@ function pushViewPath(view) {
 }
 
 function App() {
-  const [token, setToken] = useState(() => {
-    const stored = localStorage.getItem('sarvex_token') || ''
-    if (stored.startsWith('demo.')) {
-      localStorage.removeItem('sarvex_token')
-      localStorage.removeItem('sarvex_user_id')
-      localStorage.removeItem('sarvex_user_email')
-      localStorage.removeItem('sarvex_user_name')
-      return ''
-    }
-    return stored
-  })
+  const [token, setToken] = useState(() => localStorage.getItem('sarvex_token') || '')
   const [account, setAccount] = useState(() => ({
     userId: localStorage.getItem('sarvex_user_id') || '',
     email: localStorage.getItem('sarvex_user_email') || '',
@@ -160,6 +158,53 @@ function App() {
   const futuresRef = useRef([])
   const selectedTickerRef = useRef('')
   const activeViewRef = useRef(activeView)
+
+  // Rehydrate the cached browser session after a full page reload. Keep the
+  // cached session through transient outages and only clear it when the API
+  // explicitly rejects the credential.
+  useEffect(() => {
+    const storedToken = localStorage.getItem('sarvex_token') || ''
+    if (!storedToken) return undefined
+
+    let cancelled = false
+    fetch(`${API_BASE}/v1/account/profile`, {
+      headers: { Authorization: `Bearer ${storedToken}` },
+    })
+      .then(async (response) => {
+        let body = null
+        try {
+          body = await response.json()
+        } catch {
+          // A gateway error may not have a JSON body; preserve the cached
+          // session unless the server explicitly says it is unauthorized.
+        }
+        if (response.status === 401 || response.status === 403) {
+          const error = new Error(body?.error?.message || 'Session expired')
+          error.status = response.status
+          throw error
+        }
+        if (!response.ok || !body || cancelled) return
+
+        const nextUserId = body.user_id || localStorage.getItem('sarvex_user_id') || ''
+        const nextEmail = body.email || localStorage.getItem('sarvex_user_email') || ''
+        const nextName = body.name || localStorage.getItem('sarvex_user_name') || nextUserId
+        if (nextUserId) localStorage.setItem('sarvex_user_id', nextUserId)
+        if (nextEmail) localStorage.setItem('sarvex_user_email', nextEmail)
+        if (nextName) localStorage.setItem('sarvex_user_name', nextName)
+        setAccount({ userId: nextUserId, email: nextEmail, name: nextName })
+      })
+      .catch((error) => {
+        if (!cancelled && (error.status === 401 || error.status === 403)) {
+          clearStoredSession()
+          setToken('')
+          setAccount({ userId: '', email: '', name: '' })
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const streamTickers = useMemo(
     () => [...new Set([...markets, ...futures]
@@ -261,10 +306,7 @@ function App() {
   )
 
   const logout = useCallback(() => {
-    localStorage.removeItem('sarvex_token')
-    localStorage.removeItem('sarvex_user_id')
-    localStorage.removeItem('sarvex_user_email')
-    localStorage.removeItem('sarvex_user_name')
+    clearStoredSession()
     setToken('')
     setAccount({ userId: '', email: '', name: '' })
     setBalance(null)
