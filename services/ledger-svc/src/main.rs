@@ -431,9 +431,9 @@ impl Ledger for LedgerService {
         let limit = i64::from(request.limit.clamp(1, 500));
         let cursor = request.cursor.parse::<i64>().ok();
         let (sql, has_cursor) = if cursor.is_some() {
-            ("SELECT e.entry_id, t.tx_id, a.account_code, e.direction, e.amount_micro_usdc, e.running_balance_micro_usdc, t.reason_code, e.posted_at, COALESCE(e.memo, '') AS memo FROM ledger.entries e JOIN ledger.accounts a ON a.account_id=e.account_id JOIN ledger.transactions t ON t.tx_id=e.tx_id WHERE a.user_id=$1 AND e.entry_id < $2 ORDER BY e.entry_id DESC LIMIT $3", true)
+            ("WITH recent AS MATERIALIZED (SELECT latest.entry_id FROM ledger.accounts a CROSS JOIN LATERAL (SELECT entry_id FROM ledger.entries WHERE account_id=a.account_id AND entry_id < $2 ORDER BY entry_id DESC LIMIT $3) latest WHERE a.user_id=$1) SELECT e.entry_id, t.tx_id, a.account_code, e.direction, e.amount_micro_usdc, e.running_balance_micro_usdc, t.reason_code, e.posted_at, COALESCE(e.memo, '') AS memo FROM ledger.entries e JOIN recent r USING (entry_id) JOIN ledger.accounts a ON a.account_id=e.account_id JOIN ledger.transactions t ON t.tx_id=e.tx_id ORDER BY e.entry_id DESC", true)
         } else {
-            ("SELECT e.entry_id, t.tx_id, a.account_code, e.direction, e.amount_micro_usdc, e.running_balance_micro_usdc, t.reason_code, e.posted_at, COALESCE(e.memo, '') AS memo FROM ledger.entries e JOIN ledger.accounts a ON a.account_id=e.account_id JOIN ledger.transactions t ON t.tx_id=e.tx_id WHERE a.user_id=$1 ORDER BY e.entry_id DESC LIMIT $2", false)
+            ("WITH recent AS MATERIALIZED (SELECT latest.entry_id FROM ledger.accounts a CROSS JOIN LATERAL (SELECT entry_id FROM ledger.entries WHERE account_id=a.account_id ORDER BY entry_id DESC LIMIT $2) latest WHERE a.user_id=$1) SELECT e.entry_id, t.tx_id, a.account_code, e.direction, e.amount_micro_usdc, e.running_balance_micro_usdc, t.reason_code, e.posted_at, COALESCE(e.memo, '') AS memo FROM ledger.entries e JOIN recent r USING (entry_id) JOIN ledger.accounts a ON a.account_id=e.account_id JOIN ledger.transactions t ON t.tx_id=e.tx_id ORDER BY e.entry_id DESC", false)
         };
         let rows = if has_cursor {
             sqlx::query(sql)

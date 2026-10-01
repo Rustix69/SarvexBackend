@@ -420,19 +420,23 @@ function App() {
 
   const refreshPrivate = useCallback(async () => {
     if (!token) return
-    const [balanceBody, positionsBody, ordersBody, historyBody] = await Promise.all([
+    const [balanceBody, positionsBody, ordersBody] = await Promise.all([
       api('/v1/account/balance'),
       api('/v1/positions?include_closed=false'),
       api('/v1/orders?limit=500'),
-      api('/v1/account/history?limit=500').catch(() => ({ entries: [] })),
     ])
     const nextPositions = positionsBody?.positions || []
     const nextOrders = ordersBody?.orders || []
     setBalance(balanceBody)
     setPositions(nextPositions)
     setOrders(nextOrders)
-    setHistory(historyBody?.entries || [])
     refreshBookMarks(nextPositions, nextOrders).catch(() => {})
+
+    // Ledger history is useful context, but it should not block the account
+    // summary when the append-only ledger is under load.
+    api('/v1/account/history?limit=100')
+      .then((historyBody) => setHistory(historyBody?.entries || []))
+      .catch(() => {})
   }, [api, refreshBookMarks, token])
 
   const refreshAll = useCallback(async () => {
@@ -476,6 +480,11 @@ function App() {
     let stopped = false
     const books = new Map()
     const tickerSet = new Set(streamTickers)
+    const snapshotQueue = []
+    const snapshotQueued = new Set()
+    const snapshotInFlight = new Set()
+    const snapshotWorkers = 6
+    let activeSnapshots = 0
 
     const publishMark = (ticker, book) => {
       const bids = [...book.bids.entries()].filter(([, qty]) => qty > 0).sort((a, b) => b[0] - a[0])
@@ -486,20 +495,45 @@ function App() {
       if (mark) setLiveQuotes((current) => current[ticker] === mark ? current : { ...current, [ticker]: mark })
     }
 
-    const loadSnapshot = async (ticker) => {
-      try {
-        const snapshot = await api(`/v1/markets/${ticker}/orderbook?depth=25`, { auth: false })
-        if (stopped) return
-        const book = {
-          seq: Number(snapshot?.seq || 0),
-          bids: new Map((snapshot?.bids || []).map((level) => [Number(level.price_ticks ?? level.priceTicks), Number(level.total_qty ?? level.totalQty)])),
-          asks: new Map((snapshot?.asks || []).map((level) => [Number(level.price_ticks ?? level.priceTicks), Number(level.total_qty ?? level.totalQty)])),
-        }
-        books.set(ticker, book)
-        publishMark(ticker, book)
-      } catch {
-        // REST polling remains the fallback if stream resynchronization fails.
+    const pumpSnapshots = () => {
+      while (!stopped && activeSnapshots < snapshotWorkers && snapshotQueue.length) {
+        const ticker = snapshotQueue.shift()
+        snapshotQueued.delete(ticker)
+        if (snapshotInFlight.has(ticker)) continue
+        snapshotInFlight.add(ticker)
+        activeSnapshots += 1
+        api(`/v1/markets/${ticker}/orderbook?depth=12`, { auth: false })
+          .then((snapshot) => {
+            if (stopped) return
+            const book = {
+              seq: Number(snapshot?.seq || 0),
+              bids: new Map((snapshot?.bids || []).map((level) => [Number(level.price_ticks ?? level.priceTicks), Number(level.total_qty ?? level.totalQty)])),
+              asks: new Map((snapshot?.asks || []).map((level) => [Number(level.price_ticks ?? level.priceTicks), Number(level.total_qty ?? level.totalQty)])),
+            }
+            books.set(ticker, book)
+            publishMark(ticker, book)
+          })
+          .catch(() => {
+            // REST polling remains the fallback if stream resynchronization fails.
+          })
+          .finally(() => {
+            snapshotInFlight.delete(ticker)
+            activeSnapshots -= 1
+            pumpSnapshots()
+          })
       }
+    }
+
+    const loadSnapshot = (ticker) => {
+      if (stopped || books.has(ticker) || snapshotQueued.has(ticker) || snapshotInFlight.has(ticker)) return
+      snapshotQueued.add(ticker)
+      snapshotQueue.push(ticker)
+      pumpSnapshots()
+    }
+
+    const discardQueuedSnapshots = () => {
+      snapshotQueue.length = 0
+      snapshotQueued.clear()
     }
 
     const handleMessage = (message) => {
@@ -561,6 +595,7 @@ function App() {
     connect()
     return () => {
       stopped = true
+      discardQueuedSnapshots()
       window.clearTimeout(retryTimer)
       socket?.close()
     }
