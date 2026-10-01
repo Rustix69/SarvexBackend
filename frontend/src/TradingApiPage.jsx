@@ -18,6 +18,7 @@ import {
 
 const SAMPLE_TICKER = 'SX-FEDDEC-26OCT-H25'
 const SAMPLE_EVENT = 'XEV-STD-ECO-01'
+const API_REQUEST_TIMEOUT_MS = 15000
 
 const field = (name, type, description, required = false) => ({ name, type, description, required })
 
@@ -333,15 +334,19 @@ export default function TradingApiPage({ baseUrl, token }) {
     if (selected.idem) headers['Idempotency-Key'] = draft.idem || randomId('svx')
     const started = monotonicNow()
     updateDraft({ result: { pending: true } })
+    const controller = new AbortController()
+    const timeoutId = window.setTimeout(() => controller.abort(), API_REQUEST_TIMEOUT_MS)
     try {
-      const response = await fetch(requestUrl, { method: selected.method, headers, body: body === undefined ? undefined : JSON.stringify(body) })
+      const response = await fetch(requestUrl, { method: selected.method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: controller.signal })
       const text = await response.text()
       let parsed = text
       try { parsed = text ? JSON.parse(text) : null } catch { /* plain text response */ }
       updateDraft({ result: { status: response.status, duration: Math.round(monotonicNow() - started), body: parsed } })
       if (selected.idem && response.ok) updateDraft({ idem: randomId('svx') })
     } catch (error) {
-      updateDraft({ result: { status: 0, duration: Math.round(monotonicNow() - started), body: { error: { code: 'NETWORK_ERROR', message: error.message } } } })
+      updateDraft({ result: { status: 0, duration: Math.round(monotonicNow() - started), body: { error: { code: error.name === 'AbortError' ? 'TIMEOUT' : 'NETWORK_ERROR', message: error.name === 'AbortError' ? `Request timed out after ${API_REQUEST_TIMEOUT_MS / 1000}s` : error.message } } } })
+    } finally {
+      window.clearTimeout(timeoutId)
     }
   }
 
@@ -386,7 +391,7 @@ export default function TradingApiPage({ baseUrl, token }) {
         <aside className="api-docs-console">
           <div className="api-console-heading"><h2>Console</h2><span className="api-console-status">Ctrl ↵ to run</span></div>
           {isRestEndpoint ? <>
-            <div className="api-console-url"><span>{selected.method}</span><code>{requestUrl}</code><button className="api-console-run-compact" type="button" onClick={runRequest}><Send size={12} /> Run <kbd>Ctrl ↵</kbd></button></div>
+            <div className="api-console-url"><span>{selected.method}</span><code>{requestUrl}</code><button className="api-console-run-compact" type="button" onClick={runRequest} disabled={draft.result?.pending}>{draft.result?.pending ? <><span className="api-spinner" /> Running</> : <><Send size={12} /> Run <kbd>Ctrl ↵</kbd></>}</button></div>
             {selected.auth ? <div className="api-console-block"><div className="api-console-label"><span>Headers</span><small>required</small></div><div className="api-console-kv"><div className="api-console-header-row"><span>Credential</span><div className="api-credential-switch"><button type="button" className={credentialMode === 'apikey' ? 'active' : ''} onClick={() => setCredentialMode('apikey')}>X-API-Key</button><button type="button" className={credentialMode === 'bearer' ? 'active' : ''} onClick={() => setCredentialMode('bearer')}>Bearer</button></div><small>send exactly one</small></div><label className="api-console-field"><span>{credentialMode === 'apikey' ? 'X-API-Key' : 'Authorization'}</span><input type={credentialMode === 'apikey' ? 'password' : 'text'} value={credential} onChange={(event) => setCredential(event.target.value)} placeholder={credentialMode === 'apikey' ? 'svx_live_... (run Create an API key)' : '<jwt>'} autoComplete="off" /></label></div></div> : null}
             {(selected.pathParams || []).length ? <div className="api-console-block"><div className="api-console-label"><span>Path</span><small>required</small></div><div className="api-console-kv">{selected.pathParams.map((key) => <label className="api-console-field" key={key}><span>{key}</span><input value={draft.path[key] || ''} onChange={(event) => updatePath(key, event.target.value)} /></label>)}</div></div> : null}
             {(selected.params || []).length ? <div className="api-console-block"><div className="api-console-label"><span>Query</span><small>empty fields omitted</small></div><div className="api-console-kv">{selected.params.map((param) => <label className="api-console-field" key={param.name}><span>{param.name}</span><input value={draft.query[param.name] || ''} onChange={(event) => updateQuery(param.name, event.target.value)} placeholder="optional" /></label>)}</div></div> : null}

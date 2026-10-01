@@ -74,6 +74,7 @@ const LIVE_PAGE_REFRESH_MS = 6000
 const MARKET_LIST_REFRESH_MS = 30000
 const FILL_PAGE_LIMIT = 500
 const FILL_HISTORY_LIMIT = 600
+const API_REQUEST_TIMEOUT_MS = 15000
 const SCALAR_KIND = 2
 const MARKET_SECTIONS = ['All', 'Economics', 'Finance', 'Crypto', 'Commodities', 'Elections', 'Climate', 'Geopolitics / Shipping']
 const HIDDEN_DEMO_MARKET_TICKERS = new Set([
@@ -257,9 +258,24 @@ function App() {
         headers['Content-Type'] = 'application/json'
       }
       if (auth && token) headers.Authorization = `Bearer ${token}`
-      const response = await fetch(`${API_BASE}${path}`, { ...fetchOptions, headers })
+      const controller = new AbortController()
+      const timeoutId = window.setTimeout(() => controller.abort(), API_REQUEST_TIMEOUT_MS)
+      let response
+      try {
+        response = await fetch(`${API_BASE}${path}`, { ...fetchOptions, headers, signal: controller.signal })
+      } catch (error) {
+        if (error.name === 'AbortError') throw new Error(`Request timed out after ${API_REQUEST_TIMEOUT_MS / 1000}s`, { cause: error })
+        throw error
+      } finally {
+        window.clearTimeout(timeoutId)
+      }
       const text = await response.text()
-      const body = text ? JSON.parse(text) : null
+      let body
+      try {
+        body = text ? JSON.parse(text) : null
+      } catch {
+        body = text ? { message: text } : null
+      }
       if (!response.ok) {
         const message = body?.error?.message || body?.message || `Request failed: ${response.status}`
         throw new Error(message)
