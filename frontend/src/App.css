@@ -1217,6 +1217,7 @@ body { background: #111113; }
   background: #151517; border-bottom: 1px solid #29292d; backdrop-filter: blur(18px);
 }
 .brand { color: #f4f2f7; font: 700 19px "Merriweather", Georgia, serif; font-style: normal; gap: 8px; }
+.brand-company-logo { width: 27px; height: 27px; display: block; object-fit: contain; }
 .brand-mark { width: 26px; height: 26px; filter: saturate(1.2); }
 .brand-mark-new { width: 27px; height: 27px; display: grid; place-items: center; color: #fff; }
 .topbar-center { display: flex; align-items: center; gap: 28px; min-width: 0; }
@@ -1251,7 +1252,7 @@ body { background: #111113; }
 .promo-banner { min-height: 280px; display: flex; align-items: stretch; justify-content: stretch; overflow: hidden; position: relative; padding: 0; background: #0c0d11; isolation: isolate; }
 .matrix-hero-copy { position: absolute; top: 50%; left: 28px; z-index: 3; display: grid; gap: 1px; max-width: calc(100% - 56px); transform: translateY(-50%); pointer-events: none; }
 .matrix-hero-copy span { color: #8b8898; font: 500 10px/1.2 "Geist Mono", ui-monospace, monospace; letter-spacing: .16em; text-transform: uppercase; }
-.matrix-hero-copy strong { color: #f0eff4; font: 600 clamp(38px, 5vw, 66px)/.98 "Caveat", "Segoe Print", cursive; letter-spacing: .01em; text-shadow: 0 2px 18px rgba(0, 0, 0, .7); }
+.matrix-hero-copy strong { color: #f0eff4; font: 400 clamp(38px, 5vw, 66px)/.98 "Instrument Serif", Georgia, serif; letter-spacing: 0; text-shadow: 0 2px 18px rgba(0, 0, 0, .7); }
 .live-panel { min-width: 0; border: 1px solid #3a3a41; background: #18181b; padding: 13px 10px 9px; }
 .live-panel-head { display: flex; justify-content: space-between; padding: 0 5px 10px; color: #9e9da5; font-size: 11px; font-weight: 700; }.live-panel-head span:first-child { color: #ed8ab1; }.live-panel-head i { display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: #ed5b99; }
 .live-market { width: 100%; min-width: 0; display: grid; grid-template-columns: 29px minmax(0,1fr) auto; align-items: center; gap: 8px; border: 0; border-top: 1px solid #29292f; padding: 8px 5px; background: transparent; color: #f3f2f6; text-align: left; }.live-market:hover { background: #232328; }.live-market > span:nth-child(2) { min-width: 0; display: grid; gap: 2px; }.live-market small { overflow: hidden; color: #797981; font-size: 10px; white-space: nowrap; text-overflow: ellipsis; }.live-market b { overflow: hidden; font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }.live-market strong { color: #dddce3; font-size: 12px; }.live-avatar { display: grid; place-items: center; width: 27px; height: 27px; border-radius: 50%; background: #303035; color: #fff; font-size: 10px; font-weight: 800; }.avatar-1 { background: #265b9a; }.avatar-2 { background: #923d54; }.avatar-3 { background: #237e70; }.avatar-4 { background: #46448d; }

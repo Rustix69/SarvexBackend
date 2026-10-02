@@ -10,7 +10,6 @@ import {
   Clock3,
   Copy,
   Gift,
-  Hexagon,
   KeyRound,
   Link2,
   LockKeyhole,
@@ -871,8 +870,8 @@ function TopNav({ selectedUser, token, busy, onLogin, onLogout, onProfile, onMar
   return (
     <header className="topbar">
       <button className="brand" type="button" onClick={onMarkets}>
-        <span className="brand-mark-new" aria-hidden="true"><Hexagon size={25} strokeWidth={1.8} /></span>
-        <span>Sarvaex</span>
+        <img className="brand-company-logo" src="/logo.png" alt="Company Logo" />
+        <span>SarvaEX</span>
       </button>
       <div className="topbar-center">
         <div className="global-search-wrap">
