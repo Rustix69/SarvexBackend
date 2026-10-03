@@ -292,6 +292,8 @@ function App() {
         const payload = mode === 'register'
           ? { user_id: userId, email, name, password }
           : email.includes('@') ? { email, password } : { user_id: userId, password }
+        // Authentication intentionally has no client-side timeout; the auth
+        // service may take longer while creating or verifying an account.
         const body = await fetch(`${API_BASE}/v1/auth/${mode === 'register' ? 'register' : 'login'}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -892,7 +894,6 @@ function TopNav({ selectedUser, token, busy, onLogin, onLogout, onProfile, onMar
           <button className={activeView === 'futures' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => onNavigateView('futures')}>Futures</button>
           <button className={activeView === 'trade' ? 'nav-link active' : 'nav-link'} type="button" onClick={onTerminal}>Terminal</button>
           <button className={activeView === 'portfolio' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => onNavigateView('portfolio')}>Portfolio</button>
-          <button className={activeView === 'health' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => onNavigateView('health')}>Health</button>
           <button className={activeView === 'trading-api' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => onNavigateView('trading-api')}>Trading API</button>
         </nav>
       </div>
