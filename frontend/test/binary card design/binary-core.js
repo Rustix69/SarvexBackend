@@ -11,6 +11,7 @@ export const BINARY_CSS = `
 .bmc:hover{border-color:#3a3a44}
 .bmc-top{display:flex;justify-content:space-between;align-items:center;gap:8px;font:12px "IBM Plex Mono",ui-monospace,monospace;color:#6f6f78}
 .bmc-cat{display:inline-flex;align-items:center;gap:7px}
+.bmc-logo{width:28px;height:28px;border-radius:7px;flex:none}
 .bmc-cat i{width:7px;height:7px;border-radius:50%;background:var(--c)}
 .bm-soon{color:#e6a23c}
 .bmc-q{margin-top:10px;font-size:15.5px;font-weight:600;line-height:1.35;color:inherit;text-decoration:none;

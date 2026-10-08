@@ -8,6 +8,7 @@ export const CARD_CSS = `
 .smc:focus-visible{outline:2px solid #6d5ce8;outline-offset:2px}
 .smc-top{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
 .smc-title{font-size:16px;font-weight:600;line-height:1.3;display:flex;align-items:baseline;gap:8px;min-width:0}
+.smc-logo{width:28px;height:28px;border-radius:7px;flex:none;align-self:center}
 .smc-dot{width:7px;height:7px;border-radius:50%;background:var(--c);flex:none;transform:translateY(-2px)}
 .smc-exp{font:12px "IBM Plex Mono",ui-monospace,monospace;color:#6f6f78;white-space:nowrap}
 .smc-sub{font-size:13px;color:#7d7d86;margin:4px 0 0 15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

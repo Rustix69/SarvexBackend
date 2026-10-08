@@ -1,4 +1,5 @@
 'use client';
+import { useState } from 'react';
 import { BINARY_CSS, EVENT_CSS, EVENT_CARD_CSS, binaryView, groupByEvent } from './binary-core';
 import { CATEGORIES, settleText } from './cards-core';
 import { groupByCategory } from './cards-core';
@@ -23,12 +24,18 @@ function BuyButtons({ m, onBuy }) {
   );
 }
 
+function ContractLogo({ ticker }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return null;
+  return <img className="bmc-logo" src={`/SarvaeX_contract_logos/logos/${encodeURIComponent(ticker)}.svg`} alt="" loading="lazy" onError={() => setFailed(true)} />;
+}
+
 export function BinaryCard({ market: m, onBuy, onOpen }) {
   const v = binaryView(m);
   return (
     <article className="bmc" onClick={(event) => { if (onOpen && !event.target.closest('button')) onOpen(m); }}>
       <div className="bmc-top">
-        <span className="bmc-cat"><i style={{ '--c': v.cat.color }} />{v.cat.label}</span>
+        <span className="bmc-cat">{m.id ? <ContractLogo ticker={m.id} /> : <i style={{ '--c': v.cat.color }} />}{v.cat.label}</span>
         <span className={v.st.soon ? 'bm-soon' : ''}>{v.st.text}</span>
       </div>
       <a className="bmc-q" href={m.href || '#'} title={m.question} onClick={(event) => { if (onOpen) { event.preventDefault(); onOpen(m); } }}>{m.question}</a>

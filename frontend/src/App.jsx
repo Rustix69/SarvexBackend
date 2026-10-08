@@ -29,6 +29,7 @@ import {
 import { dispose as disposeKlineChart, init as initKlineChart, registerStyles } from 'klinecharts'
 import { contractsCatalog } from './contractsCatalog'
 import { buildKlineBars, futureMeta, futureConfigurationIssue, futureLimitPriceIssue, parseFutureInput } from './futures'
+import MatrixBackdrop from '../test/MatrixBackdrop'
 import MidPriceChart from '../test/chart desin 1/MidPriceChart'
 import { BinaryCard } from '../test/binary card design/BinaryMarkets'
 import { BINARY_CSS } from '../test/binary card design/binary-core'
@@ -1230,7 +1231,7 @@ function HealthPage({ api }) {
   )
 }
 
-function buildTrendingMarkets(markets, fills) {
+function buildTrendingSections(markets, fills) {
   const fillCounts = fills.reduce((counts, fill) => {
     if (fill?.ticker) counts[fill.ticker] = (counts[fill.ticker] || 0) + 1
     return counts
@@ -1248,10 +1249,19 @@ function buildTrendingMarkets(markets, fills) {
 
   const knownSections = MARKET_SECTIONS.slice(1)
   const sections = [...knownSections, ...[...groups.keys()].filter((section) => !knownSections.includes(section))]
-  return sections.flatMap((section) => (groups.get(section) || [])
-    .sort((a, b) => b.score - a.score || a.index - b.index)
-    .slice(0, 4)
-    .map(({ market }) => market))
+  return sections
+    .map((section) => ({
+      section,
+      markets: (groups.get(section) || [])
+        .sort((a, b) => b.score - a.score || a.index - b.index)
+        .slice(0, 4)
+        .map(({ market }) => market),
+    }))
+    .filter((group) => group.markets.length)
+}
+
+function buildTrendingMarkets(markets, fills) {
+  return buildTrendingSections(markets, fills).flatMap((group) => group.markets)
 }
 
 function MarketDashboard({ loading, markets, fills, marketPrices, onSelect, searchQuery }) {
@@ -1260,7 +1270,6 @@ function MarketDashboard({ loading, markets, fills, marketPrices, onSelect, sear
   const rows = section === 'Trending'
     ? buildTrendingMarkets(filteredMarkets, fills)
     : filteredMarkets.filter((market) => contractSection(market) === section)
-  const featuredMarket = rows.find((market) => /FOMC|federal funds/i.test(`${market.question || ''} ${market.underlying || ''}`)) || rows[0]
   return (
     <main className="dashboard-page">
       <style>{BINARY_CSS}</style>
@@ -1268,46 +1277,54 @@ function MarketDashboard({ loading, markets, fills, marketPrices, onSelect, sear
         {MARKET_SECTIONS.map((item) => <button className={section === item ? 'category-link active' : 'category-link'} type="button" key={item} onClick={() => setSection(item)}>{item}</button>)}
       </nav>
       {section === 'Trending' ? (
-        <section className="dashboard-hero">
-          {featuredMarket ? (
-            <FeaturedMarketCard
-              market={featuredMarket}
-              fills={fills}
-              marketPrices={marketPrices}
-              onOpen={() => onSelect(featuredMarket.ticker)}
-            />
-          ) : (
-            <div className="promo-banner empty-feature"><span>{loading ? 'Loading live markets...' : 'No featured market'}</span></div>
-          )}
-          <aside className="live-panel">
-            <div className="live-panel-head"><span><i /> Live markets</span><span>1 / 11 <ChevronDown size={13} /></span></div>
-            {markets.slice(0, 5).map((market, index) => <button type="button" className="live-market" key={market.ticker} onClick={() => onSelect(market.ticker)}><span className={`live-avatar avatar-${index}`}>{avatarText(market)}</span><span><small>{contractSection(market)} · {market.catalogOnly ? 'Planned' : 'Live'}</small><b>{market.question || market.underlying || market.ticker}</b></span><strong>{Math.max(1, Math.min(99, marketPrices[market.ticker] || impliedPrice(market, fills)))}%</strong></button>)}
-          </aside>
-        </section>
+        <>
+          <section className="dashboard-hero">
+            <div className="promo-banner">
+              <MatrixBackdrop
+                focus="34% 55%"
+                options={{ market: 'SARVAEX LIVE MARKETS' }}
+              />
+              <div className="matrix-hero-copy"><span>Powered by Sarvaex</span><strong>Trade What Happens Next</strong></div>
+            </div>
+            <aside className="live-panel">
+              <div className="live-panel-head"><span><i /> Live markets</span><span>1 / 11 <ChevronDown size={13} /></span></div>
+              {markets.slice(0, 5).map((market, index) => <button type="button" className="live-market" key={market.ticker} onClick={() => onSelect(market.ticker)}><span className={`live-avatar avatar-${index}`}>{avatarText(market)}</span><span><small>{contractSection(market)} · {market.catalogOnly ? 'Planned' : 'Live'}</small><b>{market.question || market.underlying || market.ticker}</b></span><strong>{Math.max(1, Math.min(99, marketPrices[market.ticker] || impliedPrice(market, fills)))}%</strong></button>)}
+            </aside>
+          </section>
+        </>
       ) : null}
 
       {loading ? (
         <div className="loading-panel"><Loader2 className="spin" /> Loading Sarvaex markets...</div>
       ) : rows.length ? (
-        <section className="market-grid">
-          {rows.map((market, index) => (
-            <MarketCard
-              key={market.ticker}
-              market={market}
-              fills={fills}
-              marketPrices={marketPrices}
-              index={index}
-              section={section}
-              onClick={() => onSelect(market.ticker)}
-            />
-          ))}
-        </section>
+        section === 'Trending' ? (
+          buildTrendingSections(filteredMarkets, fills).map((group) => (
+            <section className="trending-section" key={group.section} aria-label={group.section}>
+              <h2 className="trending-section-title">{group.section}</h2>
+              <div className="market-grid">
+                {group.markets.map((market, index) => (
+                  <MarketCard
+                    key={market.ticker}
+                    market={market}
+                    fills={fills}
+                    marketPrices={marketPrices}
+                    index={index}
+                    section={section}
+                    onClick={() => onSelect(market.ticker)}
+                  />
+                ))}
+              </div>
+            </section>
+          ))
+        ) : (
+          <SectionView key={section} section={section} markets={rows} fills={fills} marketPrices={marketPrices} onSelect={onSelect} />
+        )
       ) : <div className="loading-panel">No markets match your search.</div>}
     </main>
   )
 }
 
-function FeaturedMarketCard({ market, fills, marketPrices, onOpen }) {
+function FeaturedMarketCard({ market, fills, marketPrices, onOpen, nav }) {
   const price = Math.max(1, Math.min(99, Number(marketPrices[market.ticker] || impliedPrice(market, fills))))
   const yesAsk = Math.round(price)
   const noAsk = 100 - yesAsk
@@ -1352,8 +1369,11 @@ function FeaturedMarketCard({ market, fills, marketPrices, onOpen }) {
   return (
     <article className="featured-market-card">
       <div className="featured-market-head">
-        <span className="featured-category"><i style={{ '--c': scalarCardColor(market) }} />{binaryCardCategory(market)}</span>
-        <span>{formatDate(market.close_at || market.closeAt || market.expected_resolution_at)}</span>
+        <span className="featured-category"><img className="bmc-logo" src={`/SarvaeX_contract_logos/logos/${encodeURIComponent(market.ticker)}.svg`} alt="" onError={(event) => { event.currentTarget.style.display = 'none' }} />{binaryCardCategory(market)}</span>
+        <span className="featured-head-right">
+          {formatDate(market.close_at || market.closeAt || market.expected_resolution_at)}
+          {nav}
+        </span>
       </div>
       <div className="featured-market-body">
         <div className="featured-market-copy">
@@ -1375,6 +1395,93 @@ function FeaturedMarketCard({ market, fills, marketPrices, onOpen }) {
         <button type="button" onClick={onOpen}>Open market <ArrowLeft size={13} className="featured-open-icon" /></button>
       </div>
     </article>
+  )
+}
+
+const SECTION_SORTS = ['Trending', 'Closing soon']
+
+function marketTopic(market) {
+  return String(workbookMetadata(market).subcategory || '').split(/\s+[–-]\s+/)[0].trim()
+}
+
+function sortSectionMarkets(markets, fills, sort) {
+  const fillCounts = fills.reduce((counts, fill) => {
+    if (fill?.ticker) counts[fill.ticker] = (counts[fill.ticker] || 0) + 1
+    return counts
+  }, {})
+  const closeAt = (market) => new Date(market.close_at || market.closeAt || market.expected_resolution_at || 0).getTime() || Infinity
+  const score = (market) => (market.catalogOnly ? 0 : 1000) + (fillCounts[market.ticker] || 0) * 10
+  return [...markets].sort((a, b) => (sort === 'Closing soon' ? closeAt(a) - closeAt(b) : score(b) - score(a)))
+}
+
+function SectionView({ section, markets, fills, marketPrices, onSelect }) {
+  const [filter, setFilter] = useState('')
+  const [sort, setSort] = useState('Trending')
+  const [featuredIndex, setFeaturedIndex] = useState(0)
+  const countBy = (keyOf) => {
+    const counts = new Map()
+    markets.forEach((market) => { const key = keyOf(market); if (key) counts.set(key, (counts.get(key) || 0) + 1) })
+    return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+  }
+  const topics = countBy(marketTopic)
+  const regions = countBy((market) => workbookMetadata(market).region)
+  const visible = markets.filter((market) => {
+    if (!filter) return true
+    const [type, value] = [filter.slice(0, filter.indexOf(':')), filter.slice(filter.indexOf(':') + 1)]
+    return (type === 'topic' ? marketTopic(market) : workbookMetadata(market).region) === value
+  })
+  const sorted = sortSectionMarkets(markets, fills, sort)
+  const featured = sorted.slice(0, 3)
+  const current = featured[featuredIndex % Math.max(featured.length, 1)]
+  const rest = filter ? sortSectionMarkets(visible, fills, sort) : sorted.slice(featured.length)
+  const pick = setFilter
+  const filterButton = (key, label, count) => (
+    <button type="button" key={key} className={filter === key ? 'section-filter active' : 'section-filter'} onClick={() => pick(key)}>{label}{count ? <small>{count}</small> : null}</button>
+  )
+  return (
+    <div className="section-layout">
+      <aside className="section-filters" aria-label={`${section} filters`}>
+        {filterButton('', 'All markets', markets.length)}
+        {topics.length > 0 && <h4>Topics</h4>}
+        {topics.map(([topic, count]) => filterButton(`topic:${topic}`, topic, count))}
+        {regions.length > 1 && <h4>Regions</h4>}
+        {regions.length > 1 && regions.map(([region, count]) => filterButton(`region:${region}`, region, count))}
+      </aside>
+      <div className="section-main">
+        <div className="section-head">
+          <h2>{section}</h2>
+          <label className="section-sort">
+            <select value={sort} onChange={(event) => setSort(event.target.value)} aria-label="Sort markets">
+              {SECTION_SORTS.map((item) => <option key={item} value={item}>{item}</option>)}
+            </select>
+          </label>
+        </div>
+        {current ? (
+          <FeaturedMarketCard
+            key={current.ticker}
+            market={current}
+            fills={fills}
+            marketPrices={marketPrices}
+            onOpen={() => onSelect(current.ticker)}
+            nav={featured.length > 1 ? (
+              <span className="featured-nav">
+                <button type="button" aria-label="Previous market" onClick={() => setFeaturedIndex((featuredIndex + featured.length - 1) % featured.length)}><ChevronDown size={14} className="nav-prev" /></button>
+                <em>{(featuredIndex % featured.length) + 1} of {featured.length}</em>
+                <button type="button" aria-label="Next market" onClick={() => setFeaturedIndex((featuredIndex + 1) % featured.length)}><ChevronDown size={14} className="nav-next" /></button>
+              </span>
+            ) : null}
+          />
+        ) : null}
+        {filter && !rest.length && <div className="loading-panel">No markets match this filter.</div>}
+        {rest.length > 0 && (
+          <div className="market-grid section-grid">
+            {rest.map((market, index) => (
+              <MarketCard key={market.ticker} market={market} fills={fills} marketPrices={marketPrices} index={index} section={section} onClick={() => onSelect(market.ticker)} />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
   )
 }
 
@@ -1436,7 +1543,7 @@ function FutureCard({ market, fills, marketPrices, onClick }) {
   return (
     <article className="smc" role="button" tabIndex="0" onClick={onClick} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onClick() } }}>
       <div className="smc-top">
-        <div className="smc-title"><span className="smc-dot" style={{ '--c': scalarCardColor(market) }} aria-hidden="true" /><span>{cardMarketTitle(market)}</span></div>
+        <div className="smc-title"><img className="smc-logo" src={`/SarvaeX_contract_logos/logos/${encodeURIComponent(market.ticker)}.svg`} alt="" loading="lazy" onError={(event) => { event.currentTarget.style.display = 'none' }} /><span>{cardMarketTitle(market)}</span></div>
         <span className="smc-exp">{formatDate(market.close_at || market.closeAt || market.expected_resolution_at)}</span>
       </div>
       <div className="smc-sub">{market.underlying || market.question || market.ticker}</div>
@@ -2341,17 +2448,6 @@ function binaryCardCategory(market) {
   return ['Economics', 'Finance', 'Crypto', 'Commodities', 'Elections', 'Climate', 'Geopolitics / Shipping'].includes(section)
     ? section
     : 'Other'
-}
-
-function scalarCardColor(market) {
-  return ({
-    Economics: '#8b7ff0',
-    Finance: '#2bb3a0',
-    Crypto: '#d9c04a',
-    Commodities: '#d0496a',
-    Climate: '#5b94d6',
-    'Geopolitics / Shipping': '#4fb6d6',
-  })[contractSection(market)] || '#6d5ce8'
 }
 
 function isSportsMarket(market) {
