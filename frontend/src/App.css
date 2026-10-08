@@ -1249,6 +1249,62 @@ body { background: #111113; }
 .category-link::after { content: ''; display: inline-block; width: 3px; height: 3px; margin: 0 0 2px 20px; border-radius: 50%; background: #57575d; }
 .category-link:last-child::after { display: none; }.category-link.active { color: #fff; }
 .dashboard-hero { display: grid; grid-template-columns: minmax(0, 1fr) 380px; align-items: stretch; gap: 14px; margin: 0 0 20px; }
+.featured-market-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #34343b;
+  border-radius: 4px;
+  background: #18181b;
+  color: #f4f3f6;
+}
+.featured-market-head {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 17px;
+  border-bottom: 1px solid #2b2b31;
+  color: #8f8e97;
+  font: 11px "Geist Mono", ui-monospace, monospace;
+}
+.featured-category { display: inline-flex; align-items: center; gap: 8px; color: #c7c5cd; text-transform: uppercase; letter-spacing: .04em; }
+.featured-category i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+.featured-market-body { display: grid; grid-template-columns: minmax(230px, .34fr) minmax(0, .66fr); min-height: 294px; }
+.featured-market-copy { display: flex; flex-direction: column; justify-content: center; min-width: 0; padding: 22px 22px 18px; }
+.featured-kicker { color: #81808a; font: 10px "Geist Mono", ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; }
+.featured-title { margin: 8px 0 0; padding: 0; border: 0; background: transparent; color: #f4f3f6; text-align: left; font: 600 clamp(18px, 1.75vw, 25px)/1.17 "Merriweather", Georgia, serif; }
+.featured-title:hover { color: #8be0d3; }
+.featured-market-copy p { margin: 9px 0 0; color: #8f8e97; font-size: 11px; line-height: 1.45; }
+.featured-market-copy .featured-settlement { display: -webkit-box; overflow: hidden; max-width: 34em; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.featured-settlement span { display: block; margin-bottom: 2px; color: #b4b1bd; font: 10px "Geist Mono", ui-monospace, monospace; text-transform: uppercase; letter-spacing: .06em; }
+.featured-price { display: flex; align-items: baseline; gap: 8px; margin-top: 20px; }
+.featured-price strong { color: #f1eff5; font: 500 31px/1 "Geist Mono", ui-monospace, monospace; }
+.featured-price span { color: #87858f; font-size: 11px; }
+.featured-outcomes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-top: 18px; }
+.featured-outcome { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 35px; padding: 0 10px; border: 0; border-radius: 3px; font: 600 12px "Merriweather", Georgia, serif; }
+.featured-outcome b { font: 500 12px "Geist Mono", ui-monospace, monospace; }
+.featured-outcome.yes { background: #1e4140; color: #70d9cc; }.featured-outcome.yes:hover { background: #285652; }
+.featured-outcome.no { background: #422636; color: #ed83aa; }.featured-outcome.no:hover { background: #593247; }
+.featured-market-chart { min-width: 0; align-self: stretch; padding: 14px 14px 9px 0; }
+.featured-market-chart .mpc { height: 100%; min-height: 270px; gap: 8px; padding: 12px 13px 9px; border: 0; background: #131417; }
+.featured-market-chart .mpc-head { align-items: center; }
+.featured-market-chart .mpc-label { font-size: 11px; }
+.featured-market-chart .mpc-big { font-size: 24px; }
+.featured-market-chart .mpc-unit { font-size: 12px; }
+.featured-market-chart .mpc-stats { margin-top: 5px; font-size: 10px; gap: 5px 10px; }
+.featured-market-chart .mpc-ranges { padding: 2px; }
+.featured-market-chart .mpc-ranges button { padding: 5px 7px; font-size: 10px; }
+.featured-market-chart .mpc-legend { gap: 4px; }
+.featured-market-chart .mpc-legend .it { padding: 3px 7px; font-size: 10px; }
+.featured-market-chart .mpc-plot { flex: 1; min-height: 145px; }
+.featured-market-chart .mpc-volwrap { height: 34px; }
+.featured-market-chart .mpc-foot { font-size: 10px; }
+.featured-market-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 38px; padding: 0 17px; border-top: 1px solid #2b2b31; color: #777680; font: 10px "Geist Mono", ui-monospace, monospace; }
+.featured-market-foot button { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; color: #d7d5dd; font: 600 11px "Merriweather", Georgia, serif; }
+.featured-market-foot button:hover { color: #75d9cc; }
+.featured-open-icon { transform: rotate(180deg); }
+.empty-feature { display: grid; place-items: center; min-height: 280px; border: 1px solid #34343b; background: #18181b; color: #8f8e97; font-size: 12px; }
 .promo-banner { min-height: 280px; display: flex; align-items: stretch; justify-content: stretch; overflow: hidden; position: relative; padding: 0; background: #0c0d11; isolation: isolate; }
 .matrix-hero-copy { position: absolute; top: 50%; left: 28px; z-index: 3; display: grid; gap: 1px; max-width: calc(100% - 56px); transform: translateY(-50%); pointer-events: none; }
 .matrix-hero-copy span { color: #8b8898; font: 500 10px/1.2 "Geist Mono", ui-monospace, monospace; letter-spacing: .16em; text-transform: uppercase; }
@@ -1451,7 +1507,7 @@ body { background: #111113; }
   color: #85828d;
 }
 @media (max-width: 1100px) { .topbar { grid-template-columns: auto 1fr; }.topbar-center { order: 3; grid-column: 1 / -1; }.user-cluster { justify-self: end; }.market-grid { grid-template-columns: repeat(3, minmax(180px, 1fr)); } }
-@media (max-width: 760px) { .topbar { height: auto; padding: 10px 12px; }.main-nav { overflow-x: auto; }.user-cluster .nav-link, .user-dot, .user-menu { display: none; }.dashboard-page { padding: 0 10px 32px; }.category-nav { justify-content: flex-start; gap: 17px; }.category-link::after { margin-left: 17px; }.dashboard-hero { grid-template-columns: 1fr; }.promo-banner { min-height: 190px; padding: 18px; }.promo-banner strong { font-size: 31px; }.live-panel { display: none; }.market-toolbar { align-items: flex-start; flex-direction: column; gap: 10px; }.market-toolbar > div { width: 100%; justify-content: space-between; gap: 8px; }.market-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }.market-card { min-height: 174px; padding: 10px 8px; }.market-card h3 { font-size: 11px; }.outcome-row { min-height: 28px; padding: 0 6px; } }
+@media (max-width: 760px) { .topbar { height: auto; padding: 10px 12px; }.main-nav { overflow-x: auto; }.user-cluster .nav-link, .user-dot, .user-menu { display: none; }.dashboard-page { padding: 0 10px 32px; }.category-nav { justify-content: flex-start; gap: 17px; }.category-link::after { margin-left: 17px; }.dashboard-hero { grid-template-columns: 1fr; }.featured-market-body { grid-template-columns: 1fr; }.featured-market-copy { padding: 20px 17px 16px; }.featured-market-chart { padding: 0 10px 10px; }.featured-market-chart .mpc { min-height: 265px; }.promo-banner { min-height: 190px; padding: 18px; }.promo-banner strong { font-size: 31px; }.live-panel { display: none; }.market-toolbar { align-items: flex-start; flex-direction: column; gap: 10px; }.market-toolbar > div { width: 100%; justify-content: space-between; gap: 8px; }.market-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }.market-card { min-height: 174px; padding: 10px 8px; }.market-card h3 { font-size: 11px; }.outcome-row { min-height: 28px; padding: 0 6px; } }
 @media (max-width: 420px) { .global-search { max-width: none; }.topbar-center { display: grid; gap: 8px; }.market-grid { grid-template-columns: 1fr; } }
 
 .terminal-page { max-width: none; min-height: calc(100vh - 58px); display: grid; grid-template-columns: 184px minmax(0, 1fr) 340px 300px; gap: 7px; padding: 7px 8px 36px; background: #111113; }
@@ -1486,10 +1542,10 @@ body { background: #111113; }
 .terminal-page .oracle-details { margin-top: 7px; padding: 10px; border: 1px solid #292a30; background: #17171a; }.terminal-page .oracle-details .panel-head { margin-bottom: 8px; padding-bottom: 8px; }.oracle-title { display: inline-flex; align-items: center; gap: 6px; }.oracle-title svg { color: #3fd0c2; }.oracle-title h2 { margin: 0; color: #eeeef2; font-size: 12px; font-weight: 600; }.oracle-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }.oracle-item { min-width: 0; min-height: 48px; display: grid; align-content: center; gap: 5px; padding: 7px 8px; border: 1px solid #292a30; background: #202025; }.oracle-item span { color: #777681; font-size: 9px; text-transform: uppercase; letter-spacing: .04em; }.oracle-item strong { overflow: hidden; color: #d9d7df; font-size: 11px; line-height: 1.25; font-weight: 500; text-overflow: ellipsis; }.oracle-wide { grid-column: 1 / -1; }.terminal-page .oracle-details + .contracts-table { margin-top: 7px; }
 .terminal-page .futures-candle-chart .futures-candles line { stroke: #c7c4cd; stroke-width: 1.4; }.terminal-page .futures-candle-chart .futures-candles rect { stroke-width: 1; }.terminal-page .futures-candle-chart .candle-up line, .terminal-page .futures-candle-chart .candle-up rect { stroke: #3fd0c2; }.terminal-page .futures-candle-chart .candle-up rect { fill: #167f72; }.terminal-page .futures-candle-chart .candle-down line, .terminal-page .futures-candle-chart .candle-down rect { stroke: #ef72a6; }.terminal-page .futures-candle-chart .candle-down rect { fill: #bb3f72; }
 .terminal-page .contracts-table { margin: 7px 0 0; border: 1px solid #292a30; background: #17171a; }.terminal-page .contract-row { padding: 9px 10px; grid-template-columns: minmax(0,1fr) 70px 130px; min-height: 48px; font-size: 11px; }.terminal-page .contract-row b { font-size: 14px; }.terminal-page .contract-row em { height: 31px; border-radius: 2px; font-size: 11px; }.terminal-page .lower-grid { gap: 7px; margin-top: 7px; }.terminal-page .book-card, .terminal-page .trades-card { padding: 10px; border-radius: 0; }.terminal-page .book-card h3, .terminal-page .trades-card h3 { margin-bottom: 6px; font-size: 12px; }.terminal-page .trade-line { min-height: 27px; font-size: 10px; }.terminal-page .book-header, .terminal-page .book-row { height: 22px; font-size: 10px; }
-.terminal-page .trade-side { display: contents; }.terminal-page .trade-side > .book-card { grid-column: 3; grid-row: 1 / span 3; align-self: start; max-height: 720px; overflow: hidden; }.terminal-page .trade-side > .ticket { grid-column: 4; grid-row: 1; align-self: start; }.terminal-page .trade-side > .position-card { grid-column: 4; grid-row: 2; align-self: start; }
+.terminal-page .trade-side { display: contents; }.terminal-page .trade-side > .book-card { grid-column: 3; grid-row: 1 / span 3; align-self: start; max-height: 720px; overflow: hidden; }.terminal-page .trade-side > .trade-ticket-column { grid-column: 4; grid-row: 1; align-self: start; display: grid; gap: 7px; min-width: 0; }.terminal-page .trade-ticket-column .position-card { min-width: 0; }
 .terminal-page .ticket { padding: 12px; border-radius: 0; }.terminal-page .ticket-market { margin-bottom: 8px; font-size: 11px; }.terminal-page .ticket-tabs { gap: 4px; margin-bottom: 7px; }.terminal-page .ticket-tabs button { padding: 6px; font-size: 11px; }.terminal-page .order-type-toggle { margin-bottom: 9px; }.terminal-page .outcome-toggle { gap: 4px; margin-bottom: 10px; }.terminal-page .outcome-toggle button { height: 35px; font-size: 11px; }.terminal-page .amount-input input { height: 35px; font-size: 24px; }.terminal-page .quick-amounts { gap: 4px; margin-bottom: 8px; }.terminal-page .quick-amounts button { padding: 5px 7px; font-size: 10px; }.terminal-page .ticket-summary { margin: 6px 0; font-size: 11px; }.terminal-page .trade-btn { height: 38px; border-radius: 2px; font-size: 11px; }.terminal-page .ticket p { margin-top: 8px; font-size: 10px; }.terminal-page .position-card { padding: 11px; border-radius: 0; }.terminal-page .position-stat-grid div { min-height: 45px; padding: 7px; border-radius: 2px; }.terminal-page .position-stat-grid strong { font-size: 13px; }
-@media (max-width: 1250px) { .terminal-page { grid-template-columns: 160px minmax(0,1fr) 300px; }.terminal-page .trade-side > .book-card { grid-column: 3; grid-row: 1; }.terminal-page .trade-side > .ticket { grid-column: 3; grid-row: 2; }.terminal-page .trade-side > .position-card { grid-column: 3; grid-row: 3; }.terminal-watchlist { display: none; } }
-@media (max-width: 760px) { .terminal-page { display: block; padding: 5px; }.terminal-page .trade-side { display: grid; gap: 7px; margin-top: 7px; }.terminal-page .trade-side > .book-card, .terminal-page .trade-side > .ticket, .terminal-page .trade-side > .position-card { grid-column: auto; grid-row: auto; max-height: none; }.terminal-page .price-chart, .terminal-page .kline-chart-container { height: 300px; }.terminal-page .lower-grid { grid-template-columns: 1fr; }.terminal-page .contract-row { grid-template-columns: 1fr 62px 112px; }.terminal-page .market-main { overflow: visible; }.oracle-grid { grid-template-columns: 1fr; }.oracle-wide { grid-column: auto; } }
+@media (max-width: 1250px) { .terminal-page { grid-template-columns: 160px minmax(0,1fr) 300px; }.terminal-page .trade-side > .book-card { grid-column: 3; grid-row: 1; }.terminal-page .trade-side > .trade-ticket-column { grid-column: 3; grid-row: 2; }.terminal-watchlist { display: none; } }
+@media (max-width: 760px) { .terminal-page { display: block; padding: 5px; }.terminal-page .trade-side { display: grid; gap: 7px; margin-top: 7px; }.terminal-page .trade-side > .book-card, .terminal-page .trade-side > .trade-ticket-column { grid-column: auto; grid-row: auto; max-height: none; }.terminal-page .price-chart, .terminal-page .kline-chart-container { height: 300px; }.terminal-page .lower-grid { grid-template-columns: 1fr; }.terminal-page .contract-row { grid-template-columns: 1fr 62px 112px; }.terminal-page .market-main { overflow: visible; }.oracle-grid { grid-template-columns: 1fr; }.oracle-wide { grid-column: auto; } }
 
 /* Portfolio workspace: dense analytics layout matching the terminal shell. */
 .portfolio-page { max-width: 1360px; padding: 26px 20px 60px; color: #d9d7df; font-family: "Merriweather", Georgia, serif; }
@@ -1513,6 +1569,8 @@ body { background: #111113; }
 .portfolio-curve-point { fill: #3fd0c2; stroke: #dffaf5; stroke-width: 2; }
 .portfolio-referrals { padding: 12px; }.referrals-head { display: flex; align-items: center; justify-content: space-between; min-height: 24px; margin-bottom: 9px; }.referrals-head strong { color: #8d8b95; font-size: 10px; text-transform: uppercase; }.referrals-head button { border: 0; border-radius: 3px; padding: 6px 8px; background: #24232c; color: #7c66cc; font-size: 10px; }.portfolio-referrals .portfolio-rail-metric { min-height: 54px; padding: 7px 0; border-bottom: 1px solid #292a30; }.portfolio-referrals .portfolio-rail-metric:nth-last-child(odd) { border-left: 0; }.portfolio-referrals p { margin: 14px 0 0; color: #777681; font-size: 10px; }.referral-art { height: 150px; margin: 10px -12px -12px; opacity: .55; background: radial-gradient(circle at 0 90%, #6653b9 0 2px, transparent 3px) 0 0 / 10px 10px, radial-gradient(circle at 100% 50%, #302c55 0 2px, transparent 3px) 0 0 / 10px 10px; mask-image: linear-gradient(to top, #000, transparent 85%); }
 .portfolio-subnav { min-height: 42px; display: flex; align-items: center; gap: 16px; margin-top: 12px; padding: 0 12px; border-radius: 9px; background: #1c1c21; overflow-x: auto; white-space: nowrap; }.portfolio-subnav button { height: 100%; text-transform: none; font-size: 10px; font-weight: 500; }.portfolio-subnav button.active { border-bottom: 2px solid #8d72f4; color: #efedf4; }.portfolio-subnav-spacer { flex: 1; }.portfolio-data-panels { margin-top: 12px; }.portfolio-data-panels .portfolio-panel { border-radius: 3px; background: #19191d; box-shadow: none; }.portfolio-data-panels .panel-head h2 { color: #eeeaf3; font: 600 14px/1 "Merriweather", Georgia, serif; }.portfolio-data-panels .portfolio-row { color: #dddbe3; font-size: 11px; border-color: #292a30; }.portfolio-data-panels .portfolio-row.header, .portfolio-data-panels .portfolio-row.positions-header { color: #777681; font-size: 10px; }.portfolio-data-panels .portfolio-empty { color: #777681; font-size: 11px; }.portfolio-data-panels .exit-position-btn { border-radius: 3px; background: #29292f; font-size: 10px; }
+.portfolio-contract-link { max-width: 100%; overflow: hidden; padding: 0; border: 0; background: transparent; color: #d7d5df; font: inherit; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.portfolio-contract-link:hover { color: #6fd8ca; text-decoration: underline; text-underline-offset: 3px; }
 @media (max-width: 900px) { .portfolio-workspace { grid-template-columns: 170px minmax(0, 1fr); }.portfolio-referrals { display: none; }.portfolio-account-strip { grid-template-columns: 115px repeat(4, minmax(95px, 1fr)); }.portfolio-account-tools { display: none; } }
 @media (max-width: 650px) { .portfolio-page { padding: 18px 10px 40px; }.portfolio-account-strip { grid-template-columns: repeat(2, 1fr); }.portfolio-account-name { grid-column: 1 / -1; min-height: 46px; border-bottom: 1px solid #2b2b31; }.portfolio-account-metric { min-height: 54px; }.portfolio-workspace { display: block; }.portfolio-metrics-rail { margin-bottom: 8px; }.portfolio-calendar-panel { min-height: 350px; }.portfolio-performance-chart { padding-inline: 4px; }.performance-chart-summary { align-items: flex-start; flex-direction: column; gap: 4px; }.portfolio-curve { height: 220px; }.portfolio-subnav { gap: 14px; }.portfolio-data-panels { display: block; overflow: hidden; }.portfolio-data-panels .portfolio-panel + .portfolio-panel { margin-top: 8px; } }
 
@@ -1580,6 +1638,13 @@ body { background: #111113; }
 .auth-submit:hover { background: #51cabc; }
 .auth-footnote, .profile-description { margin: 15px 0 0; color: #777681; font: 10px/1.6 var(--mono); }
 .auth-error, .profile-error { margin: 0; color: #ff91b5; font: 11px/1.4 var(--mono); }
+.trade-confirmation-backdrop { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; padding: 20px; background: rgba(4, 4, 6, .62); backdrop-filter: blur(7px); }
+.trade-confirmation { width: min(460px, 100%); display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 13px; padding: 18px; border: 1px solid #3b3b45; border-radius: 7px; background: #1b1b20; color: #f2f0f5; box-shadow: 0 24px 80px rgba(0, 0, 0, .5); animation: confirmation-rise 180ms ease-out both; }
+.trade-confirmation.filled { border-color: #2f756b; }.trade-confirmation.pending { border-color: #655432; }.trade-confirmation.updated { border-color: #75405a; }
+.trade-confirmation-icon { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 50%; background: #173a36; color: #68d5c7; }.trade-confirmation.pending .trade-confirmation-icon { background: #3d321e; color: #e2b35f; }.trade-confirmation.updated .trade-confirmation-icon { background: #3b2230; color: #e36d9d; }
+.trade-confirmation-content { min-width: 0; }.trade-confirmation-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }.trade-confirmation-heading .icon-btn { width: 26px; height: 26px; margin: -4px -5px 0 0; color: #8f8d98; }.trade-confirmation-kicker { color: #8f8d99; font: 9px var(--mono); letter-spacing: .11em; text-transform: uppercase; }.trade-confirmation h2 { margin: 4px 0 0; color: #f3f1f6; font: 500 20px/1.15 "Merriweather", Georgia, serif; }.trade-confirmation-market { overflow: hidden; margin: 13px 0 0; color: #aaa8b2; font: 11px var(--mono); text-overflow: ellipsis; white-space: nowrap; }.trade-confirmation-market strong { color: #eeeef2; font-weight: 500; }.trade-confirmation-details { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin-top: 13px; }.trade-confirmation-details span { display: grid; gap: 5px; padding: 8px; border-radius: 3px; background: #25252b; color: #85838e; font: 9px var(--mono); }.trade-confirmation-details b { overflow: hidden; color: #eeeef2; font-size: 10px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }.trade-confirmation-note { margin: 12px 0 0; color: #b5a475; font: 10px/1.5 var(--mono); }.trade-confirmation-close { width: 100%; min-height: 34px; margin-top: 15px; border: 0; border-radius: 3px; background: #3bafa3; color: #091110; font: 700 11px "Merriweather", Georgia, serif; }.trade-confirmation-close:hover { background: #51cabc; }
+@keyframes confirmation-rise { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@media (max-width: 520px) { .trade-confirmation { grid-template-columns: 32px minmax(0, 1fr); gap: 10px; padding: 14px; }.trade-confirmation-icon { width: 30px; height: 30px; }.trade-confirmation-details { grid-template-columns: 1fr; } }
 .profile-page { max-width: 1180px; margin: 0 auto; padding: 38px 24px 70px; color: #f1eff5; }
 .profile-heading { display: flex; align-items: end; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
 .profile-heading h1 { font-size: 31px; }

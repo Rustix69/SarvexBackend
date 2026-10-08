@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   BarChart3,
   Bookmark,
+  CheckCircle2,
   CircleDollarSign,
   ChevronDown,
   Clock3,
@@ -28,7 +29,6 @@ import {
 import { dispose as disposeKlineChart, init as initKlineChart, registerStyles } from 'klinecharts'
 import { contractsCatalog } from './contractsCatalog'
 import { buildKlineBars, futureMeta, futureConfigurationIssue, futureLimitPriceIssue, parseFutureInput } from './futures'
-import MatrixBackdrop from '../test/MatrixBackdrop'
 import MidPriceChart from '../test/chart desin 1/MidPriceChart'
 import { BinaryCard } from '../test/binary card design/BinaryMarkets'
 import { BINARY_CSS } from '../test/binary card design/binary-core'
@@ -75,7 +75,7 @@ const FILL_PAGE_LIMIT = 500
 const FILL_HISTORY_LIMIT = 600
 const API_REQUEST_TIMEOUT_MS = 15000
 const SCALAR_KIND = 2
-const MARKET_SECTIONS = ['All', 'Economics', 'Finance', 'Crypto', 'Commodities', 'Elections', 'Climate', 'Geopolitics / Shipping']
+const MARKET_SECTIONS = ['Trending', 'Economics', 'Finance', 'Crypto', 'Commodities', 'Elections', 'Climate', 'Geopolitics / Shipping']
 const HIDDEN_DEMO_MARKET_TICKERS = new Set([
   'DEMO-INDIA-GDP-Q2-26-7PCT',
   'RBI-JUN26-CUT25',
@@ -149,10 +149,13 @@ function App() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [tradeConfirmation, setTradeConfirmation] = useState(null)
   const [authOpen, setAuthOpen] = useState(false)
   const [authMode, setAuthMode] = useState('login')
   const [activeView, setActiveView] = useState(() => viewFromPath(window.location.pathname))
   const fillCursorRef = useRef({})
+  const orderStatusesRef = useRef(new Map())
+  const orderStatusesReadyRef = useRef(false)
   const lastMarketListRefreshRef = useRef(0)
   const marketsRef = useRef([])
   const futuresRef = useRef([])
@@ -622,6 +625,32 @@ function App() {
     return () => clearInterval(interval)
   }, [activeView, refreshPrivate, refreshPublic])
 
+  useEffect(() => {
+    if (!orders.length) return
+    const nextStatuses = new Map()
+    if (!orderStatusesReadyRef.current) {
+      orders.forEach((order) => nextStatuses.set(order.order_id || order.orderId || order.client_order_id || order.clientOrderId, order))
+      orderStatusesRef.current = nextStatuses
+      orderStatusesReadyRef.current = true
+      return
+    }
+
+    orders.forEach((order) => {
+      const key = order.order_id || order.orderId || order.client_order_id || order.clientOrderId
+      const previous = orderStatusesRef.current.get(key)
+      const currentStatus = orderStatusLabel(order.status)
+      const filledCount = Number(order.filled_count ?? order.filledCount ?? 0)
+      const totalCount = Number(order.count || 0)
+      const nowFilled = currentStatus === 'Filled' || (totalCount > 0 && filledCount >= totalCount)
+      const wasOpen = previous && ['Open', 'Partial', 'Pending'].includes(orderStatusLabel(previous.status))
+      if (key && wasOpen && nowFilled && orderStatusLabel(previous.status) !== 'Filled') {
+        setTradeConfirmation(buildTradeConfirmation(order))
+      }
+      if (key) nextStatuses.set(key, order)
+    })
+    orderStatusesRef.current = nextStatuses
+  }, [orders])
+
   const handleMarketSelect = (ticker) => {
     setSelectedTicker(ticker)
     setActiveView('trade')
@@ -714,6 +743,26 @@ function App() {
     }
   }
 
+  const executeTrade = useCallback(async (payload) => {
+    setBusy(true)
+    setError('')
+    try {
+      const result = await api('/v1/orders', {
+        method: 'POST',
+        headers: { 'Idempotency-Key': payload.client_order_id },
+        body: JSON.stringify(payload),
+      })
+      const rejected = orderRejectMessage(result)
+      if (rejected) throw new Error(rejected)
+      setTradeConfirmation(buildTradeConfirmation(result?.order || result, payload))
+      await refreshAll()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }, [api, refreshAll])
+
   const selectedUser = {
     label: account.name || account.userId || 'Account',
     email: account.email,
@@ -766,24 +815,7 @@ function App() {
           authed={authed}
           busy={busy}
           onBack={() => handleViewNav('futures')}
-          onTrade={async (payload) => {
-            setBusy(true)
-            setError('')
-            try {
-              const result = await api('/v1/orders', {
-                method: 'POST',
-                headers: { 'Idempotency-Key': payload.client_order_id },
-                body: JSON.stringify(payload),
-              })
-              const rejected = orderRejectMessage(result)
-              if (rejected) throw new Error(rejected)
-              await refreshAll()
-            } catch (err) {
-              setError(err.message)
-            } finally {
-              setBusy(false)
-            }
-          }}
+          onTrade={executeTrade}
         />
       ) : activeView === 'trade' && selectedMarket ? (
         <MarketDetail
@@ -798,24 +830,7 @@ function App() {
           authed={authed}
           busy={busy}
           onBack={handleMarketsNav}
-          onTrade={async (payload) => {
-            setBusy(true)
-            setError('')
-            try {
-              const result = await api('/v1/orders', {
-                method: 'POST',
-                headers: { 'Idempotency-Key': payload.client_order_id },
-                body: JSON.stringify(payload),
-              })
-              const rejected = orderRejectMessage(result)
-              if (rejected) throw new Error(rejected)
-              await refreshAll()
-            } catch (err) {
-              setError(err.message)
-            } finally {
-              setBusy(false)
-            }
-          }}
+          onTrade={executeTrade}
         />
       ) : activeView === 'portfolio' ? (
         <PortfolioPage
@@ -831,6 +846,7 @@ function App() {
           onDeposit={handleDeposit}
           onRefresh={refreshPrivate}
           onExitPosition={handleExitPosition}
+          onSelectMarket={handleMarketSelect}
         />
       ) : activeView === 'health' ? (
         <HealthPage api={api} />
@@ -854,6 +870,7 @@ function App() {
         />
       )}
       {authOpen ? <AuthDialog mode={authMode} busy={busy} error={error} onClose={() => setAuthOpen(false)} onModeChange={setAuthMode} onSubmit={authenticate} /> : null}
+      {tradeConfirmation ? <TradeConfirmation confirmation={tradeConfirmation} onClose={() => setTradeConfirmation(null)} /> : null}
     </div>
   )
 }
@@ -962,6 +979,38 @@ function AuthDialog({ mode, busy, error, onClose, onModeChange, onSubmit }) {
           </button>
         </form>
         <p className="auth-footnote">Your password is stored securely and is never shown in the platform.</p>
+      </section>
+    </div>
+  )
+}
+
+function TradeConfirmation({ confirmation, onClose }) {
+  const filled = confirmation.status === 'Filled'
+  const partial = confirmation.status === 'Partial'
+  const pending = ['Pending', 'Open', 'Accepted'].includes(confirmation.status)
+  const heading = filled ? 'Trade filled' : partial ? 'Partially filled' : pending ? 'Order placed' : 'Order update'
+
+  return (
+    <div className="trade-confirmation-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className={`trade-confirmation ${filled ? 'filled' : pending ? 'pending' : 'updated'}`} role="dialog" aria-modal="true" aria-labelledby="trade-confirmation-title">
+        <div className="trade-confirmation-icon"><CheckCircle2 size={22} /></div>
+        <div className="trade-confirmation-content">
+          <div className="trade-confirmation-heading">
+            <div>
+              <span className="trade-confirmation-kicker">Sarvaex order status</span>
+              <h2 id="trade-confirmation-title">{heading}</h2>
+            </div>
+            <button className="icon-btn" type="button" aria-label="Close confirmation" title="Close" onClick={onClose}><X size={17} /></button>
+          </div>
+          <p className="trade-confirmation-market">{confirmation.direction} <strong>{confirmation.ticker}</strong></p>
+          <div className="trade-confirmation-details">
+            <span>Status <b>{confirmation.status}</b></span>
+            <span>Quantity <b>{confirmation.filledCount > 0 ? `${confirmation.filledCount}/${confirmation.count}` : confirmation.count}</b></span>
+            <span>Order type <b>{confirmation.orderType}</b></span>
+          </div>
+          {pending ? <p className="trade-confirmation-note">This order is resting in the market. We will update this confirmation when it fills.</p> : null}
+          <button className="trade-confirmation-close" type="button" onClick={onClose}>Done</button>
+        </div>
       </section>
     </div>
   )
@@ -1181,30 +1230,61 @@ function HealthPage({ api }) {
   )
 }
 
+function buildTrendingMarkets(markets, fills) {
+  const fillCounts = fills.reduce((counts, fill) => {
+    if (fill?.ticker) counts[fill.ticker] = (counts[fill.ticker] || 0) + 1
+    return counts
+  }, {})
+  const groups = new Map()
+  markets.forEach((market, index) => {
+    const section = contractSection(market)
+    const priority = String(market.launch_priority || market.launchPriority || '').toUpperCase()
+    const priorityScore = priority.startsWith('P1') ? 3 : priority.startsWith('P2') ? 2 : priority.startsWith('P3') ? 1 : 0
+    const score = (market.catalogOnly ? 0 : 1000) + (fillCounts[market.ticker] || 0) * 10 + priorityScore
+    const items = groups.get(section) || []
+    items.push({ market, score, index })
+    groups.set(section, items)
+  })
+
+  const knownSections = MARKET_SECTIONS.slice(1)
+  const sections = [...knownSections, ...[...groups.keys()].filter((section) => !knownSections.includes(section))]
+  return sections.flatMap((section) => (groups.get(section) || [])
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .slice(0, 4)
+    .map(({ market }) => market))
+}
+
 function MarketDashboard({ loading, markets, fills, marketPrices, onSelect, searchQuery }) {
-  const [section, setSection] = useState('All')
-  const rows = markets
-    .filter((market) => section === 'All' || contractSection(market) === section)
-    .filter((market) => marketMatchesSearch(market, searchQuery))
+  const [section, setSection] = useState('Trending')
+  const filteredMarkets = markets.filter((market) => marketMatchesSearch(market, searchQuery))
+  const rows = section === 'Trending'
+    ? buildTrendingMarkets(filteredMarkets, fills)
+    : filteredMarkets.filter((market) => contractSection(market) === section)
+  const featuredMarket = rows.find((market) => /FOMC|federal funds/i.test(`${market.question || ''} ${market.underlying || ''}`)) || rows[0]
   return (
     <main className="dashboard-page">
       <style>{BINARY_CSS}</style>
       <nav className="category-nav" aria-label="Market categories">
         {MARKET_SECTIONS.map((item) => <button className={section === item ? 'category-link active' : 'category-link'} type="button" key={item} onClick={() => setSection(item)}>{item}</button>)}
       </nav>
-      <section className="dashboard-hero">
-        <div className="promo-banner">
-          <MatrixBackdrop
-            focus="34% 55%"
-            options={{ market: 'SARVAEX LIVE MARKETS' }}
-          />
-          <div className="matrix-hero-copy"><span>Powered by Sarvaex</span><strong>Trade What Happens Next</strong></div>
-        </div>
-        <aside className="live-panel">
-          <div className="live-panel-head"><span><i /> Live markets</span><span>1 / 11 <ChevronDown size={13} /></span></div>
-          {markets.slice(0, 5).map((market, index) => <button type="button" className="live-market" key={market.ticker} onClick={() => onSelect(market.ticker)}><span className={`live-avatar avatar-${index}`}>{avatarText(market)}</span><span><small>{contractSection(market)} · {market.catalogOnly ? 'Planned' : 'Live'}</small><b>{market.question || market.underlying || market.ticker}</b></span><strong>{Math.max(1, Math.min(99, marketPrices[market.ticker] || impliedPrice(market, fills)))}%</strong></button>)}
-        </aside>
-      </section>
+      {section === 'Trending' ? (
+        <section className="dashboard-hero">
+          {featuredMarket ? (
+            <FeaturedMarketCard
+              market={featuredMarket}
+              fills={fills}
+              marketPrices={marketPrices}
+              onOpen={() => onSelect(featuredMarket.ticker)}
+            />
+          ) : (
+            <div className="promo-banner empty-feature"><span>{loading ? 'Loading live markets...' : 'No featured market'}</span></div>
+          )}
+          <aside className="live-panel">
+            <div className="live-panel-head"><span><i /> Live markets</span><span>1 / 11 <ChevronDown size={13} /></span></div>
+            {markets.slice(0, 5).map((market, index) => <button type="button" className="live-market" key={market.ticker} onClick={() => onSelect(market.ticker)}><span className={`live-avatar avatar-${index}`}>{avatarText(market)}</span><span><small>{contractSection(market)} · {market.catalogOnly ? 'Planned' : 'Live'}</small><b>{market.question || market.underlying || market.ticker}</b></span><strong>{Math.max(1, Math.min(99, marketPrices[market.ticker] || impliedPrice(market, fills)))}%</strong></button>)}
+          </aside>
+        </section>
+      ) : null}
 
       {loading ? (
         <div className="loading-panel"><Loader2 className="spin" /> Loading Sarvaex markets...</div>
@@ -1227,12 +1307,83 @@ function MarketDashboard({ loading, markets, fills, marketPrices, onSelect, sear
   )
 }
 
+function FeaturedMarketCard({ market, fills, marketPrices, onOpen }) {
+  const price = Math.max(1, Math.min(99, Number(marketPrices[market.ticker] || impliedPrice(market, fills))))
+  const yesAsk = Math.round(price)
+  const noAsk = 100 - yesAsk
+  const settlementSource = market.settlement_source || market.settlementSource || 'Not published'
+  const marketFills = fills.filter((fill) => fill.ticker === market.ticker)
+  const getData = useCallback(async (range) => {
+    const now = Date.now()
+    const rangeMs = { '1H': 3600000, '6H': 21600000, '1D': 86400000, '1W': 604800000, '1M': 2592000000, ALL: Infinity }[range] || 86400000
+    const source = marketFills
+      .map((fill, index) => ({
+        fill,
+        index,
+        price: Math.max(1, Math.min(99, Number(fill.price_ticks || fill.priceTicks || price))),
+        t: fillTimestamp(fill, index, marketFills.length, now),
+      }))
+      .filter((item) => item.t >= now - rangeMs)
+      .sort((a, b) => a.t - b.t)
+
+    const history = source.length >= 2
+      ? source.map((item) => ({ t: item.t, bid: Math.max(1, item.price - 1), ask: Math.min(99, item.price + 1) }))
+      : Array.from({ length: 7 }, (_, index) => {
+        const t = now - (6 - index) * 3600000
+        const drift = source.length ? (source[0].price - price) * (index / 6) : 0
+        const midpoint = Math.max(1, Math.min(99, price + drift))
+        return { t, bid: Math.max(1, midpoint - 1), ask: Math.min(99, midpoint + 1) }
+      })
+
+    return {
+      points: history,
+      fills: source.map((item) => ({
+        t: item.t,
+        price: item.price,
+        qty: Number(item.fill.count || item.fill.qty || 1),
+        side: chartFillSide(item.fill),
+      })),
+      events: [],
+      last: source.at(-1)?.price || price,
+      closeLabel: formatDate(market.close_at || market.closeAt || market.expected_resolution_at),
+    }
+  }, [market, marketFills, price])
+
+  return (
+    <article className="featured-market-card">
+      <div className="featured-market-head">
+        <span className="featured-category"><i style={{ '--c': scalarCardColor(market) }} />{binaryCardCategory(market)}</span>
+        <span>{formatDate(market.close_at || market.closeAt || market.expected_resolution_at)}</span>
+      </div>
+      <div className="featured-market-body">
+        <div className="featured-market-copy">
+          <span className="featured-kicker">Featured market</span>
+          <button className="featured-title" type="button" onClick={onOpen}>{cardMarketTitle(market)}</button>
+          <p className="featured-settlement"><span>Settlement source</span>{settlementSource}</p>
+          <div className="featured-price"><strong>{yesAsk}%</strong><span>implied probability</span></div>
+          <div className="featured-outcomes">
+            <button type="button" className="featured-outcome yes" onClick={onOpen}><span>Yes</span><b>{yesAsk}c</b></button>
+            <button type="button" className="featured-outcome no" onClick={onOpen}><span>No</span><b>{noAsk}c</b></button>
+          </div>
+        </div>
+        <div className="featured-market-chart">
+          <MidPriceChart key={market.ticker} getData={getData} initialRange="1D" height={242} />
+        </div>
+      </div>
+      <div className="featured-market-foot">
+        <span>{marketFills.length ? `${marketFills.length} recent fills` : 'Live market'}</span>
+        <button type="button" onClick={onOpen}>Open market <ArrowLeft size={13} className="featured-open-icon" /></button>
+      </div>
+    </article>
+  )
+}
+
 function MarketCard({ market, fills, marketPrices, section, onClick }) {
   const price = marketPrices[market.ticker] || impliedPrice(market, fills)
   const cardMarket = {
     id: market.ticker,
     question: cardMarketTitle(market),
-    category: section === 'All' ? binaryCardCategory(market) : section,
+    category: section === 'Trending' ? binaryCardCategory(market) : section,
     yes: price,
     change: 0,
     yesAsk: price,
@@ -1244,9 +1395,9 @@ function MarketCard({ market, fills, marketPrices, section, onClick }) {
 }
 
 function FuturesDashboard({ loading, futures, fills, marketPrices, onSelect, searchQuery }) {
-  const [section, setSection] = useState('All')
+  const [section, setSection] = useState('Trending')
   const rows = futures
-    .filter((market) => section === 'All' || contractSection(market) === section)
+    .filter((market) => section === 'Trending' || contractSection(market) === section)
     .filter((market) => marketMatchesSearch(market, searchQuery))
   return (
     <main className="dashboard-page">
@@ -1359,15 +1510,17 @@ function MarketDetail({ market, watchlist, onSelect, orderbook, fills, position,
 
       <aside className="trade-side">
         <OrderBook book={orderbook} market={market} />
-        <TradeTicket
-          market={market}
-          bestBid={bestBid}
-          bestAsk={bestAsk}
-          authed={authed}
-          busy={busy}
-          onTrade={onTrade}
-        />
-        <PositionSnapshot position={position} mark={last} market={market} authed={authed} />
+        <div className="trade-ticket-column">
+          <TradeTicket
+            market={market}
+            bestBid={bestBid}
+            bestAsk={bestAsk}
+            authed={authed}
+            busy={busy}
+            onTrade={onTrade}
+          />
+          <PositionSnapshot position={position} mark={last} market={market} authed={authed} />
+        </div>
       </aside>
     </main>
   )
@@ -1490,17 +1643,19 @@ function FutureDetail({ market, watchlist, watchlistFills, onSelect, orderbook, 
 
       <aside className="trade-side">
         <OrderBook book={orderbook} market={market} />
-        <FutureTradeTicket
-          key={market.ticker}
-          market={market}
-          bestBid={bestBid}
-          bestAsk={bestAsk}
-          mark={last}
-          authed={authed}
-          busy={busy}
-          onTrade={onTrade}
-        />
-        <PositionSnapshot position={position} mark={last} market={market} authed={authed} />
+        <div className="trade-ticket-column">
+          <FutureTradeTicket
+            key={market.ticker}
+            market={market}
+            bestBid={bestBid}
+            bestAsk={bestAsk}
+            mark={last}
+            authed={authed}
+            busy={busy}
+            onTrade={onTrade}
+          />
+          <PositionSnapshot position={position} mark={last} market={market} authed={authed} />
+        </div>
         <section className="position-card">
           <div className="panel-head compact"><h2>Contract spec</h2><span>Demo v1</span></div>
           <div className="position-stat-grid">
@@ -1834,7 +1989,7 @@ function PositionSnapshot({ position, mark, market, authed }) {
   )
 }
 
-function PortfolioPage({ balance, authed, busy, positions, orders, history, marketPrices, marketByTicker, selectedUser, onDeposit, onRefresh, onExitPosition }) {
+function PortfolioPage({ balance, authed, busy, positions, orders, history, marketPrices, marketByTicker, selectedUser, onDeposit, onRefresh, onExitPosition, onSelectMarket }) {
   const [workspaceView, setWorkspaceView] = useState('calendar')
   const [workspaceMetric, setWorkspaceMetric] = useState('pnl')
   const cash = balance?.cash_micro_usdc ?? balance?.cashMicroUsdc
@@ -1904,7 +2059,11 @@ function PortfolioPage({ balance, authed, busy, positions, orders, history, mark
               const qty = positionQty(position)
               return (
                 <div className="portfolio-row positions-row" key={`${position.user_id || position.userId}-${position.ticker}`}>
-                  <span>{position.ticker}</span>
+                  <span>
+                    <button className="portfolio-contract-link" type="button" onClick={() => onSelectMarket(position.ticker)}>
+                      {position.ticker}
+                    </button>
+                  </span>
                   <span>{scalar ? futuresPositionLabel(qty) : qty}</span>
                   <span>{scalar ? formatFuturePrice(market, avgPriceTicks(position)) : formatUSDC(positionAvgMicro(position))}</span>
                   <span>{mark ? (scalar ? formatFuturePrice(market, mark) : `${mark}¢`) : '--'}</span>
@@ -2402,6 +2561,30 @@ function orderRejectMessage(body) {
   if (!code && status !== 6 && status !== 'REJECTED') return ''
   const label = code ? String(code).replaceAll('_', ' ').toLowerCase() : 'order rejected'
   return reason ? `${label}: ${reason}` : label
+}
+
+function buildTradeConfirmation(order = {}, payload = {}) {
+  const statusValue = order.status ?? payload.status
+  const filledCount = Number(order.filled_count ?? order.filledCount ?? payload.filled_count ?? 0)
+  const count = Number(order.count ?? payload.count ?? 0)
+  let status = orderStatusLabel(statusValue)
+  if (count > 0 && filledCount >= count) status = 'Filled'
+  if (status === 'Unknown') status = payload.order_type === 'LIMIT' ? 'Accepted' : 'Submitted'
+
+  const side = order.side ?? payload.side
+  const action = order.action ?? payload.action
+  const direction = side === 'LONG' || side === 3
+    ? (action === 'SELL' || action === 2 ? 'Sell / Short' : 'Buy / Long')
+    : `${orderActionLabel(action)} ${orderSideLabel(side)}`
+
+  return {
+    ticker: order.ticker || payload.ticker || 'Unknown contract',
+    direction,
+    status,
+    filledCount,
+    count,
+    orderType: order.order_type || order.orderType || payload.order_type || 'MARKET',
+  }
 }
 
 function bookRowKey(level, type) {
