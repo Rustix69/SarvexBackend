@@ -1324,6 +1324,45 @@ function MarketDashboard({ loading, markets, fills, marketPrices, onSelect, sear
   )
 }
 
+function FeaturedFutureCard({ market, fills, marketPrices, onOpen, nav }) {
+  const price = Number(marketPrices[market.ticker] || impliedPrice(market, fills))
+  const min = Number(market.min_price_ticks ?? market.minPriceTicks ?? 0)
+  const max = Number(market.max_price_ticks ?? market.maxPriceTicks ?? Math.max(price, 1))
+  const marketFills = fills.filter((fill) => fill.ticker === market.ticker)
+  const settlementSource = market.settlement_source || market.settlementSource || 'Not published'
+  return (
+    <article className="featured-market-card">
+      <div className="featured-market-head">
+        <span className="featured-category"><img className="bmc-logo" src={`/SarvaeX_contract_logos/logos/${encodeURIComponent(market.ticker)}.svg`} alt="" onError={(event) => { event.currentTarget.style.display = 'none' }} />{binaryCardCategory(market)}</span>
+        <span className="featured-head-right">
+          {formatDate(market.close_at || market.closeAt || market.expected_resolution_at)}
+          {nav}
+        </span>
+      </div>
+      <div className="featured-market-body">
+        <div className="featured-market-copy">
+          <span className="featured-kicker">Featured future</span>
+          <button className="featured-title" type="button" onClick={onOpen}>{cardMarketTitle(market)}</button>
+          <p className="featured-settlement"><span>Settlement source</span>{settlementSource.split(/\s*SarvaeX oracle/)[0]}</p>
+          <div className="featured-price"><strong>{formatFuturePrice(market, price)}</strong><span>last price</span></div>
+          <p>Range {formatFuturePrice(market, min)} – {formatFuturePrice(market, max)}</p>
+          <div className="featured-outcomes">
+            <button type="button" className="featured-outcome yes" onClick={onOpen}><span>Long</span></button>
+            <button type="button" className="featured-outcome no" onClick={onOpen}><span>Short</span></button>
+          </div>
+        </div>
+        <div className="featured-market-chart featured-future-chart">
+          <KlineFutureChart fills={marketFills} market={market} period="1h" />
+        </div>
+      </div>
+      <div className="featured-market-foot">
+        <span>{marketFills.length ? `${marketFills.length} recent fills` : 'Live market'}</span>
+        <button type="button" onClick={onOpen}>Open market <ArrowLeft size={13} className="featured-open-icon" /></button>
+      </div>
+    </article>
+  )
+}
+
 function FeaturedMarketCard({ market, fills, marketPrices, onOpen, nav }) {
   const price = Math.max(1, Math.min(99, Number(marketPrices[market.ticker] || impliedPrice(market, fills))))
   const yesAsk = Math.round(price)
@@ -1414,7 +1453,7 @@ function sortSectionMarkets(markets, fills, sort) {
   return [...markets].sort((a, b) => (sort === 'Closing soon' ? closeAt(a) - closeAt(b) : score(b) - score(a)))
 }
 
-function SectionView({ section, markets, fills, marketPrices, onSelect }) {
+function SectionView({ section, markets, fills, marketPrices, onSelect, kind = 'binary' }) {
   const [filter, setFilter] = useState('')
   const [sort, setSort] = useState('Trending')
   const [featuredIndex, setFeaturedIndex] = useState(0)
@@ -1435,6 +1474,8 @@ function SectionView({ section, markets, fills, marketPrices, onSelect }) {
   const current = featured[featuredIndex % Math.max(featured.length, 1)]
   const rest = filter ? sortSectionMarkets(visible, fills, sort) : sorted.slice(featured.length)
   const pick = setFilter
+  const FeaturedCard = kind === 'future' ? FeaturedFutureCard : FeaturedMarketCard
+  const CardForKind = kind === 'future' ? FutureCard : MarketCard
   const filterButton = (key, label, count) => (
     <button type="button" key={key} className={filter === key ? 'section-filter active' : 'section-filter'} onClick={() => pick(key)}>{label}{count ? <small>{count}</small> : null}</button>
   )
@@ -1457,7 +1498,7 @@ function SectionView({ section, markets, fills, marketPrices, onSelect }) {
           </label>
         </div>
         {current ? (
-          <FeaturedMarketCard
+          <FeaturedCard
             key={current.ticker}
             market={current}
             fills={fills}
@@ -1476,7 +1517,7 @@ function SectionView({ section, markets, fills, marketPrices, onSelect }) {
         {rest.length > 0 && (
           <div className="market-grid section-grid">
             {rest.map((market, index) => (
-              <MarketCard key={market.ticker} market={market} fills={fills} marketPrices={marketPrices} index={index} section={section} onClick={() => onSelect(market.ticker)} />
+              <CardForKind key={market.ticker} market={market} fills={fills} marketPrices={marketPrices} index={index} section={section} onClick={() => onSelect(market.ticker)} />
             ))}
           </div>
         )}
@@ -1503,9 +1544,8 @@ function MarketCard({ market, fills, marketPrices, section, onClick }) {
 
 function FuturesDashboard({ loading, futures, fills, marketPrices, onSelect, searchQuery }) {
   const [section, setSection] = useState('Trending')
-  const rows = futures
-    .filter((market) => section === 'Trending' || contractSection(market) === section)
-    .filter((market) => marketMatchesSearch(market, searchQuery))
+  const matching = futures.filter((market) => marketMatchesSearch(market, searchQuery))
+  const rows = matching.filter((market) => contractSection(market) === section)
   return (
     <main className="dashboard-page">
       <style>{CARD_CSS}</style>
@@ -1515,21 +1555,21 @@ function FuturesDashboard({ loading, futures, fills, marketPrices, onSelect, sea
 
       {loading ? (
         <div className="loading-panel"><Loader2 className="spin" /> Loading Sarvaex futures...</div>
-      ) : rows.length ? (
-        <section className="market-grid">
-          {rows.map((market, index) => (
-            <FutureCard
-              key={market.ticker}
-              market={market}
-              fills={fills}
-              marketPrices={marketPrices}
-              index={index}
-              onClick={() => onSelect(market.ticker)}
-            />
-          ))}
-        </section>
-      ) : (
+      ) : !matching.length ? (
         <div className="loading-panel">{searchQuery.trim() ? 'No futures match your search.' : 'No numeric futures are open yet.'}</div>
+      ) : section === 'Trending' ? (
+        buildTrendingSections(matching, fills).map((group) => (
+          <section className="trending-section" key={group.section} aria-label={group.section}>
+            <h2 className="trending-section-title">{group.section}</h2>
+            <div className="market-grid">
+              {group.markets.map((market, index) => (
+                <FutureCard key={market.ticker} market={market} fills={fills} marketPrices={marketPrices} index={index} onClick={() => onSelect(market.ticker)} />
+              ))}
+            </div>
+          </section>
+        ))
+      ) : (
+        <SectionView key={section} kind="future" section={section} markets={rows} fills={fills} marketPrices={marketPrices} onSelect={onSelect} />
       )}
     </main>
   )
