@@ -694,7 +694,7 @@ function App() {
     }
   }
 
-  const handleExitPosition = async (position, limitTicks) => {
+  const handleExitPosition = async (position, limitTicks, exitCount) => {
     const ticker = position?.ticker
     const qty = positionQty(position)
     if (!ticker || !qty) return false
@@ -714,7 +714,7 @@ function App() {
       }
       if (!priceTicks) throw new Error(`No exit liquidity available for ${ticker}`)
 
-      let remaining = Math.abs(qty)
+      let remaining = Math.min(Math.abs(qty), Math.floor(Number(exitCount)) || Math.abs(qty))
       const maxChunk = scalar ? remaining : maxExitOrderCount(action, priceTicks)
       let chunkIndex = 0
 
@@ -740,7 +740,7 @@ function App() {
         if (rejected) throw new Error(rejected)
         remaining -= count
         chunkIndex += 1
-        if (remaining <= 0 && limitTicks) setTradeConfirmation(buildTradeConfirmation(result?.order || result, payload))
+        if (remaining <= 0 && (limitTicks || exitCount)) setTradeConfirmation(buildTradeConfirmation(result?.order || result, payload))
       }
 
       await refreshAll()
@@ -2279,7 +2279,7 @@ function PortfolioPage({ balance, authed, busy, positions, orders, history, mark
                     market={market}
                     mark={mark}
                     busy={busy}
-                    onSubmit={async (ticks) => { if (await onExitPosition(position, ticks)) setExitTicker('') }}
+                    onSubmit={async (ticks, count) => { if (await onExitPosition(position, ticks, count)) setExitTicker('') }}
                     onCancel={() => setExitTicker('')}
                   />
                 ) : null}
@@ -2306,14 +2306,27 @@ function PortfolioPage({ balance, authed, busy, positions, orders, history, mark
 function ExitPriceForm({ position, market, mark, busy, onSubmit, onCancel }) {
   const scalar = isFutureMarket(market)
   const qty = positionQty(position)
+  const maxQty = Math.abs(qty)
   const action = qty > 0 ? 'Sell' : 'Buy'
   const meta = scalar ? futureMeta(market) : null
   const initial = mark ? (scalar ? (mark / meta.divider).toFixed(meta.decimals) : String(Math.round(mark))) : ''
   const [value, setValue] = useState(initial)
+  const [count, setCount] = useState(String(maxQty))
   const [issue, setIssue] = useState('')
+
+  const parsedCount = () => {
+    const n = Number(count)
+    if (!Number.isInteger(n) || n < 1 || n > maxQty) {
+      setIssue(`Quantity must be a whole number from 1 to ${maxQty}.`)
+      return 0
+    }
+    return n
+  }
 
   const submit = (event) => {
     event.preventDefault()
+    const n = parsedCount()
+    if (!n) return
     let ticks
     if (scalar) {
       ticks = parseFutureInput(market, value)
@@ -2324,13 +2337,27 @@ function ExitPriceForm({ position, market, mark, busy, onSubmit, onCancel }) {
       if (!Number.isInteger(ticks) || ticks < 1 || ticks > 99) return setIssue('Enter a whole-number price between 1¢ and 99¢.')
     }
     setIssue('')
-    onSubmit(ticks)
+    onSubmit(ticks, n)
+  }
+
+  const exitAtMarket = () => {
+    const n = parsedCount()
+    if (n) onSubmit(0, n)
   }
 
   return (
     <form className="exit-price-form" onSubmit={submit}>
       <label>
-        <span>{action} {Math.abs(qty)} {position.ticker} at</span>
+        <span>{action}</span>
+        <input
+          className="exit-qty-input"
+          type="text"
+          inputMode="numeric"
+          value={count}
+          aria-label="Exit quantity"
+          onChange={(event) => { setCount(event.target.value); setIssue('') }}
+        />
+        <span>of {maxQty} {position.ticker} at</span>
         <input
           type="text"
           inputMode="decimal"
@@ -2343,7 +2370,7 @@ function ExitPriceForm({ position, market, mark, busy, onSubmit, onCancel }) {
         {!scalar && <em>¢</em>}
       </label>
       <button className="exit-place-btn" type="submit" disabled={busy || !value.trim()}>Place exit order</button>
-      <button className="exit-market-btn" type="button" disabled={busy} onClick={() => onSubmit(0)}>Exit at market</button>
+      <button className="exit-market-btn" type="button" disabled={busy} onClick={exitAtMarket}>Exit at market</button>
       <button className="exit-close-btn" type="button" onClick={onCancel}>Close</button>
       {issue ? <p className="exit-price-issue" role="alert">{issue}</p> : null}
     </form>

@@ -1758,3 +1758,4 @@ body { background: #111113; }
 .cancel-order-btn { padding: 4px 10px; border: 1px solid #75405a; border-radius: 4px; background: transparent; color: #ed83aa; font: 600 11px "Merriweather", Georgia, serif; cursor: pointer; }
 .cancel-order-btn:hover:not(:disabled) { background: #422636; }
 .cancel-order-btn:disabled { opacity: .5; cursor: default; }
+.exit-price-form .exit-qty-input { width: 64px; text-align: center; }
