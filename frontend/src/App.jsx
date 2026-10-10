@@ -1,5 +1,5 @@
 /* eslint-disable react-hooks/set-state-in-effect */
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
   Activity,
   ArrowLeft,
@@ -694,21 +694,24 @@ function App() {
     }
   }
 
-  const handleExitPosition = async (position) => {
+  const handleExitPosition = async (position, limitTicks) => {
     const ticker = position?.ticker
     const qty = positionQty(position)
-    if (!ticker || !qty) return
+    if (!ticker || !qty) return false
 
     setBusy(true)
     setError('')
     try {
-      const book = await api(`/v1/markets/${ticker}/orderbook?depth=1`)
-      const bestBid = Number(book?.bids?.[0]?.price_ticks || book?.bids?.[0]?.priceTicks || 0)
-      const bestAsk = Number(book?.asks?.[0]?.price_ticks || book?.asks?.[0]?.priceTicks || 0)
       const market = marketByTicker[ticker]
       const scalar = isFutureMarket(market)
       const action = qty > 0 ? 'SELL' : 'BUY'
-      const priceTicks = action === 'SELL' ? bestBid : bestAsk
+      let priceTicks = Number(limitTicks || 0)
+      if (!priceTicks) {
+        const book = await api(`/v1/markets/${ticker}/orderbook?depth=1`)
+        const bestBid = Number(book?.bids?.[0]?.price_ticks || book?.bids?.[0]?.priceTicks || 0)
+        const bestAsk = Number(book?.asks?.[0]?.price_ticks || book?.asks?.[0]?.priceTicks || 0)
+        priceTicks = action === 'SELL' ? bestBid : bestAsk
+      }
       if (!priceTicks) throw new Error(`No exit liquidity available for ${ticker}`)
 
       let remaining = Math.abs(qty)
@@ -718,26 +721,52 @@ function App() {
       while (remaining > 0) {
         const count = Math.min(remaining, maxChunk)
         const id = `exit-${Date.now()}-${chunkIndex}-${Math.random().toString(16).slice(2)}`
+        const payload = {
+          client_order_id: id,
+          ticker,
+          side: scalar ? 'LONG' : 'YES',
+          action,
+          price_ticks: scalar ? clampFutureTicks(market, priceTicks) : Math.max(1, Math.min(99, Math.round(priceTicks))),
+          count,
+          tif: 'GTC',
+          reduce_only: true,
+        }
         const result = await api('/v1/orders', {
           method: 'POST',
           headers: { 'Idempotency-Key': id },
-          body: JSON.stringify({
-            client_order_id: id,
-            ticker,
-            side: scalar ? 'LONG' : 'YES',
-            action,
-            price_ticks: scalar ? clampFutureTicks(market, priceTicks) : Math.max(1, Math.min(99, Math.round(priceTicks))),
-            count,
-            tif: 'GTC',
-            reduce_only: true,
-          }),
+          body: JSON.stringify(payload),
         })
         const rejected = orderRejectMessage(result)
         if (rejected) throw new Error(rejected)
         remaining -= count
         chunkIndex += 1
+        if (remaining <= 0 && limitTicks) setTradeConfirmation(buildTradeConfirmation(result?.order || result, payload))
       }
 
+      await refreshAll()
+      return true
+    } catch (err) {
+      setError(err.message)
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleCancelOrder = async (order) => {
+    const orderId = order?.order_id || order?.orderId
+    if (!orderId) return
+    setBusy(true)
+    setError('')
+    try {
+      const id = `cancel-${Date.now()}-${Math.random().toString(16).slice(2)}`
+      const result = await api(`/v1/orders/${encodeURIComponent(orderId)}/cancel`, {
+        method: 'POST',
+        headers: { 'Idempotency-Key': id },
+        body: JSON.stringify({}),
+      })
+      const rejected = orderRejectMessage(result)
+      if (rejected) throw new Error(rejected)
       await refreshAll()
     } catch (err) {
       setError(err.message)
@@ -849,6 +878,7 @@ function App() {
           onDeposit={handleDeposit}
           onRefresh={refreshPrivate}
           onExitPosition={handleExitPosition}
+          onCancelOrder={handleCancelOrder}
           onSelectMarket={handleMarketSelect}
         />
       ) : activeView === 'health' ? (
@@ -2149,7 +2179,8 @@ function PositionSnapshot({ position, mark, market, authed }) {
   )
 }
 
-function PortfolioPage({ balance, authed, busy, positions, orders, history, marketPrices, marketByTicker, selectedUser, onDeposit, onRefresh, onExitPosition, onSelectMarket }) {
+function PortfolioPage({ balance, authed, busy, positions, orders, history, marketPrices, marketByTicker, selectedUser, onDeposit, onRefresh, onExitPosition, onCancelOrder, onSelectMarket }) {
+  const [exitTicker, setExitTicker] = useState('')
   const [workspaceView, setWorkspaceView] = useState('calendar')
   const [workspaceMetric, setWorkspaceMetric] = useState('pnl')
   const cash = balance?.cash_micro_usdc ?? balance?.cashMicroUsdc
@@ -2218,7 +2249,8 @@ function PortfolioPage({ balance, authed, busy, positions, orders, history, mark
               const pnl = livePnlMicro(position, mark, market)
               const qty = positionQty(position)
               return (
-                <div className="portfolio-row positions-row" key={`${position.user_id || position.userId}-${position.ticker}`}>
+                <Fragment key={`${position.user_id || position.userId}-${position.ticker}`}>
+                <div className="portfolio-row positions-row">
                   <span>
                     <button className="portfolio-contract-link" type="button" onClick={() => onSelectMarket(position.ticker)}>
                       {position.ticker}
@@ -2234,12 +2266,24 @@ function PortfolioPage({ balance, authed, busy, positions, orders, history, mark
                       className="exit-position-btn"
                       type="button"
                       disabled={!authed || busy || !qty}
-                      onClick={() => onExitPosition(position)}
+                      onClick={() => setExitTicker(exitTicker === position.ticker ? '' : position.ticker)}
                     >
                       {busy ? <Loader2 className="spin" size={14} /> : <LogOut size={14} />} Exit
                     </button>
                   </span>
                 </div>
+                {exitTicker === position.ticker ? (
+                  <ExitPriceForm
+                    key={position.ticker}
+                    position={position}
+                    market={market}
+                    mark={mark}
+                    busy={busy}
+                    onSubmit={async (ticks) => { if (await onExitPosition(position, ticks)) setExitTicker('') }}
+                    onCancel={() => setExitTicker('')}
+                  />
+                ) : null}
+                </Fragment>
               )
             }) : <div className="portfolio-empty">No positions yet.</div>}
           </div>
@@ -2248,14 +2292,61 @@ function PortfolioPage({ balance, authed, busy, positions, orders, history, mark
         <div className="portfolio-panel">
           <div className="panel-head"><h2>Orders</h2><span>{orders.length} total</span></div>
           <div className="portfolio-table">
-            <div className="portfolio-row orders-row header"><span>Ticker</span><span>Trade</span><span>Price</span><span>Qty</span><span>Filled</span><span>Status</span></div>
+            <div className="portfolio-row orders-row header"><span>Ticker</span><span>Trade</span><span>Price</span><span>Qty</span><span>Filled</span><span>Status</span><span>Action</span></div>
             {orders.length ? orders.map((order) => (
-              <PortfolioOrderRow key={order.order_id || order.orderId} order={order} market={marketByTicker[order.ticker]} />
+              <PortfolioOrderRow key={order.order_id || order.orderId} order={order} market={marketByTicker[order.ticker]} busy={busy} authed={authed} onCancel={() => onCancelOrder(order)} />
             )) : <div className="portfolio-empty">No open orders.</div>}
           </div>
         </div>
       </section>
     </main>
+  )
+}
+
+function ExitPriceForm({ position, market, mark, busy, onSubmit, onCancel }) {
+  const scalar = isFutureMarket(market)
+  const qty = positionQty(position)
+  const action = qty > 0 ? 'Sell' : 'Buy'
+  const meta = scalar ? futureMeta(market) : null
+  const initial = mark ? (scalar ? (mark / meta.divider).toFixed(meta.decimals) : String(Math.round(mark))) : ''
+  const [value, setValue] = useState(initial)
+  const [issue, setIssue] = useState('')
+
+  const submit = (event) => {
+    event.preventDefault()
+    let ticks
+    if (scalar) {
+      ticks = parseFutureInput(market, value)
+      const problem = futureLimitPriceIssue(market, ticks)
+      if (problem) return setIssue(problem.replace('Entry price', 'Exit price'))
+    } else {
+      ticks = Number(value)
+      if (!Number.isInteger(ticks) || ticks < 1 || ticks > 99) return setIssue('Enter a whole-number price between 1¢ and 99¢.')
+    }
+    setIssue('')
+    onSubmit(ticks)
+  }
+
+  return (
+    <form className="exit-price-form" onSubmit={submit}>
+      <label>
+        <span>{action} {Math.abs(qty)} {position.ticker} at</span>
+        <input
+          type="text"
+          inputMode="decimal"
+          value={value}
+          autoFocus
+          aria-label="Exit price"
+          placeholder={scalar ? `Price (${meta.prefix || ''}${meta.suffix || ''})` : 'Price (¢)'}
+          onChange={(event) => { setValue(event.target.value); setIssue('') }}
+        />
+        {!scalar && <em>¢</em>}
+      </label>
+      <button className="exit-place-btn" type="submit" disabled={busy || !value.trim()}>Place exit order</button>
+      <button className="exit-market-btn" type="button" disabled={busy} onClick={() => onSubmit(0)}>Exit at market</button>
+      <button className="exit-close-btn" type="button" onClick={onCancel}>Close</button>
+      {issue ? <p className="exit-price-issue" role="alert">{issue}</p> : null}
+    </form>
   )
 }
 
@@ -2376,7 +2467,7 @@ function buildPortfolioCurve(history, orders, metric) {
   })
 }
 
-function PortfolioOrderRow({ order, market }) {
+function PortfolioOrderRow({ order, market, busy, authed, onCancel }) {
   const scalar = isFutureMarket(market)
   const price = order.avg_fill_price_ticks || order.avgFillPriceTicks || order.price_ticks || order.priceTicks
   const total = Number(order.count ?? 0)
@@ -2390,6 +2481,7 @@ function PortfolioOrderRow({ order, market }) {
       <span>{total || '—'}</span>
       <span>{total ? `${filled}/${total}` : '—'}</span>
       <span>{formatPortfolioOrderStatus(order)}</span>
+      <span>{activeOrderStatus(order.status) ? <button className="cancel-order-btn" type="button" disabled={!authed || busy} onClick={onCancel}>Cancel</button> : null}</span>
     </div>
   )
 }

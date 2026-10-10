@@ -966,7 +966,7 @@ button:disabled {
 }
 
 .portfolio-row.orders-row {
-  grid-template-columns: minmax(0, 1.3fr) minmax(80px, 0.7fr) minmax(70px, 0.6fr) minmax(48px, 0.4fr) minmax(64px, 0.5fr) minmax(96px, 0.9fr);
+  grid-template-columns: minmax(0, 1.3fr) minmax(80px, 0.7fr) minmax(70px, 0.6fr) minmax(48px, 0.4fr) minmax(64px, 0.5fr) minmax(96px, 0.9fr) minmax(70px, 0.5fr);
 }
 
 .portfolio-row.header {
@@ -1746,3 +1746,15 @@ body { background: #111113; }
 .trending-section-title button { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; letter-spacing: inherit; cursor: pointer; }
 .trending-section-title button svg { color: #8b8898; transition: transform .15s, color .15s; }
 .trending-section-title button:hover svg { color: #3fd6b9; transform: translateX(3px); }
+
+.exit-price-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #2d2d33; background: #202025; }
+.exit-price-form label { display: flex; align-items: center; gap: 8px; color: #b8b7bf; font: 12px "Geist Mono", ui-monospace, monospace; }
+.exit-price-form input { width: 110px; padding: 7px 9px; border: 1px solid #38383f; border-radius: 4px; background: #131417; color: #f1eff5; font: 13px "Geist Mono", ui-monospace, monospace; }
+.exit-price-form em { margin-left: -4px; color: #77767f; font-style: normal; }
+.exit-price-form button { padding: 7px 12px; border: 1px solid #38383f; border-radius: 4px; background: #242429; color: #dedce5; font: 600 12px "Merriweather", Georgia, serif; cursor: pointer; }
+.exit-price-form button:disabled { opacity: .5; cursor: default; }
+.exit-price-form .exit-place-btn { border-color: #2f756b; background: #1e4140; color: #70d9cc; }
+.exit-price-issue { flex-basis: 100%; margin: 0; color: #ff80ac; font: 11px "Geist Mono", ui-monospace, monospace; }
+.cancel-order-btn { padding: 4px 10px; border: 1px solid #75405a; border-radius: 4px; background: transparent; color: #ed83aa; font: 600 11px "Merriweather", Georgia, serif; cursor: pointer; }
+.cancel-order-btn:hover:not(:disabled) { background: #422636; }
+.cancel-order-btn:disabled { opacity: .5; cursor: default; }
