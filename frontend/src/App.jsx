@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   CircleDollarSign,
   ChevronDown,
+  ChevronRight,
   Clock3,
   Copy,
   Gift,
@@ -1266,6 +1267,7 @@ function buildTrendingMarkets(markets, fills) {
 
 function MarketDashboard({ loading, markets, fills, marketPrices, onSelect, searchQuery }) {
   const [section, setSection] = useState('Trending')
+  const onOpenSection = setSection
   const filteredMarkets = markets.filter((market) => marketMatchesSearch(market, searchQuery))
   const rows = section === 'Trending'
     ? buildTrendingMarkets(filteredMarkets, fills)
@@ -1300,7 +1302,7 @@ function MarketDashboard({ loading, markets, fills, marketPrices, onSelect, sear
         section === 'Trending' ? (
           buildTrendingSections(filteredMarkets, fills).map((group) => (
             <section className="trending-section" key={group.section} aria-label={group.section}>
-              <h2 className="trending-section-title">{group.section}</h2>
+              <h2 className="trending-section-title"><button type="button" onClick={() => onOpenSection(group.section)}>{group.section}<ChevronRight size={22} aria-hidden="true" /></button></h2>
               <div className="market-grid">
                 {group.markets.map((market, index) => (
                   <MarketCard
@@ -1333,7 +1335,7 @@ function FeaturedFutureCard({ market, fills, marketPrices, onOpen, nav }) {
   return (
     <article className="featured-market-card">
       <div className="featured-market-head">
-        <span className="featured-category"><img className="bmc-logo" src={`/SarvaeX_contract_logos/logos/${encodeURIComponent(market.ticker)}.svg`} alt="" onError={(event) => { event.currentTarget.style.display = 'none' }} />{binaryCardCategory(market)}</span>
+        <span className="featured-category"><img className="featured-logo-sm" src={`/SarvaeX_contract_logos/logos/${encodeURIComponent(market.ticker)}.svg`} alt="" onError={(event) => { event.currentTarget.style.display = 'none' }} />{binaryCardCategory(market)}</span>
         <span className="featured-head-right">
           {formatDate(market.close_at || market.closeAt || market.expected_resolution_at)}
           {nav}
@@ -1544,6 +1546,7 @@ function MarketCard({ market, fills, marketPrices, section, onClick }) {
 
 function FuturesDashboard({ loading, futures, fills, marketPrices, onSelect, searchQuery }) {
   const [section, setSection] = useState('Trending')
+  const onOpenSection = setSection
   const matching = futures.filter((market) => marketMatchesSearch(market, searchQuery))
   const rows = matching.filter((market) => contractSection(market) === section)
   return (
@@ -1560,7 +1563,7 @@ function FuturesDashboard({ loading, futures, fills, marketPrices, onSelect, sea
       ) : section === 'Trending' ? (
         buildTrendingSections(matching, fills).map((group) => (
           <section className="trending-section" key={group.section} aria-label={group.section}>
-            <h2 className="trending-section-title">{group.section}</h2>
+            <h2 className="trending-section-title"><button type="button" onClick={() => onOpenSection(group.section)}>{group.section}<ChevronRight size={22} aria-hidden="true" /></button></h2>
             <div className="market-grid">
               {group.markets.map((market, index) => (
                 <FutureCard key={market.ticker} market={market} fills={fills} marketPrices={marketPrices} index={index} onClick={() => onSelect(market.ticker)} />
@@ -1583,10 +1586,13 @@ function FutureCard({ market, fills, marketPrices, onClick }) {
   return (
     <article className="smc" role="button" tabIndex="0" onClick={onClick} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onClick() } }}>
       <div className="smc-top">
-        <div className="smc-title"><img className="smc-logo" src={`/SarvaeX_contract_logos/logos/${encodeURIComponent(market.ticker)}.svg`} alt="" loading="lazy" onError={(event) => { event.currentTarget.style.display = 'none' }} /><span>{cardMarketTitle(market)}</span></div>
+        <span className="smc-cat">
+          <img className="smc-logo" src={`/SarvaeX_contract_logos/logos/${encodeURIComponent(market.ticker)}.svg`} alt="" loading="lazy" onError={(event) => { event.currentTarget.style.display = 'none' }} />
+          {binaryCardCategory(market)}
+        </span>
         <span className="smc-exp">{formatDate(market.close_at || market.closeAt || market.expected_resolution_at)}</span>
       </div>
-      <div className="smc-sub">{market.underlying || market.question || market.ticker}</div>
+      <div className="smc-q" title={cardMarketTitle(market)}>{cardMarketTitle(market)}</div>
       <div className="smc-val"><b>{formatFuturePrice(market, price)}</b></div>
       <div className="smc-track"><div className="smc-fill" style={{ width: `${position}%` }} /><div className="smc-mark" style={{ left: `${position}%` }} /></div>
       <div className="smc-ends"><span>{formatFuturePrice(market, min)}</span><span>{formatFuturePrice(market, max)}</span></div>
@@ -2235,7 +2241,7 @@ function PortfolioPage({ balance, authed, busy, positions, orders, history, mark
         <div className="portfolio-panel">
           <div className="panel-head"><h2>Orders</h2><span>{orders.length} total</span></div>
           <div className="portfolio-table">
-            <div className="portfolio-row header"><span>Ticker</span><span>Trade</span><span>Price</span><span>Status</span></div>
+            <div className="portfolio-row orders-row header"><span>Ticker</span><span>Trade</span><span>Price</span><span>Qty</span><span>Filled</span><span>Status</span></div>
             {orders.length ? orders.map((order) => (
               <PortfolioOrderRow key={order.order_id || order.orderId} order={order} market={marketByTicker[order.ticker]} />
             )) : <div className="portfolio-empty">No open orders.</div>}
@@ -2366,11 +2372,16 @@ function buildPortfolioCurve(history, orders, metric) {
 function PortfolioOrderRow({ order, market }) {
   const scalar = isFutureMarket(market)
   const price = order.avg_fill_price_ticks || order.avgFillPriceTicks || order.price_ticks || order.priceTicks
+  const total = Number(order.count ?? 0)
+  const filledRaw = Number(order.filled_count ?? order.filledCount ?? 0)
+  const filled = orderStatusLabel(order.status) === 'Filled' && !filledRaw ? total : filledRaw
   return (
-    <div className="portfolio-row">
+    <div className="portfolio-row orders-row">
       <span>{order.ticker}</span>
       <span>{scalar ? futuresOrderLabel(order) : `${orderActionLabel(order.action)} ${orderSideLabel(order.side)}`}</span>
       <span>{scalar ? formatFuturePrice(market, price) : `${price}¢`}</span>
+      <span>{total || '—'}</span>
+      <span>{total ? `${filled}/${total}` : '—'}</span>
       <span>{formatPortfolioOrderStatus(order)}</span>
     </div>
   )

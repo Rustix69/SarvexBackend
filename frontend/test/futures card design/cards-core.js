@@ -6,13 +6,15 @@ export const CARD_CSS = `
   color:#e8e8ea;text-decoration:none;min-width:0;transition:border-color .15s;font-family:"Source Serif 4",Georgia,serif}
 .smc:hover{border-color:#3a3a44}
 .smc:focus-visible{outline:2px solid #6d5ce8;outline-offset:2px}
-.smc-top{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+.smc-top{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.smc-cat{display:inline-flex;align-items:center;gap:7px;min-width:0;font:12px "IBM Plex Mono",ui-monospace,monospace;color:#6f6f78;white-space:nowrap}
+.smc-q{margin-top:10px;font-size:15.5px;font-weight:600;line-height:1.35;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .smc-title{font-size:16px;font-weight:600;line-height:1.3;display:flex;align-items:baseline;gap:8px;min-width:0}
-.smc-logo{width:28px;height:28px;border-radius:7px;flex:none;align-self:center}
+.smc-logo{width:22px;height:22px;border-radius:6px;flex:none}
 .smc-dot{width:7px;height:7px;border-radius:50%;background:var(--c);flex:none;transform:translateY(-2px)}
 .smc-exp{font:12px "IBM Plex Mono",ui-monospace,monospace;color:#6f6f78;white-space:nowrap}
 .smc-sub{font-size:13px;color:#7d7d86;margin:4px 0 0 15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.smc-val{display:flex;align-items:baseline;gap:10px;margin:22px 0 14px}
+.smc-val{display:flex;align-items:baseline;gap:10px;margin:auto 0 14px;padding-top:18px}
 .smc-val b{font:500 28px/1 "IBM Plex Mono",ui-monospace,monospace;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
 .smc-chg{font:12px "IBM Plex Mono",ui-monospace,monospace;color:#6f6f78}
 .smc-chg.up{color:#2bb3a0}.smc-chg.down{color:#d0496a}
