@@ -152,6 +152,7 @@ function App() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [tradeConfirmation, setTradeConfirmation] = useState(null)
+  const closeTradeConfirmation = useCallback(() => setTradeConfirmation(null), [])
   const [authOpen, setAuthOpen] = useState(false)
   const [authMode, setAuthMode] = useState('login')
   const [activeView, setActiveView] = useState(() => viewFromPath(window.location.pathname))
@@ -872,7 +873,7 @@ function App() {
         />
       )}
       {authOpen ? <AuthDialog mode={authMode} busy={busy} error={error} onClose={() => setAuthOpen(false)} onModeChange={setAuthMode} onSubmit={authenticate} /> : null}
-      {tradeConfirmation ? <TradeConfirmation confirmation={tradeConfirmation} onClose={() => setTradeConfirmation(null)} /> : null}
+      {tradeConfirmation ? <TradeConfirmation confirmation={tradeConfirmation} onClose={closeTradeConfirmation} /> : null}
     </div>
   )
 }
@@ -991,10 +992,17 @@ function TradeConfirmation({ confirmation, onClose }) {
   const partial = confirmation.status === 'Partial'
   const pending = ['Pending', 'Open', 'Accepted'].includes(confirmation.status)
   const heading = filled ? 'Trade filled' : partial ? 'Partially filled' : pending ? 'Order placed' : 'Order update'
+  const [paused, setPaused] = useState(false)
+
+  useEffect(() => {
+    if (paused) return undefined
+    const timer = setTimeout(onClose, 7000)
+    return () => clearTimeout(timer)
+  }, [confirmation, paused, onClose])
 
   return (
-    <div className="trade-confirmation-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className={`trade-confirmation ${filled ? 'filled' : pending ? 'pending' : 'updated'}`} role="dialog" aria-modal="true" aria-labelledby="trade-confirmation-title">
+    <div className="trade-confirmation-backdrop" role="presentation">
+      <section className={`trade-confirmation ${filled ? 'filled' : pending ? 'pending' : 'updated'}`} role="status" aria-live="polite" aria-labelledby="trade-confirmation-title" onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}>
         <div className="trade-confirmation-icon"><CheckCircle2 size={22} /></div>
         <div className="trade-confirmation-content">
           <div className="trade-confirmation-heading">
@@ -1011,7 +1019,6 @@ function TradeConfirmation({ confirmation, onClose }) {
             <span>Order type <b>{confirmation.orderType}</b></span>
           </div>
           {pending ? <p className="trade-confirmation-note">This order is resting in the market. We will update this confirmation when it fills.</p> : null}
-          <button className="trade-confirmation-close" type="button" onClick={onClose}>Done</button>
         </div>
       </section>
     </div>
