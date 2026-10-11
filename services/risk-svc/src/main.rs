@@ -2,10 +2,12 @@
 
 use anyhow::{Context, Result};
 use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::get, Json, Router};
+mod margin_exec;
 mod portfolio;
 
 use portfolio::{ContractRow, EventExposure, EventRow};
 use sarvex_contracts::sarvex::v1::{
+    ledger_client::LedgerClient,
     ref_data_client::RefDataClient,
     risk_server::{Risk, RiskServer},
     AccountMargin, Action, ApplyFillRequest, ApplyFillResponse, ContractKind, ContractState,
@@ -27,6 +29,10 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 struct RiskService {
     pool: PgPool,
     refdata: RefDataClient<Channel>,
+    ledger: LedgerClient<Channel>,
+    /// `PORTFOLIO_MARGIN_ENABLED`: accept new PORTFOLIO orders. Fills and releases
+    /// for orders already reserved are always processed.
+    portfolio_enabled: bool,
 }
 
 #[derive(Clone)]
@@ -45,6 +51,12 @@ async fn main() -> Result<()> {
     let refdata_addr =
         env::var("REFDATA_ADDR").unwrap_or_else(|_| "http://127.0.0.1:50051".to_owned());
     let refdata = RefDataClient::new(Endpoint::from_shared(refdata_addr)?.connect_lazy());
+    let ledger_addr =
+        env::var("LEDGER_ADDR").unwrap_or_else(|_| "http://127.0.0.1:50052".to_owned());
+    let ledger = LedgerClient::new(Endpoint::from_shared(ledger_addr)?.connect_lazy());
+    let portfolio_enabled = env::var("PORTFOLIO_MARGIN_ENABLED")
+        .map(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "yes"))
+        .unwrap_or(false);
     let grpc_port = env::var("GRPC_PORT").unwrap_or_else(|_| "50053".to_owned());
     let http_port = env::var("HTTP_PORT").unwrap_or_else(|_| "8082".to_owned());
     let grpc_addr: SocketAddr = format!("0.0.0.0:{grpc_port}").parse()?;
@@ -52,7 +64,10 @@ async fn main() -> Result<()> {
     let service = RiskService {
         pool: pool.clone(),
         refdata,
+        ledger,
+        portfolio_enabled,
     };
+    tokio::spawn(run_margin_reconciler(service.clone()));
     let http_state = HealthState { pool };
     let http = tokio::spawn(run_http(http_addr, http_state));
     let grpc = tokio::spawn(
@@ -65,6 +80,17 @@ async fn main() -> Result<()> {
         result = grpc => result??,
     }
     Ok(())
+}
+
+/// Detects and corrects drift between the ledger's MARGIN accounts and `risk.event_margin`.
+async fn run_margin_reconciler(service: RiskService) {
+    let mut suspects = std::collections::HashMap::new();
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        if let Err(error) = service.reconcile_margin(&mut suspects).await {
+            tracing::warn!(error = %error.message(), "margin reconciliation failed");
+        }
+    }
 }
 
 async fn run_http(addr: SocketAddr, state: HealthState) -> Result<()> {
@@ -305,7 +331,7 @@ impl Risk for RiskService {
         let (events, contracts) = self.load_event_refdata(&event_tickers).await?;
         let mut response = AccountMargin {
             user_id,
-            mode: MARGIN_MODE.to_owned(),
+            mode: MARGIN_MODE_SHADOW.to_owned(),
             ..Default::default()
         };
         for (event_ticker, exposure) in &exposures {
@@ -325,6 +351,9 @@ impl Risk for RiskService {
                     .ok_or_else(|| Status::internal("margin total overflow"))?;
             }
             response.events.push(summary);
+        }
+        if response.events.iter().any(|e| e.margin_model == "PORTFOLIO") {
+            response.mode = MARGIN_MODE_LIVE.to_owned();
         }
         response.savings_micro_usdc =
             response.total_standalone_micro_usdc - response.total_margin_micro_usdc;
@@ -411,34 +440,35 @@ impl Risk for RiskService {
 
     async fn reserve_order(
         &self,
-        _request: Request<ReserveOrderRequest>,
+        request: Request<ReserveOrderRequest>,
     ) -> Result<Response<MarginDecision>, Status> {
-        Err(not_live())
+        self.reserve_order_impl(request.into_inner())
+            .await
+            .map(Response::new)
     }
 
     async fn release_order(
         &self,
-        _request: Request<ReleaseOrderRequest>,
+        request: Request<ReleaseOrderRequest>,
     ) -> Result<Response<MarginDecision>, Status> {
-        Err(not_live())
+        self.release_order_impl(request.into_inner())
+            .await
+            .map(Response::new)
     }
 
     async fn apply_fill(
         &self,
-        _request: Request<ApplyFillRequest>,
+        request: Request<ApplyFillRequest>,
     ) -> Result<Response<ApplyFillResponse>, Status> {
-        Err(not_live())
+        self.apply_fill_impl(request.into_inner())
+            .await
+            .map(Response::new)
     }
 }
 
-/// Cross margin is computed from live positions and orders, but no money moves yet.
-const MARGIN_MODE: &str = "SHADOW";
-
-fn not_live() -> Status {
-    Status::unimplemented(
-        "cross margin execution (ReserveOrder/ReleaseOrder/ApplyFill) is implementation phase 3; no PORTFOLIO event is live",
-    )
-}
+/// ISOLATED events are only previewed (SHADOW); PORTFOLIO events hold real margin (LIVE).
+const MARGIN_MODE_SHADOW: &str = "SHADOW";
+const MARGIN_MODE_LIVE: &str = "LIVE";
 
 fn missing_event(event_ticker: &str) -> EventRow {
     EventRow {
@@ -465,7 +495,7 @@ impl RiskService {
     ) -> Result<BTreeMap<String, EventExposure>, Status> {
         let mut exposures: BTreeMap<String, EventExposure> = BTreeMap::new();
         let positions = sqlx::query(
-            "SELECT p.ticker, c.event_ticker, p.net_qty FROM position.positions p JOIN refdata.contracts c ON c.ticker = p.ticker WHERE p.user_id = $1 AND p.net_qty <> 0 AND ($2::TEXT IS NULL OR c.event_ticker = $2) ORDER BY p.ticker",
+            "SELECT p.ticker, c.event_ticker, p.net_qty FROM position.positions p JOIN refdata.contracts c ON c.ticker = p.ticker WHERE p.user_id = $1 AND p.net_qty <> 0 AND ($2::TEXT IS NULL OR c.event_ticker = $2) AND c.event_ticker NOT IN (SELECT event_ticker FROM refdata.events WHERE margin_model = 'PORTFOLIO') ORDER BY p.ticker",
         )
         .bind(user_id)
         .bind(event_ticker)
@@ -480,7 +510,7 @@ impl RiskService {
                 .push((row.get("ticker"), row.get("net_qty")));
         }
         let orders = sqlx::query(
-            "SELECT o.ticker, c.event_ticker, o.side, o.action, o.price_ticks, GREATEST(o.count - o.filled_count - o.cancelled_count - o.expired_count, 0)::BIGINT AS remaining FROM orders.orders o JOIN refdata.contracts c ON c.ticker = o.ticker WHERE o.user_id = $1 AND o.status IN ('PENDING','OPEN','PARTIAL') AND ($2::TEXT IS NULL OR c.event_ticker = $2) ORDER BY o.created_at, o.order_id",
+            "SELECT o.ticker, c.event_ticker, o.side, o.action, o.price_ticks, GREATEST(o.count - o.filled_count - o.cancelled_count - o.expired_count, 0)::BIGINT AS remaining FROM orders.orders o JOIN refdata.contracts c ON c.ticker = o.ticker WHERE o.user_id = $1 AND o.status IN ('PENDING','OPEN','PARTIAL') AND ($2::TEXT IS NULL OR c.event_ticker = $2) AND c.event_ticker NOT IN (SELECT event_ticker FROM refdata.events WHERE margin_model = 'PORTFOLIO') ORDER BY o.created_at, o.order_id",
         )
         .bind(user_id)
         .bind(event_ticker)
@@ -505,6 +535,10 @@ impl RiskService {
                 .or_default()
                 .orders
                 .push((row.get("ticker"), unit_qty, unit_price));
+        }
+        // PORTFOLIO events: risk.margin_positions / risk.margin_orders are authoritative.
+        for (event, exposure) in self.load_margin_exposures(user_id, event_ticker).await? {
+            exposures.insert(event, exposure);
         }
         Ok(exposures)
     }

@@ -173,6 +173,28 @@ pub fn instrument_from_row(row: &ContractRow) -> Result<Instrument, String> {
     })
 }
 
+/// Premium one party pays (or receives) for `qty_abs` units traded at `price_ticks`,
+/// in micro-USDC: `p * tv` for a binary, `(p - L) * tv` for a banded future.
+pub fn trade_premium_micro(
+    row: &ContractRow,
+    price_ticks: i64,
+    qty_abs: i64,
+) -> Result<i64, String> {
+    let instrument = instrument_from_row(row)?;
+    if price_ticks < instrument.min_price_ticks || price_ticks > instrument.max_price_ticks {
+        return Err(format!(
+            "{}: price {price_ticks} is outside {}..={}",
+            row.ticker, instrument.min_price_ticks, instrument.max_price_ticks
+        ));
+    }
+    let value = instrument
+        .payoff
+        .value_of_price(price_ticks)
+        .checked_mul(i128::from(qty_abs))
+        .ok_or_else(|| "premium overflow".to_owned())?;
+    i64::try_from(value).map_err(|_| "premium overflow".to_owned())
+}
+
 pub fn outcome_label(outcome: &Outcome) -> String {
     match outcome {
         Outcome::Numeric(value) => value.to_string(),
