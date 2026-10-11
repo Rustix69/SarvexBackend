@@ -2,14 +2,20 @@
 
 use anyhow::{Context, Result};
 use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::get, Json, Router};
+mod portfolio;
+
+use portfolio::{ContractRow, EventExposure, EventRow};
 use sarvex_contracts::sarvex::v1::{
     ref_data_client::RefDataClient,
     risk_server::{Risk, RiskServer},
-    Action, ContractKind, ContractState, GetContractRequest, GetUserLimitsRequest,
-    PreTradeCheckRequest, PreTradeCheckResponse, Side, UpdateUserLimitsRequest, UserLimits,
+    AccountMargin, Action, ApplyFillRequest, ApplyFillResponse, ContractKind, ContractState,
+    GetAccountMarginRequest, GetContractRequest, GetUserLimitsRequest, MarginDecision,
+    MarginPreview, PreTradeCheckRequest, PreTradeCheckResponse, PreviewMarginRequest,
+    ReleaseOrderRequest, ReserveOrderRequest, Side, UpdateUserLimitsRequest, UserLimits,
 };
 use sarvex_db::connect;
 use sqlx::{postgres::PgPool, Row};
+use std::collections::BTreeMap;
 use std::{env, net::SocketAddr};
 use tonic::{
     transport::{Channel, Endpoint, Server},
@@ -285,6 +291,163 @@ impl Risk for RiskService {
         tx.commit().await.map_err(internal)?;
         Ok(Response::new(()))
     }
+
+    async fn get_account_margin(
+        &self,
+        request: Request<GetAccountMarginRequest>,
+    ) -> Result<Response<AccountMargin>, Status> {
+        let user_id = request.into_inner().user_id;
+        if user_id.trim().is_empty() {
+            return Err(Status::invalid_argument("user_id is required"));
+        }
+        let exposures = self.load_exposures(&user_id, None).await?;
+        let event_tickers: Vec<String> = exposures.keys().cloned().collect();
+        let (events, contracts) = self.load_event_refdata(&event_tickers).await?;
+        let mut response = AccountMargin {
+            user_id,
+            mode: MARGIN_MODE.to_owned(),
+            ..Default::default()
+        };
+        for (event_ticker, exposure) in &exposures {
+            let event = events
+                .get(event_ticker)
+                .cloned()
+                .unwrap_or_else(|| missing_event(event_ticker));
+            let summary = portfolio::summarize(&event, &contracts, exposure);
+            if summary.eligible {
+                response.total_margin_micro_usdc = response
+                    .total_margin_micro_usdc
+                    .checked_add(summary.margin_micro_usdc)
+                    .ok_or_else(|| Status::internal("margin total overflow"))?;
+                response.total_standalone_micro_usdc = response
+                    .total_standalone_micro_usdc
+                    .checked_add(summary.standalone_micro_usdc)
+                    .ok_or_else(|| Status::internal("margin total overflow"))?;
+            }
+            response.events.push(summary);
+        }
+        response.savings_micro_usdc =
+            response.total_standalone_micro_usdc - response.total_margin_micro_usdc;
+        Ok(Response::new(response))
+    }
+
+    async fn preview_margin(
+        &self,
+        request: Request<PreviewMarginRequest>,
+    ) -> Result<Response<MarginPreview>, Status> {
+        let request = request.into_inner();
+        if request.user_id.trim().is_empty() || request.ticker.trim().is_empty() {
+            return Err(Status::invalid_argument("user_id and ticker are required"));
+        }
+        if request.count <= 0 || !valid_side_action(request.side, request.action) {
+            return Err(Status::invalid_argument(
+                "a valid side, action and positive count are required",
+            ));
+        }
+        let event_ticker: String =
+            sqlx::query_scalar("SELECT event_ticker FROM refdata.contracts WHERE ticker=$1")
+                .bind(&request.ticker)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(internal)?
+                .ok_or_else(|| Status::not_found("contract not found"))?;
+        let mut exposures = self
+            .load_exposures(&request.user_id, Some(&event_ticker))
+            .await?;
+        let before = exposures.remove(&event_ticker).unwrap_or_default();
+        let (events, contracts) = self
+            .load_event_refdata(std::slice::from_ref(&event_ticker))
+            .await?;
+        let event = events
+            .get(&event_ticker)
+            .cloned()
+            .unwrap_or_else(|| missing_event(&event_ticker));
+        let contract = contracts
+            .get(&request.ticker)
+            .ok_or_else(|| Status::not_found("contract not found"))?;
+        // The preview takes the order as the user enters it (a NO price in NO terms).
+        let (unit_qty, unit_price) = portfolio::entered_unit_order(
+            contract.kind == "BINARY",
+            contract.payout_ticks,
+            request.side,
+            request.action,
+            request.price_ticks,
+            request.count,
+        );
+        let mut after = before.clone();
+        after
+            .orders
+            .push((request.ticker.clone(), unit_qty, unit_price));
+        let mut preview = MarginPreview {
+            event_ticker: event_ticker.clone(),
+            ..Default::default()
+        };
+        let margin_before = if before.positions.is_empty() && before.orders.is_empty() {
+            Ok(None)
+        } else {
+            portfolio::event_margin(&event, &contracts, &before).map(Some)
+        };
+        match (
+            margin_before,
+            portfolio::event_margin(&event, &contracts, &after),
+        ) {
+            (Ok(before), Ok(after)) => {
+                let (margin, standalone) = before
+                    .map(|m| (m.margin_micro, m.standalone_micro))
+                    .unwrap_or((0, 0));
+                preview.eligible = true;
+                preview.margin_before_micro_usdc = margin;
+                preview.margin_after_micro_usdc = after.margin_micro;
+                preview.delta_micro_usdc = after.margin_micro - margin;
+                preview.standalone_delta_micro_usdc = after.standalone_micro - standalone;
+            }
+            (Err(reason), _) | (_, Err(reason)) => {
+                preview.eligible = false;
+                preview.ineligible_reason = reason;
+            }
+        }
+        Ok(Response::new(preview))
+    }
+
+    async fn reserve_order(
+        &self,
+        _request: Request<ReserveOrderRequest>,
+    ) -> Result<Response<MarginDecision>, Status> {
+        Err(not_live())
+    }
+
+    async fn release_order(
+        &self,
+        _request: Request<ReleaseOrderRequest>,
+    ) -> Result<Response<MarginDecision>, Status> {
+        Err(not_live())
+    }
+
+    async fn apply_fill(
+        &self,
+        _request: Request<ApplyFillRequest>,
+    ) -> Result<Response<ApplyFillResponse>, Status> {
+        Err(not_live())
+    }
+}
+
+/// Cross margin is computed from live positions and orders, but no money moves yet.
+const MARGIN_MODE: &str = "SHADOW";
+
+fn not_live() -> Status {
+    Status::unimplemented(
+        "cross margin execution (ReserveOrder/ReleaseOrder/ApplyFill) is implementation phase 3; no PORTFOLIO event is live",
+    )
+}
+
+fn missing_event(event_ticker: &str) -> EventRow {
+    EventRow {
+        event_ticker: event_ticker.to_owned(),
+        margin_model: "UNKNOWN".to_owned(),
+        outcome_kind: "UNKNOWN".to_owned(),
+        outcome_divider: None,
+        grid: sarvex_domain::margin::OutcomeGrid::INTEGERS,
+    }
 }
 
 struct LimitsRow {
@@ -294,6 +457,118 @@ struct LimitsRow {
 }
 
 impl RiskService {
+    /// Today's positions and working orders for one account, grouped by event.
+    async fn load_exposures(
+        &self,
+        user_id: &str,
+        event_ticker: Option<&str>,
+    ) -> Result<BTreeMap<String, EventExposure>, Status> {
+        let mut exposures: BTreeMap<String, EventExposure> = BTreeMap::new();
+        let positions = sqlx::query(
+            "SELECT p.ticker, c.event_ticker, p.net_qty FROM position.positions p JOIN refdata.contracts c ON c.ticker = p.ticker WHERE p.user_id = $1 AND p.net_qty <> 0 AND ($2::TEXT IS NULL OR c.event_ticker = $2) ORDER BY p.ticker",
+        )
+        .bind(user_id)
+        .bind(event_ticker)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(internal)?;
+        for row in positions {
+            exposures
+                .entry(row.get("event_ticker"))
+                .or_default()
+                .positions
+                .push((row.get("ticker"), row.get("net_qty")));
+        }
+        let orders = sqlx::query(
+            "SELECT o.ticker, c.event_ticker, o.side, o.action, o.price_ticks, GREATEST(o.count - o.filled_count - o.cancelled_count - o.expired_count, 0)::BIGINT AS remaining FROM orders.orders o JOIN refdata.contracts c ON c.ticker = o.ticker WHERE o.user_id = $1 AND o.status IN ('PENDING','OPEN','PARTIAL') AND ($2::TEXT IS NULL OR c.event_ticker = $2) ORDER BY o.created_at, o.order_id",
+        )
+        .bind(user_id)
+        .bind(event_ticker)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(internal)?;
+        for row in orders {
+            let remaining: i64 = row.get("remaining");
+            if remaining <= 0 {
+                continue;
+            }
+            // Stored orders are margined as me-core executes them (see portfolio.rs, CM-05),
+            // in time priority so closing capacity is consumed in order (CM-09).
+            let (unit_qty, unit_price) = portfolio::stored_unit_order(
+                row.get("side"),
+                row.get("action"),
+                row.get("price_ticks"),
+                remaining,
+            );
+            exposures
+                .entry(row.get("event_ticker"))
+                .or_default()
+                .orders
+                .push((row.get("ticker"), unit_qty, unit_price));
+        }
+        Ok(exposures)
+    }
+
+    async fn load_event_refdata(
+        &self,
+        event_tickers: &[String],
+    ) -> Result<(BTreeMap<String, EventRow>, BTreeMap<String, ContractRow>), Status> {
+        let events = sqlx::query(
+            "SELECT event_ticker, margin_model, outcome_kind, outcome_divider, outcome_step, outcome_anchor, outcome_min, outcome_max FROM refdata.events WHERE event_ticker = ANY($1)",
+        )
+        .bind(event_tickers)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(internal)?
+        .into_iter()
+        .map(|row| {
+            let event = EventRow {
+                event_ticker: row.get("event_ticker"),
+                margin_model: row.get("margin_model"),
+                outcome_kind: row.get("outcome_kind"),
+                outcome_divider: row.get("outcome_divider"),
+                grid: sarvex_domain::margin::OutcomeGrid {
+                    step: row.get("outcome_step"),
+                    anchor: row.get("outcome_anchor"),
+                    min: row.get("outcome_min"),
+                    max: row.get("outcome_max"),
+                },
+            };
+            (event.event_ticker.clone(), event)
+        })
+        .collect();
+        let contracts = sqlx::query(
+            "SELECT ticker, event_ticker, kind::text AS kind, min_price_ticks, max_price_ticks, lower_bound_ticks, upper_bound_ticks, tick_value_micro, payoff_rule, payout_ticks, divider, COALESCE(settlement_source, '') AS settlement_source, expected_resolution_at::text AS expected_resolution_at, settlement_rule FROM refdata.contracts WHERE event_ticker = ANY($1)",
+        )
+        .bind(event_tickers)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(internal)?
+        .into_iter()
+        .map(|row| {
+            let contract = ContractRow {
+                ticker: row.get("ticker"),
+                event_ticker: row.get("event_ticker"),
+                kind: row.get("kind"),
+                min_price_ticks: row.get("min_price_ticks"),
+                max_price_ticks: row.get("max_price_ticks"),
+                lower_bound_ticks: row.get("lower_bound_ticks"),
+                upper_bound_ticks: row.get("upper_bound_ticks"),
+                tick_value_micro: row.get("tick_value_micro"),
+                payoff_rule: row.get("payoff_rule"),
+                payout_ticks: row.get("payout_ticks"),
+                divider: row.get("divider"),
+                settlement_source: row.get("settlement_source"),
+                // Compared for equality across one event only, so text is enough.
+                expected_resolution_at: row.get("expected_resolution_at"),
+                settlement_rule: row.get("settlement_rule"),
+            };
+            (contract.ticker.clone(), contract)
+        })
+        .collect();
+        Ok((events, contracts))
+    }
+
     async fn load_user_limits(&self, user_id: &str) -> Result<LimitsRow, Status> {
         sqlx::query("SELECT kyc_tier, max_order_size_micro_usdc, daily_loss_limit_micro_usdc FROM risk.user_limits WHERE user_id=$1")
             .bind(user_id).fetch_optional(&self.pool).await.map_err(internal)?.map(|row| LimitsRow { kyc_tier: row.get("kyc_tier"), max_order_size_micro_usdc: row.get("max_order_size_micro_usdc"), daily_loss_limit_micro_usdc: row.get("daily_loss_limit_micro_usdc") }).ok_or_else(|| Status::not_found("user limits not found"))

@@ -18,13 +18,14 @@ use sarvex_contracts::sarvex::v1::{
     ref_data_client::RefDataClient, rfq_service_client::RfqServiceClient, risk_client::RiskClient,
     settlement_client::SettlementClient, AcceptQuoteRequest, Action, Balance, BookSnapshot,
     CancelOrderRequest, CancelQuoteRequest, CancelRfqRequest, Contract, ContractKind,
-    ContractState, CreateRfqRequest, Event, Fill, GetAccountHistoryRequest, GetBalanceRequest,
-    GetContractRequest, GetOpenInterestRequest, GetOrderRequest, GetPositionRequest,
-    GetResolutionRequest, GetRfqRequest, GetSettlementRequest, GetUserLimitsRequest,
-    ListContractsRequest, ListEventsRequest, ListFillsRequest, ListOrdersRequest,
-    ListPositionsRequest, ListQuotesRequest, ListSeriesRequest, Order, OrderStatus, Resolution,
-    Rfq, RfqQuote, RfqQuoteStatus, RfqStatus, SelfTradePreventionType, Series, SettlementResult,
-    Side, SubmitOrderRequest, SubmitQuoteRequest, TimeInForce, UserLimits,
+    ContractState, CreateRfqRequest, Event, Fill, GetAccountHistoryRequest,
+    GetAccountMarginRequest, GetBalanceRequest, GetContractRequest, GetOpenInterestRequest,
+    GetOrderRequest, GetPositionRequest, GetResolutionRequest, GetRfqRequest, GetSettlementRequest,
+    GetUserLimitsRequest, ListContractsRequest, ListEventsRequest, ListFillsRequest,
+    ListOrdersRequest, ListPositionsRequest, ListQuotesRequest, ListSeriesRequest, Order,
+    OrderStatus, PreviewMarginRequest, Resolution, Rfq, RfqQuote, RfqQuoteStatus, RfqStatus,
+    SelfTradePreventionType, Series, SettlementResult, Side, SubmitOrderRequest,
+    SubmitQuoteRequest, TimeInForce, UserLimits,
 };
 use sarvex_db::connect;
 use sarvex_me_client::{MeCoreClient, MeCoreError};
@@ -130,6 +131,14 @@ struct DepositInput {
     amount_micro_usdc: Option<i64>,
     amount_usdc: Option<i64>,
     note: Option<String>,
+}
+#[derive(Debug, Deserialize)]
+struct MarginPreviewInput {
+    ticker: String,
+    side: String,
+    action: String,
+    price_ticks: i64,
+    count: i64,
 }
 #[derive(Debug, Deserialize)]
 struct HistoryQuery {
@@ -254,6 +263,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/orders/{order_id}/cancel", post(cancel_order))
         .route("/v1/account/balance", get(get_balance))
         .route("/v1/account/risk", get(get_account_risk))
+        .route("/v1/account/margin", get(get_account_margin))
+        .route("/v1/account/margin/preview", post(preview_account_margin))
         .route("/v1/account/history", get(get_history))
         .route("/v1/positions", get(list_positions))
         .route("/v1/positions/{ticker}", get(get_position))
@@ -1542,6 +1553,89 @@ async fn get_account_risk(State(state): State<AppState>, headers: HeaderMap) -> 
     .into_response()
 }
 
+/// Cross margin per event (Stage 1). Served in SHADOW mode: computed from live
+/// positions and working orders, no money moves.
+async fn get_account_margin(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let user_id = match authenticated_user(&headers, &state.auth) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let mut client = state.risk;
+    match rpc(client.get_account_margin(GetAccountMarginRequest { user_id })).await {
+        Ok(margin) => Json(json!({
+            "user_id": margin.user_id,
+            "mode": margin.mode,
+            "total_margin_micro_usdc": margin.total_margin_micro_usdc,
+            "total_standalone_micro_usdc": margin.total_standalone_micro_usdc,
+            "savings_micro_usdc": margin.savings_micro_usdc,
+            "events": margin.events.iter().map(|event| json!({
+                "event_ticker": event.event_ticker,
+                "margin_model": event.margin_model,
+                "eligible": event.eligible,
+                "ineligible_reason": event.ineligible_reason,
+                "margin_micro_usdc": event.margin_micro_usdc,
+                "position_requirement_micro_usdc": event.position_requirement_micro_usdc,
+                "order_margin_micro_usdc": event.order_margin_micro_usdc,
+                "standalone_micro_usdc": event.standalone_micro_usdc,
+                "worst_outcome": event.worst_outcome,
+                "tickers": event.tickers,
+            })).collect::<Vec<_>>(),
+        }))
+        .into_response(),
+        Err(error) => grpc_error(error),
+    }
+}
+
+/// What-if: cross margin on the order's event before and after adding the order.
+/// Read-only, so no Idempotency-Key is required.
+async fn preview_account_margin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<MarginPreviewInput>, JsonRejection>,
+) -> Response {
+    let user_id = match authenticated_user(&headers, &state.auth) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let Ok(Json(input)) = body else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "INVALID_ARGUMENT",
+            "invalid JSON request body",
+        );
+    };
+    let (Some(side), Some(action)) = (side_value(&input.side), action_value(&input.action)) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "INVALID_ARGUMENT",
+            "invalid side or action",
+        );
+    };
+    let mut client = state.risk;
+    match rpc(client.preview_margin(PreviewMarginRequest {
+        user_id,
+        ticker: input.ticker,
+        side,
+        action,
+        price_ticks: input.price_ticks,
+        count: input.count,
+    }))
+    .await
+    {
+        Ok(preview) => Json(json!({
+            "event_ticker": preview.event_ticker,
+            "eligible": preview.eligible,
+            "ineligible_reason": preview.ineligible_reason,
+            "margin_before_micro_usdc": preview.margin_before_micro_usdc,
+            "margin_after_micro_usdc": preview.margin_after_micro_usdc,
+            "delta_micro_usdc": preview.delta_micro_usdc,
+            "standalone_delta_micro_usdc": preview.standalone_delta_micro_usdc,
+        }))
+        .into_response(),
+        Err(error) => grpc_error(error),
+    }
+}
+
 async fn get_history(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2345,7 +2439,7 @@ fn query_timestamp(value: Option<&str>, field: &str) -> Result<Option<Timestamp>
 }
 
 fn contract_json(contract: &Contract) -> Value {
-    json!({"ticker":contract.ticker,"event_ticker":contract.event_ticker,"series_ticker":contract.series_ticker,"kind":contract.kind,"question":contract.question,"underlying":contract.underlying,"tick_size":contract.tick_size,"min_price_ticks":contract.min_price_ticks,"max_price_ticks":contract.max_price_ticks,"lower_bound_ticks":contract.lower_bound_ticks,"upper_bound_ticks":contract.upper_bound_ticks,"multiplier_micro_usdc":contract.multiplier_micro_usdc,"divider":contract.divider,"multiplier_micro_per_display_unit":contract.multiplier_micro_per_display_unit,"tick_value_micro":contract.tick_value_micro,"max_order_size":contract.max_order_size,"position_limit_per_user":contract.position_limit_per_user,"state":contract.state,"listed_at":timestamp_json(contract.listed_at.as_ref()),"open_at":timestamp_json(contract.open_at.as_ref()),"close_at":timestamp_json(contract.close_at.as_ref()),"expected_resolution_at":timestamp_json(contract.expected_resolution_at.as_ref()),"settlement_source":contract.settlement_source,"oracle_policy":contract.oracle_policy,"settlement_rule":contract.settlement_rule.as_ref().map(struct_json),"close_global_seq":contract.close_global_seq})
+    json!({"ticker":contract.ticker,"event_ticker":contract.event_ticker,"series_ticker":contract.series_ticker,"kind":contract.kind,"question":contract.question,"underlying":contract.underlying,"tick_size":contract.tick_size,"min_price_ticks":contract.min_price_ticks,"max_price_ticks":contract.max_price_ticks,"lower_bound_ticks":contract.lower_bound_ticks,"upper_bound_ticks":contract.upper_bound_ticks,"multiplier_micro_usdc":contract.multiplier_micro_usdc,"divider":contract.divider,"multiplier_micro_per_display_unit":contract.multiplier_micro_per_display_unit,"tick_value_micro":contract.tick_value_micro,"max_order_size":contract.max_order_size,"position_limit_per_user":contract.position_limit_per_user,"state":contract.state,"listed_at":timestamp_json(contract.listed_at.as_ref()),"open_at":timestamp_json(contract.open_at.as_ref()),"close_at":timestamp_json(contract.close_at.as_ref()),"expected_resolution_at":timestamp_json(contract.expected_resolution_at.as_ref()),"settlement_source":contract.settlement_source,"oracle_policy":contract.oracle_policy,"settlement_rule":contract.settlement_rule.as_ref().map(struct_json),"close_global_seq":contract.close_global_seq,"payoff_rule":contract.payoff_rule.as_ref().map(struct_json),"payout_ticks":contract.payout_ticks})
 }
 fn series_json(series: &Series) -> Value {
     json!({
@@ -2361,6 +2455,16 @@ fn event_json(event: &Event) -> Value {
         "title": event.title,
         "description": event.description,
         "expected_resolution_at": timestamp_json(event.expected_resolution_at.as_ref()),
+        "margin_model": event.margin_model,
+        "outcome_kind": event.outcome_kind,
+        "trading_halted": event.trading_halted,
+        "outcome_grid": {
+            "divider": event.outcome_divider,
+            "step": event.outcome_step,
+            "anchor": event.outcome_anchor,
+            "min": event.outcome_min,
+            "max": event.outcome_max,
+        },
     })
 }
 fn resolution_json(resolution: &Resolution) -> Value {

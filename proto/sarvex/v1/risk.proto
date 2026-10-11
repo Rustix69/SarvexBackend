@@ -11,6 +11,16 @@ service Risk {
   rpc PreTradeCheck(PreTradeCheckRequest) returns (PreTradeCheckResponse);
   rpc GetUserLimits(GetUserLimitsRequest) returns (UserLimits);
   rpc UpdateUserLimits(UpdateUserLimitsRequest) returns (google.protobuf.Empty);
+
+  // Cross margin (Stage 1, model C3). Read-only; served in SHADOW mode until
+  // PORTFOLIO events go live, computed from today's positions and orders.
+  rpc GetAccountMargin(GetAccountMarginRequest) returns (AccountMargin);
+  rpc PreviewMargin(PreviewMarginRequest) returns (MarginPreview);
+
+  // Execution path for PORTFOLIO events (implementation phase 3).
+  rpc ReserveOrder(ReserveOrderRequest) returns (MarginDecision);
+  rpc ReleaseOrder(ReleaseOrderRequest) returns (MarginDecision);
+  rpc ApplyFill(ApplyFillRequest) returns (ApplyFillResponse);
 }
 
 message PreTradeCheckRequest {
@@ -46,4 +56,117 @@ message UserLimits {
 
 message UpdateUserLimitsRequest {
   UserLimits limits = 1;
+}
+
+message GetAccountMarginRequest {
+  string user_id = 1;
+}
+
+message EventMarginSummary {
+  string event_ticker = 1;
+  // ISOLATED or PORTFOLIO.
+  string margin_model = 2;
+  // False when a contract lacks a machine-readable payoff; see ineligible_reason.
+  bool eligible = 3;
+  string ineligible_reason = 4;
+  // M: locked for positions and working orders together.
+  int64 margin_micro_usdc = 5;
+  // R: what the positions alone could owe at settlement.
+  int64 position_requirement_micro_usdc = 6;
+  int64 order_margin_micro_usdc = 7;
+  // Separate per-position / per-order (Model A) margin for comparison.
+  int64 standalone_micro_usdc = 8;
+  // Outcome at which the positions owe the most, e.g. "400" or "HOLD"; empty if never.
+  string worst_outcome = 9;
+  repeated string tickers = 10;
+}
+
+message AccountMargin {
+  string user_id = 1;
+  // SHADOW (computed, no money moved) or LIVE.
+  string mode = 2;
+  int64 total_margin_micro_usdc = 3;
+  int64 total_standalone_micro_usdc = 4;
+  int64 savings_micro_usdc = 5;
+  repeated EventMarginSummary events = 6;
+}
+
+message PreviewMarginRequest {
+  string user_id = 1;
+  string ticker = 2;
+  Side side = 3;
+  Action action = 4;
+  int64 price_ticks = 5;
+  int64 count = 6;
+}
+
+message MarginPreview {
+  string event_ticker = 1;
+  bool eligible = 2;
+  string ineligible_reason = 3;
+  int64 margin_before_micro_usdc = 4;
+  int64 margin_after_micro_usdc = 5;
+  int64 delta_micro_usdc = 6;
+  // What the same order adds under separate (Model A) margin.
+  int64 standalone_delta_micro_usdc = 7;
+}
+
+message ReserveOrderRequest {
+  string user_id = 1;
+  string order_id = 2;
+  string ticker = 3;
+  Side side = 4;
+  Action action = 5;
+  int64 price_ticks = 6;
+  int64 count = 7;
+  string idempotency_key = 8;
+}
+
+message MarginDecision {
+  bool approved = 1;
+  string reject_code = 2;
+  string reject_reason = 3;
+  string event_ticker = 4;
+  int64 margin_before_micro_usdc = 5;
+  int64 margin_after_micro_usdc = 6;
+  string ledger_tx_id = 7;
+}
+
+// Sent only on me-core's cancel, expiry or IOC-remainder acknowledgement, never
+// on the user's cancel request (CM-02). Fills and releases for an order share
+// one outbox ordered by global_seq; risk-svc ignores anything at or below the
+// order's last applied global_seq.
+message ReleaseOrderRequest {
+  string user_id = 1;
+  string order_id = 2;
+  // me-core's remaining quantity after the event; 0 removes the order.
+  int64 remaining_count = 3;
+  string idempotency_key = 4;
+  uint64 global_seq = 5;
+  // CANCEL | EXPIRE | IOC_REMAINDER
+  string reason = 6;
+}
+
+message ApplyFillRequest {
+  string fill_id = 1;
+  uint64 global_seq = 2;
+  string ticker = 3;
+  string maker_user_id = 4;
+  string maker_order_id = 5;
+  string taker_user_id = 6;
+  string taker_order_id = 7;
+  Side maker_side = 8;
+  Action maker_action = 9;
+  Side taker_side = 10;
+  Action taker_action = 11;
+  int64 price_ticks = 12;
+  int64 count = 13;
+}
+
+message ApplyFillResponse {
+  bool applied = 1;
+  bool duplicate = 2;
+  string ledger_tx_id = 3;
+  int64 maker_margin_after_micro_usdc = 4;
+  int64 taker_margin_after_micro_usdc = 5;
 }

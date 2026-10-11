@@ -25,3 +25,4 @@ run_sql /migrations/000012_api_contract_corrections.up.sql
 run_sql /migrations/000013_rfq.up.sql
 run_sql /migrations/000014_auth.up.sql
 run_sql /migrations/000015_auth_display_name.up.sql
+run_sql /migrations/000016_portfolio_margin.up.sql
