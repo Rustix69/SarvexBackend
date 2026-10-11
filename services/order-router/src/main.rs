@@ -1210,6 +1210,27 @@ async fn opening_fill_count(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Cash owed to a binary closer at the fill price: a closing long sells YES at `price`, a
+/// closing short buys YES back and keeps the complement. `payout_ticks` defaults to 100.
+fn binary_close_credit_micro(
+    payout_ticks: i64,
+    is_long: bool,
+    price_ticks: i64,
+    closing_count: i64,
+) -> Result<i64, Status> {
+    let payout = if payout_ticks > 0 { payout_ticks } else { 100 };
+    let per_unit_ticks = if is_long { price_ticks } else { payout - price_ticks };
+    if per_unit_ticks < 0 {
+        return Err(Status::failed_precondition(
+            "binary fill price exceeds the contract payout",
+        ));
+    }
+    per_unit_ticks
+        .checked_mul(closing_count)
+        .and_then(|value| value.checked_mul(10_000))
+        .ok_or_else(|| Status::failed_precondition("binary closing credit overflow"))
+}
+
 async fn post_fill_party(
     ledger: &LedgerClient<Channel>,
     contract: &Contract,
@@ -1232,18 +1253,33 @@ async fn post_fill_party(
         commit_fill_hold(ledger, fill_id, party, &hold_id, amount, destination).await?;
     }
     let closing_count = count.saturating_sub(opening_count);
-    if closing_count > 0 && contract.kind == ContractKind::Scalar as i32 {
-        let signed = signed_position_delta(side, action, 1);
-        let is_long = signed < 0;
-        let amount = sarvex_domain::scalar_lock_micro(
-            is_long,
-            price_ticks,
-            closing_count,
-            contract.lower_bound_ticks,
-            contract.upper_bound_ticks,
-            contract.tick_value_micro,
-        )
-        .map_err(|error| Status::failed_precondition(error.to_string()))?;
+    let closing_credit = if closing_count > 0 {
+        let is_long = signed_position_delta(side, action, 1) < 0;
+        if contract.kind == ContractKind::Scalar as i32 {
+            Some((
+                sarvex_domain::scalar_lock_micro(
+                    is_long,
+                    price_ticks,
+                    closing_count,
+                    contract.lower_bound_ticks,
+                    contract.upper_bound_ticks,
+                    contract.tick_value_micro,
+                )
+                .map_err(|error| Status::failed_precondition(error.to_string()))?,
+                "scalar closing payout",
+            ))
+        } else if contract.kind == ContractKind::Binary as i32 {
+            Some((
+                binary_close_credit_micro(contract.payout_ticks, is_long, price_ticks, closing_count)?,
+                "binary closing payout",
+            ))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if let Some((amount, memo)) = closing_credit {
         if amount > 0 {
             let mut client = ledger.clone();
             client
@@ -1255,13 +1291,13 @@ async fn post_fill_party(
                             account_code: destination.to_owned(),
                             direction: "DR".to_owned(),
                             amount_micro_usdc: amount,
-                            memo: "scalar closing payout".to_owned(),
+                            memo: memo.to_owned(),
                         },
                         LedgerEntry {
                             account_code: format!("LIAB:USER:{user_id}:CASH"),
                             direction: "CR".to_owned(),
                             amount_micro_usdc: amount,
-                            memo: "scalar closing payout".to_owned(),
+                            memo: memo.to_owned(),
                         },
                     ],
                     metadata: None,
@@ -1656,6 +1692,15 @@ async fn shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn binary_close_credit_pays_price_for_longs_and_complement_for_shorts() {
+        assert_eq!(binary_close_credit_micro(100, true, 30, 5).unwrap(), 1_500_000);
+        assert_eq!(binary_close_credit_micro(100, false, 30, 5).unwrap(), 3_500_000);
+        assert_eq!(binary_close_credit_micro(0, true, 99, 1).unwrap(), 990_000);
+        assert_eq!(binary_close_credit_micro(200, false, 50, 2).unwrap(), 3_000_000);
+        assert!(binary_close_credit_micro(100, false, 120, 1).is_err());
+    }
+
     use super::*;
 
     #[test]
