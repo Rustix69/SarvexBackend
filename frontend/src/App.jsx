@@ -100,6 +100,7 @@ function viewFromPath(pathname) {
   if (pathname === '/health') return 'health'
   if (pathname === '/futures') return 'futures'
   if (pathname === '/portfolio') return 'portfolio'
+  if (pathname === '/margin') return 'margin'
   if (pathname === '/profile') return 'profile'
   if (pathname === '/trading-api') return 'trading-api'
   return 'markets'
@@ -109,6 +110,7 @@ function pathForView(view) {
   if (view === 'health') return '/health'
   if (view === 'futures') return '/futures'
   if (view === 'portfolio') return '/portfolio'
+  if (view === 'margin') return '/margin'
   if (view === 'profile') return '/profile'
   if (view === 'trading-api') return '/trading-api'
   return '/'
@@ -889,6 +891,8 @@ function App() {
           onCancelOrder={handleCancelOrder}
           onSelectMarket={handleMarketSelect}
         />
+      ) : activeView === 'margin' ? (
+        <MarginPage margin={margin} authed={authed} />
       ) : activeView === 'health' ? (
         <HealthPage api={api} />
       ) : activeView === 'futures' ? (
@@ -952,6 +956,7 @@ function TopNav({ selectedUser, token, busy, onLogin, onLogout, onProfile, onMar
           <button className={activeView === 'futures' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => onNavigateView('futures')}>Futures</button>
           <button className={activeView === 'trade' ? 'nav-link active' : 'nav-link'} type="button" onClick={onTerminal}>Terminal</button>
           <button className={activeView === 'portfolio' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => onNavigateView('portfolio')}>Portfolio</button>
+          <button className={activeView === 'margin' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => onNavigateView('margin')}>Margin</button>
           <button className={activeView === 'trading-api' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => onNavigateView('trading-api')}>Trading API</button>
         </nav>
       </div>
@@ -1984,6 +1989,47 @@ function OracleDetails({ market }) {
   )
 }
 
+function useMarginPreview(ticker, action, yesPriceTicks, count, enabled) {
+  const [preview, setPreview] = useState(null)
+  useEffect(() => {
+    const token = localStorage.getItem('sarvex_token')
+    if (!enabled || !token || !ticker || !count || !yesPriceTicks) {
+      setPreview(null)
+      return undefined
+    }
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => {
+      fetch(`${API_BASE}/v1/account/margin/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ ticker, side: 'YES', action, price_ticks: yesPriceTicks, count }),
+        signal: controller.signal,
+      })
+        .then((response) => (response.ok ? response.json() : null))
+        .then((body) => setPreview(body))
+        .catch(() => setPreview(null))
+    }, 350)
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
+  }, [ticker, action, yesPriceTicks, count, enabled])
+  return preview
+}
+
+function MarginPreviewLine({ preview }) {
+  if (!preview || preview.eligible === false) return null
+  const delta = Number(preview.delta_micro_usdc)
+  const standalone = Number(preview.standalone_delta_micro_usdc)
+  const saved = standalone - delta
+  return (
+    <div className="ticket-margin">
+      <div className="ticket-summary"><span>Margin needed</span><strong>{delta <= 0 ? '$0.00' : formatUSDC(delta)}</strong></div>
+      {saved > 0 ? <div className="ticket-summary muted"><span>Saved by cross margin</span><strong className="pnl-positive">{formatUSDC(saved)}</strong></div> : null}
+    </div>
+  )
+}
+
 function TradeTicket({ market, bestBid, bestAsk, authed, busy, onTrade }) {
   const [tab, setTab] = useState('buy')
   const [outcome, setOutcome] = useState('YES')
@@ -2004,6 +2050,8 @@ function TradeTicket({ market, bestBid, bestAsk, authed, busy, onTrade }) {
   const shares = requestedShares > 0 ? Math.max(1, Math.min(requestedShares, maxShares)) : 0
   const capped = requestedShares > maxShares
   const estimatedSpend = shares * displayedPrice / 100
+  const yesTicks = outcome === 'YES' ? displayedPrice : 100 - displayedPrice
+  const marginPreview = useMarginPreview(market.ticker, action, yesTicks, shares, authed)
 
   const updateAmount = (value) => {
     const nextAmount = Number(value || 0)
@@ -2075,6 +2123,7 @@ function TradeTicket({ market, bestBid, bestAsk, authed, busy, onTrade }) {
       </div>
       <div className="ticket-summary"><span>Est. shares</span><strong>{shares}</strong></div>
       <div className="ticket-summary muted"><span>Est. spend</span><strong>${estimatedSpend.toFixed(2)}</strong></div>
+      <MarginPreviewLine preview={marginPreview} />
       {capped ? <div className="ticket-note">Demo cap applied at $100 per order.</div> : null}
       <button className="trade-btn" type="button" disabled={!authed || busy || !shares} onClick={submit}>
         {busy ? <Loader2 className="spin" size={17} /> : <CircleDollarSign size={17} />} {authed ? `${orderType === 'market' ? 'Market' : 'Limit'} trade` : 'Login to trade'}
@@ -2384,6 +2433,55 @@ function ExitPriceForm({ position, market, mark, busy, onSubmit, onCancel }) {
       <button className="exit-close-btn" type="button" onClick={onCancel}>Close</button>
       {issue ? <p className="exit-price-issue" role="alert">{issue}</p> : null}
     </form>
+  )
+}
+
+function MarginPage({ margin, authed }) {
+  const events = (margin?.events || []).filter((event) => Number(event.margin_micro_usdc) > 0 || Number(event.standalone_micro_usdc) > 0)
+  const shadow = String(margin?.mode || '').toUpperCase() === 'SHADOW'
+  const totalStandalone = Number(margin?.total_standalone_micro_usdc || 0)
+  const savedPct = totalStandalone > 0 ? Math.round((Number(margin?.savings_micro_usdc || 0) / totalStandalone) * 100) : 0
+  return (
+    <main className="margin-page">
+      <header className="margin-page-head">
+        <h1>Cross margin</h1>
+        <p>Positions and orders in the same event hedge each other. You lock only the worst case across all outcomes, not the sum of each trade.</p>
+        {shadow ? <span className="margin-badge">Preview · not applied yet</span> : null}
+      </header>
+      {!authed ? <p className="margin-note">Log in to see your margin.</p> : !margin || !events.length ? (
+        <p className="margin-note">No open positions or orders yet. Margin appears here once you trade.</p>
+      ) : (
+        <>
+          <div className="margin-summary">
+            <div><span>With cross margin</span><strong>{formatUSDC(margin.total_margin_micro_usdc)}</strong></div>
+            <div><span>Separate margin</span><strong>{formatUSDC(margin.total_standalone_micro_usdc)}</strong></div>
+            <div><span>Saved</span><strong className="pnl-positive">{formatUSDC(margin.savings_micro_usdc)}{savedPct > 0 ? ` (${savedPct}%)` : ''}</strong></div>
+          </div>
+          <div className="margin-cards">
+            {events.map((event) => {
+              const cross = Number(event.margin_micro_usdc)
+              const separate = Number(event.standalone_micro_usdc)
+              const saved = separate - cross
+              const pct = separate > 0 ? Math.round((saved / separate) * 100) : 0
+              return (
+                <section className="margin-card" key={event.event_ticker}>
+                  <div className="panel-head"><h2>{event.event_ticker}</h2><span>{event.eligible === false ? 'Separate margin' : 'Cross margin'}</span></div>
+                  <div className="margin-bar" aria-hidden="true"><i style={{ width: `${separate > 0 ? Math.max(4, Math.round((cross / separate) * 100)) : 100}%` }} /></div>
+                  <div className="margin-card-numbers">
+                    <div><span>Locked</span><strong>{formatUSDC(cross)}</strong></div>
+                    <div><span>Without cross margin</span><strong>{formatUSDC(separate)}</strong></div>
+                    <div><span>Saved</span><strong className={saved > 0 ? 'pnl-positive' : ''}>{formatUSDC(saved)}{pct > 0 ? ` (${pct}%)` : ''}</strong></div>
+                  </div>
+                  <p className="margin-note">Positions {formatUSDC(event.position_requirement_micro_usdc)} · Open orders {formatUSDC(event.order_margin_micro_usdc)}{event.worst_outcome ? ` · Worst case at ${event.worst_outcome}` : ''}</p>
+                  {event.tickers?.length ? <p className="margin-note">{event.tickers.join(' · ')}</p> : null}
+                  {event.eligible === false ? <p className="margin-note">Not eligible for cross margin yet{event.ineligible_reason ? `: ${event.ineligible_reason}` : ''}.</p> : null}
+                </section>
+              )
+            })}
+          </div>
+        </>
+      )}
+    </main>
   )
 }
 
