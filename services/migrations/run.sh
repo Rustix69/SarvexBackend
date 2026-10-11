@@ -26,3 +26,4 @@ run_sql /migrations/000013_rfq.up.sql
 run_sql /migrations/000014_auth.up.sql
 run_sql /migrations/000015_auth_display_name.up.sql
 run_sql /migrations/000016_portfolio_margin.up.sql
+run_sql /migrations/000017_event_settlement_positions.up.sql

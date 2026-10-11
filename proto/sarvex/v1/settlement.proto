@@ -9,6 +9,10 @@ import "google/protobuf/timestamp.proto";
 service Settlement {
   rpc SettleContract(SettleContractRequest) returns (SettlementResult);
   rpc GetSettlement(GetSettlementRequest) returns (SettlementResult);
+
+  // Cross margin (PORTFOLIO events): settles every contract of the event in one
+  // zero-sum pass from risk.margin_positions, then releases all margin.
+  rpc SettleEvent(SettleEventRequest) returns (EventSettlementResult);
 }
 
 message SettleContractRequest {
@@ -26,4 +30,18 @@ message SettlementResult {
   int64 winner_payout_per_contract_micro_usdc = 3;
   int64 total_payout_micro_usdc = 4;
   int32 positions_settled = 5;
+}
+
+message SettleEventRequest {
+  string event_ticker = 1;
+}
+
+message EventSettlementResult {
+  string event_ticker = 1;
+  // COMPLETED once every account is paid and every margin account released.
+  string status = 2;
+  int32 accounts_settled = 3;
+  int64 total_credits_micro_usdc = 4;
+  int64 total_debits_micro_usdc = 5;
+  google.protobuf.Timestamp settled_at = 6;
 }

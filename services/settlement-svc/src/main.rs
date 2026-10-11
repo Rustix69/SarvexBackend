@@ -1,5 +1,9 @@
 #![allow(clippy::result_large_err)]
 
+mod event_settlement;
+#[cfg(test)]
+mod event_settlement_it;
+
 use anyhow::{Context, Result};
 use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::get, Json, Router};
 use chrono::Utc;
@@ -11,7 +15,7 @@ use sarvex_contracts::sarvex::v1::{
     settlement_server::{Settlement, SettlementServer},
     ContractKind, ContractState, GetContractRequest, GetResolutionRequest, GetSettlementRequest,
     LedgerEntry, ListPositionsByContractRequest, PostTransactionRequest, ResolutionStatus,
-    SettleContractRequest, SettlementResult,
+    EventSettlementResult, SettleContractRequest, SettleEventRequest, SettlementResult,
 };
 use sarvex_db::connect;
 use sarvex_events::EventPublisher;
@@ -31,6 +35,9 @@ struct SettlementService {
     positions: PositionClient<Channel>,
     ledger: LedgerClient<Channel>,
     publisher: Option<EventPublisher>,
+    /// `PORTFOLIO_MARGIN_ENABLED`: PORTFOLIO events settle through `SettleEvent` and are
+    /// refused by `SettleContract`. Off, the margin columns are never read.
+    portfolio_enabled: bool,
 }
 #[derive(Clone)]
 struct HealthState {
@@ -60,6 +67,9 @@ async fn main() -> Result<()> {
         positions,
         ledger,
         publisher,
+        portfolio_enabled: env::var("PORTFOLIO_MARGIN_ENABLED")
+            .map(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "yes"))
+            .unwrap_or(false),
     };
     let grpc_addr: SocketAddr = format!(
         "0.0.0.0:{}",
@@ -153,6 +163,19 @@ impl Settlement for SettlementService {
             return Err(Status::invalid_argument(
                 "event_ticker does not belong to contract",
             ));
+        }
+        if self.portfolio_enabled {
+            let model: Option<String> =
+                sqlx::query_scalar("SELECT margin_model FROM refdata.events WHERE event_ticker=$1")
+                    .bind(&contract.event_ticker)
+                    .fetch_optional(&self.pool)
+                    .await
+                    .map_err(internal)?;
+            if model.as_deref() == Some("PORTFOLIO") {
+                return Err(Status::failed_precondition(
+                    "this contract belongs to a PORTFOLIO event; use SettleEvent",
+                ));
+            }
         }
         let existing = self.existing_settlement(&ticker).await.map_err(internal)?;
         if let Some(existing) = &existing {
@@ -257,6 +280,54 @@ impl Settlement for SettlementService {
         };
         if let Some(publisher) = &self.publisher {
             let _ = publisher.publish(format!("settlement.completed.{ticker}"), serde_json::to_vec(&serde_json::json!({"ticker":ticker,"total_payout_micro_usdc":payout_total})).unwrap_or_default()).await;
+        }
+        Ok(Response::new(result))
+    }
+
+    async fn settle_event(
+        &self,
+        request: Request<SettleEventRequest>,
+    ) -> Result<Response<EventSettlementResult>, Status> {
+        if !self.portfolio_enabled {
+            return Err(Status::failed_precondition(
+                "cross margin is not enabled (PORTFOLIO_MARGIN_ENABLED)",
+            ));
+        }
+        let event_ticker = require_text(&request.into_inner().event_ticker, "event_ticker")?;
+        let resolution = self
+            .oracle
+            .clone()
+            .get_resolution(GetResolutionRequest {
+                event_ticker: event_ticker.clone(),
+            })
+            .await
+            .map_err(internal)?
+            .into_inner();
+        if ResolutionStatus::try_from(resolution.status).ok() != Some(ResolutionStatus::Finalized) {
+            return Err(Status::failed_precondition(
+                "oracle resolution is not finalized",
+            ));
+        }
+        let outcome = if resolution.categorical_value.is_empty() {
+            sarvex_domain::margin::Outcome::Numeric(resolution.numeric_value)
+        } else {
+            sarvex_domain::margin::Outcome::Category(resolution.categorical_value.clone())
+        };
+        let result =
+            event_settlement::settle_event(&self.pool, &self.ledger, &event_ticker, outcome)
+                .await?;
+        if let Some(publisher) = &self.publisher {
+            let _ = publisher
+                .publish(
+                    format!("settlement.event.completed.{event_ticker}"),
+                    serde_json::to_vec(&serde_json::json!({
+                        "event_ticker": event_ticker,
+                        "accounts_settled": result.accounts_settled,
+                        "total_credits_micro_usdc": result.total_credits_micro_usdc,
+                    }))
+                    .unwrap_or_default(),
+                )
+                .await;
         }
         Ok(Response::new(result))
     }
