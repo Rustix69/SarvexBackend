@@ -1129,6 +1129,7 @@ async fn submit_order(
     } {
         return response;
     }
+    let outcome = async {
     if input.client_order_id.len() > 128 {
         return error_response(
             StatusCode::BAD_REQUEST,
@@ -1234,6 +1235,17 @@ async fn submit_order(
     } else {
         input.price_ticks
     };
+    // CM-05: me-core books every order on one YES/LONG book, and risk sizes holds from the
+    // normalised order. NO becomes YES at the complement price and SHORT becomes LONG at the
+    // same price, with the action flipped. Market orders already carry a YES-book price.
+    let (side, action, price_ticks) = normalize_order_side(
+        side,
+        action,
+        price_ticks,
+        market,
+        contract.min_price_ticks,
+        contract.max_price_ticks,
+    );
     let expires_at = match input.expires_at.as_deref() {
         Some(value) => match parse_timestamp(value) {
             Ok(value) => value,
@@ -1304,6 +1316,18 @@ async fn submit_order(
         return response;
     }
     (response_status, Json(value)).into_response()
+    }
+    .await;
+    finalize_idempotency(
+        &state.pool,
+        &user_id,
+        "POST",
+        "/v1/orders",
+        &idempotency_key,
+        &request_body,
+        outcome,
+    )
+    .await
 }
 
 async fn list_orders(
@@ -1386,6 +1410,7 @@ async fn cancel_order(
     } {
         return response;
     }
+    let outcome = async {
     let mut client = state.orders;
     let value = match rpc(client.cancel_order(CancelOrderRequest {
         user_id: user_id.clone(),
@@ -1414,6 +1439,18 @@ async fn cancel_order(
         return response;
     }
     Json(value).into_response()
+    }
+    .await;
+    finalize_idempotency(
+        &state.pool,
+        &user_id,
+        "POST",
+        &request_path,
+        &idempotency_key,
+        &request_body,
+        outcome,
+    )
+    .await
 }
 
 async fn get_balance(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -2072,6 +2109,7 @@ async fn demo_deposit(
     } {
         return response;
     }
+    let outcome = async {
     let amount = input
         .amount_micro_usdc
         .or_else(|| {
@@ -2126,6 +2164,18 @@ async fn demo_deposit(
         },
         Err(error) => grpc_error(error),
     }
+    }
+    .await;
+    finalize_idempotency(
+        &state.pool,
+        &user_id,
+        "POST",
+        "/v1/demo/deposits/credit",
+        &idempotency_key,
+        &request_body,
+        outcome,
+    )
+    .await
 }
 
 async fn rpc<T>(
@@ -2310,6 +2360,69 @@ async fn store_idempotency(
         .execute(pool).await
         .map(|_| ())
         .map_err(|error| error_response(StatusCode::SERVICE_UNAVAILABLE, "IDEMPOTENCY_STORE_UNAVAILABLE", &error.to_string()))
+}
+
+/// Stores a terminal 4xx outcome on the idempotency record so a retry with the same
+/// key replays the same error instead of staying `IN_PROGRESS` until expiry. 5xx and
+/// transient (408/429) outcomes are left for reconciliation: the downstream effect is unknown.
+async fn finalize_idempotency(
+    pool: &PgPool,
+    user_id: &str,
+    method: &str,
+    path: &str,
+    key: &str,
+    request: &Value,
+    response: Response,
+) -> Response {
+    let status = response.status();
+    if !status.is_client_error()
+        || status == StatusCode::REQUEST_TIMEOUT
+        || status == StatusCode::TOO_MANY_REQUESTS
+    {
+        return response;
+    }
+    let (parts, body) = response.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, 1 << 20).await else {
+        return error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "IDEMPOTENCY_STORE_ERROR",
+            "failed to read response body",
+        );
+    };
+    if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
+        let _ = store_idempotency(pool, user_id, method, path, key, request, &value, status).await;
+    }
+    Response::from_parts(parts, axum::body::Body::from(bytes))
+}
+
+/// Maps NO/SHORT orders onto the single YES/LONG book (CM-05). A binary NO limit at `p`
+/// is a YES order at `min + max - p` (100 - p on a 1..99 contract); a futures SHORT keeps
+/// its price. `market` orders already hold a YES-book protection price and are not complemented.
+fn normalize_order_side(
+    side: i32,
+    action: i32,
+    price_ticks: i64,
+    market: bool,
+    min_price_ticks: i64,
+    max_price_ticks: i64,
+) -> (i32, i32, i64) {
+    let flipped = if action == Action::Buy as i32 {
+        Action::Sell as i32
+    } else {
+        Action::Buy as i32
+    };
+    if side == Side::No as i32 {
+        let price = if market {
+            price_ticks
+        } else {
+            min_price_ticks + max_price_ticks - price_ticks
+        };
+        (Side::Yes as i32, flipped, price)
+    } else if side == Side::Short as i32 {
+        (Side::Long as i32, flipped, price_ticks)
+    } else {
+        (side, action, price_ticks)
+    }
 }
 
 fn side_value(value: &str) -> Option<i32> {
@@ -2720,6 +2833,40 @@ async fn shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn normalizes_no_and_short_onto_the_yes_long_book() {
+        let buy = Action::Buy as i32;
+        let sell = Action::Sell as i32;
+        // NO BUY at 20 is YES SELL at 80.
+        assert_eq!(
+            normalize_order_side(Side::No as i32, buy, 20, false, 1, 99),
+            (Side::Yes as i32, sell, 80)
+        );
+        // NO SELL at 35 is YES BUY at 65.
+        assert_eq!(
+            normalize_order_side(Side::No as i32, sell, 35, false, 1, 99),
+            (Side::Yes as i32, buy, 65)
+        );
+        // Market orders carry a YES-book price already.
+        assert_eq!(
+            normalize_order_side(Side::No as i32, buy, 12, true, 1, 99),
+            (Side::Yes as i32, sell, 12)
+        );
+        // SHORT keeps its price; YES and LONG are untouched.
+        assert_eq!(
+            normalize_order_side(Side::Short as i32, sell, 500, false, 0, 1000),
+            (Side::Long as i32, buy, 500)
+        );
+        assert_eq!(
+            normalize_order_side(Side::Yes as i32, buy, 40, false, 1, 99),
+            (Side::Yes as i32, buy, 40)
+        );
+        assert_eq!(
+            normalize_order_side(Side::Long as i32, sell, 40, false, 0, 100),
+            (Side::Long as i32, sell, 40)
+        );
+    }
+
     use super::*;
     use axum::http::HeaderValue;
 
