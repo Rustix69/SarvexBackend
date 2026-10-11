@@ -138,6 +138,7 @@ function App() {
   const [positions, setPositions] = useState([])
   const [orders, setOrders] = useState([])
   const [history, setHistory] = useState([])
+  const [margin, setMargin] = useState(null)
   const [bookMarks, setBookMarks] = useState({})
   const [liveQuotes, setLiveQuotes] = useState({})
   const [pinnedTickers, setPinnedTickers] = useState(() => {
@@ -444,6 +445,12 @@ function App() {
     api('/v1/account/history?limit=100')
       .then((historyBody) => setHistory(historyBody?.entries || []))
       .catch(() => {})
+
+    // Cross-margin summary is optional: older gateways do not serve it, so a failure just
+    // hides the panel.
+    api('/v1/account/margin')
+      .then((marginBody) => setMargin(marginBody))
+      .catch(() => setMargin(null))
   }, [api, refreshBookMarks, token])
 
   const refreshAll = useCallback(async () => {
@@ -872,6 +879,7 @@ function App() {
           positions={positions}
           orders={orders}
           history={history}
+          margin={margin}
           marketPrices={marketPrices}
           marketByTicker={marketByTicker}
           selectedUser={selectedUser}
@@ -2179,7 +2187,7 @@ function PositionSnapshot({ position, mark, market, authed }) {
   )
 }
 
-function PortfolioPage({ balance, authed, busy, positions, orders, history, marketPrices, marketByTicker, selectedUser, onDeposit, onRefresh, onExitPosition, onCancelOrder, onSelectMarket }) {
+function PortfolioPage({ balance, authed, busy, positions, orders, history, margin, marketPrices, marketByTicker, selectedUser, onDeposit, onRefresh, onExitPosition, onCancelOrder, onSelectMarket }) {
   const [exitTicker, setExitTicker] = useState('')
   const [workspaceView, setWorkspaceView] = useState('calendar')
   const [workspaceMetric, setWorkspaceMetric] = useState('pnl')
@@ -2236,6 +2244,8 @@ function PortfolioPage({ balance, authed, busy, positions, orders, history, mark
           {workspaceView === 'calendar' ? <PortfolioCalendar history={history} /> : <PortfolioPerformanceChart history={history} orders={orders} metric={workspaceMetric} />}
         </section>
       </section>
+
+      <MarginPanel margin={margin} />
 
       <section className="portfolio-grid-page portfolio-data-panels">
         <div className="portfolio-panel">
@@ -2374,6 +2384,41 @@ function ExitPriceForm({ position, market, mark, busy, onSubmit, onCancel }) {
       <button className="exit-close-btn" type="button" onClick={onCancel}>Close</button>
       {issue ? <p className="exit-price-issue" role="alert">{issue}</p> : null}
     </form>
+  )
+}
+
+function MarginPanel({ margin }) {
+  const events = (margin?.events || []).filter((event) => Number(event.margin_micro_usdc) > 0 || Number(event.standalone_micro_usdc) > 0)
+  if (!margin || !events.length) return null
+  const shadow = String(margin.mode || '').toUpperCase() === 'SHADOW'
+  return (
+    <section className="margin-panel" aria-label="Cross margin">
+      <div className="panel-head">
+        <h2>Margin</h2>
+        <span>{shadow ? 'Preview · not applied yet' : 'Cross margin'}</span>
+      </div>
+      <div className="margin-summary">
+        <div><span>With cross margin</span><strong>{formatUSDC(margin.total_margin_micro_usdc)}</strong></div>
+        <div><span>Separate margin</span><strong>{formatUSDC(margin.total_standalone_micro_usdc)}</strong></div>
+        <div><span>Savings</span><strong className="pnl-positive">{formatUSDC(margin.savings_micro_usdc)}</strong></div>
+      </div>
+      <div className="portfolio-table">
+        <div className="portfolio-row margin-row header"><span>Event</span><span>Cross</span><span>Separate</span><span>Saved</span><span>Worst case at</span></div>
+        {events.map((event) => {
+          const saved = Number(event.standalone_micro_usdc) - Number(event.margin_micro_usdc)
+          return (
+            <div className="portfolio-row margin-row" key={event.event_ticker}>
+              <span title={event.ineligible_reason || ''}>{event.event_ticker}{event.eligible === false ? ' *' : ''}</span>
+              <span>{formatUSDC(event.margin_micro_usdc)}</span>
+              <span>{formatUSDC(event.standalone_micro_usdc)}</span>
+              <span className={saved > 0 ? 'pnl-positive' : ''}>{formatUSDC(saved)}</span>
+              <span>{event.worst_outcome || '--'}</span>
+            </div>
+          )
+        })}
+      </div>
+      {events.some((event) => event.eligible === false) ? <p className="margin-note">* Not eligible for cross margin yet; shown at separate margin.</p> : null}
+    </section>
   )
 }
 

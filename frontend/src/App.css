@@ -1759,3 +1759,12 @@ body { background: #111113; }
 .cancel-order-btn:hover:not(:disabled) { background: #422636; }
 .cancel-order-btn:disabled { opacity: .5; cursor: default; }
 .exit-price-form .exit-qty-input { width: 64px; text-align: center; }
+
+.margin-panel { margin: 0 0 18px; padding: 16px; border: 1px solid #2d2d33; border-radius: 3px; background: #1a1a1e; }
+.margin-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 12px 0 14px; }
+.margin-summary div { display: grid; gap: 4px; padding: 10px 12px; border-radius: 3px; background: #242429; }
+.margin-summary span { color: #88878f; font: 11px "Geist Mono", ui-monospace, monospace; }
+.margin-summary strong { color: #f1eff5; font: 600 18px "Geist Mono", ui-monospace, monospace; }
+.portfolio-row.margin-row { grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(80px, 0.7fr)) minmax(90px, 0.8fr); }
+.margin-note { margin: 10px 0 0; color: #88878f; font: 11px "Geist Mono", ui-monospace, monospace; }
+@media (max-width: 760px) { .margin-summary { grid-template-columns: 1fr; } .portfolio-row.margin-row { grid-template-columns: 1fr 1fr; } }
