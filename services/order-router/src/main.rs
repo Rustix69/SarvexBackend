@@ -1877,6 +1877,9 @@ async fn shutdown_signal() {
 }
 
 #[cfg(test)]
+mod e2e_it;
+
+#[cfg(test)]
 mod tests {
     #[test]
     fn binary_close_credit_pays_price_for_longs_and_complement_for_shorts() {
