@@ -3,6 +3,8 @@
 use anyhow::{Context, Result};
 use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::get, Json, Router};
 mod margin_exec;
+#[cfg(test)]
+mod margin_exec_it;
 mod portfolio;
 
 use portfolio::{ContractRow, EventExposure, EventRow};
@@ -87,8 +89,15 @@ async fn run_margin_reconciler(service: RiskService) {
     let mut suspects = std::collections::HashMap::new();
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-        if let Err(error) = service.reconcile_margin(&mut suspects).await {
-            tracing::warn!(error = %error.message(), "margin reconciliation failed");
+        match service.reconcile_margin(&mut suspects).await {
+            Ok(drifts) => {
+                for drift in drifts {
+                    tracing::warn!(user_id = %drift.user_id, event_ticker = %drift.event_ticker, posted = drift.posted, ledger = drift.ledger_balance, "margin ledger drift seen");
+                }
+            }
+            Err(error) => {
+                tracing::warn!(error = %error.message(), "margin reconciliation failed");
+            }
         }
     }
 }
