@@ -428,9 +428,9 @@ fn compute_payout(
         return Ok(0);
     }
     let payout = if contract.kind == ContractKind::Binary as i32 {
-        let yes = category.eq_ignore_ascii_case("YES") || numeric > 0;
+        let yes = binary_resolves_yes(contract, category, numeric)?;
         let winning = if yes { qty.max(0) } else { (-qty).max(0) };
-        i128::from(winning).checked_mul(i128::from(contract.multiplier_micro_usdc.max(0)))
+        i128::from(winning).checked_mul(i128::from(binary_unit_payout_micro(contract)))
     } else {
         sarvex_domain::scalar_payout_micro(
             qty,
@@ -447,9 +447,76 @@ fn compute_payout(
         .try_into()
         .map_err(|_| Status::failed_precondition("settlement payout exceeds int64"))
 }
+/// Settlement value of one winning binary: `payout_ticks` (default 100 = 1 USDC) at 10,000
+/// micro-USDC per tick. `multiplier_micro_usdc` is NULL/0 on binaries and is not used here.
+fn binary_unit_payout_micro(contract: &sarvex_contracts::sarvex::v1::Contract) -> i64 {
+    let ticks = if contract.payout_ticks > 0 {
+        contract.payout_ticks
+    } else {
+        sarvex_domain::margin::DEFAULT_BINARY_PAYOUT_TICKS
+    };
+    ticks.saturating_mul(sarvex_domain::margin::BINARY_TICK_VALUE_MICRO)
+}
+
+/// Decides whether a binary resolved YES. A `payoff_rule` (strike range or category set) is
+/// authoritative; contracts without one keep the legacy rule (category "YES" or numeric > 0).
+fn binary_resolves_yes(
+    contract: &sarvex_contracts::sarvex::v1::Contract,
+    category: &str,
+    numeric: i64,
+) -> Result<bool, Status> {
+    let Some(rule) = contract
+        .payoff_rule
+        .as_ref()
+        .filter(|rule| !rule.fields.is_empty())
+    else {
+        return Ok(category.eq_ignore_ascii_case("YES") || numeric > 0);
+    };
+    let json = struct_to_json(rule);
+    let payoff = sarvex_domain::margin::listing::parse_payoff_rule(&json, contract.payout_ticks.max(1))
+        .map_err(|error| Status::failed_precondition(format!("invalid payoff_rule: {error}")))?;
+    let outcome = if category.is_empty() {
+        sarvex_domain::margin::Outcome::Numeric(numeric)
+    } else {
+        sarvex_domain::margin::Outcome::Category(category.to_owned())
+    };
+    payoff
+        .value_at(&outcome)
+        .map(|value| value > 0)
+        .map_err(|error| Status::failed_precondition(error.to_string()))
+}
+
+fn struct_to_json(value: &prost_types::Struct) -> serde_json::Value {
+    fn convert(value: &prost_types::Value) -> serde_json::Value {
+        use prost_types::value::Kind;
+        match &value.kind {
+            None | Some(Kind::NullValue(_)) => serde_json::Value::Null,
+            Some(Kind::BoolValue(v)) => serde_json::Value::Bool(*v),
+            Some(Kind::NumberValue(v)) if v.fract() == 0.0 && v.abs() < 9.0e15 => {
+                serde_json::Value::from(*v as i64)
+            }
+            Some(Kind::NumberValue(v)) => serde_json::Number::from_f64(*v)
+                .map(serde_json::Value::Number)
+                .unwrap_or(serde_json::Value::Null),
+            Some(Kind::StringValue(v)) => serde_json::Value::String(v.clone()),
+            Some(Kind::ListValue(list)) => {
+                serde_json::Value::Array(list.values.iter().map(convert).collect())
+            }
+            Some(Kind::StructValue(inner)) => struct_to_json(inner),
+        }
+    }
+    serde_json::Value::Object(
+        value
+            .fields
+            .iter()
+            .map(|(key, value)| (key.clone(), convert(value)))
+            .collect(),
+    )
+}
+
 fn winner_payout(contract: &sarvex_contracts::sarvex::v1::Contract, _category: &str) -> i64 {
     if contract.kind == ContractKind::Binary as i32 {
-        contract.multiplier_micro_usdc
+        binary_unit_payout_micro(contract)
     } else {
         0
     }
@@ -481,6 +548,83 @@ mod tests {
         assert_eq!(compute_payout(&contract, "YES", 0, 3).unwrap(), 3_000_000);
         assert_eq!(compute_payout(&contract, "YES", 0, -3).unwrap(), 0);
     }
+    fn rule(json: serde_json::Value) -> prost_types::Struct {
+        fn convert(value: &serde_json::Value) -> prost_types::Value {
+            use prost_types::value::Kind;
+            prost_types::Value {
+                kind: Some(match value {
+                    serde_json::Value::Null => Kind::NullValue(0),
+                    serde_json::Value::Bool(v) => Kind::BoolValue(*v),
+                    serde_json::Value::Number(v) => Kind::NumberValue(v.as_f64().unwrap()),
+                    serde_json::Value::String(v) => Kind::StringValue(v.clone()),
+                    serde_json::Value::Array(v) => Kind::ListValue(prost_types::ListValue {
+                        values: v.iter().map(convert).collect(),
+                    }),
+                    serde_json::Value::Object(_) => Kind::StructValue(to_struct(value)),
+                }),
+            }
+        }
+        fn to_struct(value: &serde_json::Value) -> prost_types::Struct {
+            prost_types::Struct {
+                fields: value
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), convert(v)))
+                    .collect(),
+            }
+        }
+        to_struct(&json)
+    }
+
+    #[test]
+    fn binary_winners_are_paid_even_when_multiplier_is_zero() {
+        let contract = sarvex_contracts::sarvex::v1::Contract {
+            kind: ContractKind::Binary as i32,
+            multiplier_micro_usdc: 0,
+            ..Default::default()
+        };
+        assert_eq!(winner_payout(&contract, "YES"), 1_000_000);
+        assert_eq!(compute_payout(&contract, "YES", 0, 4).unwrap(), 4_000_000);
+        assert_eq!(compute_payout(&contract, "YES", 0, -4).unwrap(), 0);
+        assert_eq!(compute_payout(&contract, "NO", 0, -4).unwrap(), 4_000_000);
+        let custom = sarvex_contracts::sarvex::v1::Contract {
+            payout_ticks: 200,
+            ..contract
+        };
+        assert_eq!(compute_payout(&custom, "YES", 0, 1).unwrap(), 2_000_000);
+    }
+
+    #[test]
+    fn strike_range_decides_yes_for_numeric_resolution() {
+        // "CPI > 3.40%" is lo = 341, hi = open.
+        let contract = sarvex_contracts::sarvex::v1::Contract {
+            kind: ContractKind::Binary as i32,
+            payout_ticks: 100,
+            payoff_rule: Some(rule(serde_json::json!({"type":"range","lo":341,"hi":null}))),
+            ..Default::default()
+        };
+        assert_eq!(compute_payout(&contract, "", 340, 2).unwrap(), 0);
+        assert_eq!(compute_payout(&contract, "", 341, 2).unwrap(), 2_000_000);
+        assert_eq!(compute_payout(&contract, "", 340, -2).unwrap(), 2_000_000);
+        assert_eq!(compute_payout(&contract, "", 500, -2).unwrap(), 0);
+    }
+
+    #[test]
+    fn category_set_decides_yes_for_categorical_resolution() {
+        let contract = sarvex_contracts::sarvex::v1::Contract {
+            kind: ContractKind::Binary as i32,
+            payout_ticks: 100,
+            payoff_rule: Some(rule(
+                serde_json::json!({"type":"categories","yes_values":["HIKE_25"]}),
+            )),
+            ..Default::default()
+        };
+        assert_eq!(compute_payout(&contract, "HIKE_25", 0, 3).unwrap(), 3_000_000);
+        assert_eq!(compute_payout(&contract, "HOLD", 0, 3).unwrap(), 0);
+        assert_eq!(compute_payout(&contract, "HOLD", 0, -3).unwrap(), 3_000_000);
+    }
+
     #[test]
     fn scalar_payout_clamps_resolution_to_bounds() {
         let contract = sarvex_contracts::sarvex::v1::Contract {
