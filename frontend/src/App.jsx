@@ -1989,7 +1989,7 @@ function OracleDetails({ market }) {
   )
 }
 
-function useMarginPreview(ticker, action, yesPriceTicks, count, enabled) {
+function useMarginPreview(ticker, action, yesPriceTicks, count, enabled, side = 'YES') {
   const [preview, setPreview] = useState(null)
   useEffect(() => {
     const token = localStorage.getItem('sarvex_token')
@@ -2002,7 +2002,7 @@ function useMarginPreview(ticker, action, yesPriceTicks, count, enabled) {
       fetch(`${API_BASE}/v1/account/margin/preview`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ ticker, side: 'YES', action, price_ticks: yesPriceTicks, count }),
+        body: JSON.stringify({ ticker, side, action, price_ticks: yesPriceTicks, count }),
         signal: controller.signal,
       })
         .then((response) => (response.ok ? response.json() : null))
@@ -2013,7 +2013,7 @@ function useMarginPreview(ticker, action, yesPriceTicks, count, enabled) {
       window.clearTimeout(timer)
       controller.abort()
     }
-  }, [ticker, action, yesPriceTicks, count, enabled])
+  }, [ticker, action, yesPriceTicks, count, enabled, side])
   return preview
 }
 
@@ -2150,6 +2150,7 @@ function FutureTradeTicket({ market, bestBid, bestAsk, mark, authed, busy, onTra
     || (orderType === 'limit' ? futureLimitPriceIssue(market, parsedPrice) : '')
     || (!Number.isSafeInteger(contracts) || contracts <= 0 ? 'Enter a positive whole number of contracts.' : '')
     || (contracts > Number(market.max_order_size ?? market.maxOrderSize ?? Infinity) ? 'Quantity exceeds the contract order limit.' : '')
+  const marginPreview = useMarginPreview(market.ticker, tab === 'buy' ? 'BUY' : 'SELL', executionTicks, contracts, authed && !orderIssue, 'LONG')
   const payoffNote = tab === 'buy'
     ? 'Long collateral is locked from the floor; final payout is based on the clamped settlement value.'
     : 'Short collateral is locked from the cap; final payout is based on the clamped settlement value.'
@@ -2203,6 +2204,7 @@ function FutureTradeTicket({ market, bestBid, bestAsk, mark, authed, busy, onTra
       </div>
       <div className="ticket-summary"><span>{orderType === 'market' ? 'Est. entry' : 'Entry'}</span><strong>{formatFuturePrice(market, orderType === 'market' ? marketPriceTicks : priceTicks)}</strong></div>
       <div className="ticket-summary muted"><span>{orderType === 'market' ? 'Max. collateral' : 'Required collateral'}</span><strong>{formatUSDC(hold)}</strong></div>
+      <MarginPreviewLine preview={marginPreview} />
       <div className="ticket-note">{payoffNote}</div>
       {orderIssue && <div className="ticket-validation" role="alert">{orderIssue}</div>}
       <button className={tab === 'buy' ? 'trade-btn long-submit' : 'trade-btn short-submit'} type="button" disabled={!authed || busy || Boolean(orderIssue)} onClick={submit}>

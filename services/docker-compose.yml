@@ -87,6 +87,7 @@ services:
       POSTGRES_URL: postgres://sarvex:sarvex@postgres:5432/sarvex
       REFDATA_ADDR: http://refdata-svc:50051
       LEDGER_ADDR: http://ledger-svc:50052
+      PORTFOLIO_MARGIN_ENABLED: "true"
       MARGIN_SHADOW_LOG_ENABLED: "true"
       MARGIN_SHADOW_LOG_INTERVAL_SECS: "600"
       GRPC_PORT: 50053
@@ -168,6 +169,7 @@ services:
       ME_CORE_ADDR: http://me-core:50054
       ME_CORE_TIMEOUT_MS: ${ME_CORE_TIMEOUT_MS:-500}
       NATS_URL: nats://nats:4222
+      PORTFOLIO_MARGIN_ENABLED: "true"
       EVENT_RETENTION: jetstream
       GRPC_PORT: 50055
       HTTP_PORT: 8085
@@ -344,6 +346,7 @@ services:
       POSITION_ADDR: http://position-svc:50056
       LEDGER_ADDR: http://ledger-svc:50052
       NATS_URL: nats://nats:4222
+      PORTFOLIO_MARGIN_ENABLED: "true"
       EVENT_RETENTION: jetstream
       GRPC_PORT: 50058
       HTTP_PORT: 8089
