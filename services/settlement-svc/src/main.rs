@@ -1,5 +1,9 @@
 #![allow(clippy::result_large_err)]
 
+mod event_settlement;
+#[cfg(test)]
+mod event_settlement_it;
+
 use anyhow::{Context, Result};
 use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::get, Json, Router};
 use chrono::Utc;
@@ -11,7 +15,7 @@ use sarvex_contracts::sarvex::v1::{
     settlement_server::{Settlement, SettlementServer},
     ContractKind, ContractState, GetContractRequest, GetResolutionRequest, GetSettlementRequest,
     LedgerEntry, ListPositionsByContractRequest, PostTransactionRequest, ResolutionStatus,
-    SettleContractRequest, SettlementResult,
+    EventSettlementResult, SettleContractRequest, SettleEventRequest, SettlementResult,
 };
 use sarvex_db::connect;
 use sarvex_events::EventPublisher;
@@ -31,6 +35,9 @@ struct SettlementService {
     positions: PositionClient<Channel>,
     ledger: LedgerClient<Channel>,
     publisher: Option<EventPublisher>,
+    /// `PORTFOLIO_MARGIN_ENABLED`: PORTFOLIO events settle through `SettleEvent` and are
+    /// refused by `SettleContract`. Off, the margin columns are never read.
+    portfolio_enabled: bool,
 }
 #[derive(Clone)]
 struct HealthState {
@@ -60,6 +67,9 @@ async fn main() -> Result<()> {
         positions,
         ledger,
         publisher,
+        portfolio_enabled: env::var("PORTFOLIO_MARGIN_ENABLED")
+            .map(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "yes"))
+            .unwrap_or(false),
     };
     let grpc_addr: SocketAddr = format!(
         "0.0.0.0:{}",
@@ -153,6 +163,19 @@ impl Settlement for SettlementService {
             return Err(Status::invalid_argument(
                 "event_ticker does not belong to contract",
             ));
+        }
+        if self.portfolio_enabled {
+            let model: Option<String> =
+                sqlx::query_scalar("SELECT margin_model FROM refdata.events WHERE event_ticker=$1")
+                    .bind(&contract.event_ticker)
+                    .fetch_optional(&self.pool)
+                    .await
+                    .map_err(internal)?;
+            if model.as_deref() == Some("PORTFOLIO") {
+                return Err(Status::failed_precondition(
+                    "this contract belongs to a PORTFOLIO event; use SettleEvent",
+                ));
+            }
         }
         let existing = self.existing_settlement(&ticker).await.map_err(internal)?;
         if let Some(existing) = &existing {
@@ -257,6 +280,54 @@ impl Settlement for SettlementService {
         };
         if let Some(publisher) = &self.publisher {
             let _ = publisher.publish(format!("settlement.completed.{ticker}"), serde_json::to_vec(&serde_json::json!({"ticker":ticker,"total_payout_micro_usdc":payout_total})).unwrap_or_default()).await;
+        }
+        Ok(Response::new(result))
+    }
+
+    async fn settle_event(
+        &self,
+        request: Request<SettleEventRequest>,
+    ) -> Result<Response<EventSettlementResult>, Status> {
+        if !self.portfolio_enabled {
+            return Err(Status::failed_precondition(
+                "cross margin is not enabled (PORTFOLIO_MARGIN_ENABLED)",
+            ));
+        }
+        let event_ticker = require_text(&request.into_inner().event_ticker, "event_ticker")?;
+        let resolution = self
+            .oracle
+            .clone()
+            .get_resolution(GetResolutionRequest {
+                event_ticker: event_ticker.clone(),
+            })
+            .await
+            .map_err(internal)?
+            .into_inner();
+        if ResolutionStatus::try_from(resolution.status).ok() != Some(ResolutionStatus::Finalized) {
+            return Err(Status::failed_precondition(
+                "oracle resolution is not finalized",
+            ));
+        }
+        let outcome = if resolution.categorical_value.is_empty() {
+            sarvex_domain::margin::Outcome::Numeric(resolution.numeric_value)
+        } else {
+            sarvex_domain::margin::Outcome::Category(resolution.categorical_value.clone())
+        };
+        let result =
+            event_settlement::settle_event(&self.pool, &self.ledger, &event_ticker, outcome)
+                .await?;
+        if let Some(publisher) = &self.publisher {
+            let _ = publisher
+                .publish(
+                    format!("settlement.event.completed.{event_ticker}"),
+                    serde_json::to_vec(&serde_json::json!({
+                        "event_ticker": event_ticker,
+                        "accounts_settled": result.accounts_settled,
+                        "total_credits_micro_usdc": result.total_credits_micro_usdc,
+                    }))
+                    .unwrap_or_default(),
+                )
+                .await;
         }
         Ok(Response::new(result))
     }
@@ -428,9 +499,9 @@ fn compute_payout(
         return Ok(0);
     }
     let payout = if contract.kind == ContractKind::Binary as i32 {
-        let yes = category.eq_ignore_ascii_case("YES") || numeric > 0;
+        let yes = binary_resolves_yes(contract, category, numeric)?;
         let winning = if yes { qty.max(0) } else { (-qty).max(0) };
-        i128::from(winning).checked_mul(i128::from(contract.multiplier_micro_usdc.max(0)))
+        i128::from(winning).checked_mul(i128::from(binary_unit_payout_micro(contract)))
     } else {
         sarvex_domain::scalar_payout_micro(
             qty,
@@ -447,9 +518,76 @@ fn compute_payout(
         .try_into()
         .map_err(|_| Status::failed_precondition("settlement payout exceeds int64"))
 }
+/// Settlement value of one winning binary: `payout_ticks` (default 100 = 1 USDC) at 10,000
+/// micro-USDC per tick. `multiplier_micro_usdc` is NULL/0 on binaries and is not used here.
+fn binary_unit_payout_micro(contract: &sarvex_contracts::sarvex::v1::Contract) -> i64 {
+    let ticks = if contract.payout_ticks > 0 {
+        contract.payout_ticks
+    } else {
+        sarvex_domain::margin::DEFAULT_BINARY_PAYOUT_TICKS
+    };
+    ticks.saturating_mul(sarvex_domain::margin::BINARY_TICK_VALUE_MICRO)
+}
+
+/// Decides whether a binary resolved YES. A `payoff_rule` (strike range or category set) is
+/// authoritative; contracts without one keep the legacy rule (category "YES" or numeric > 0).
+fn binary_resolves_yes(
+    contract: &sarvex_contracts::sarvex::v1::Contract,
+    category: &str,
+    numeric: i64,
+) -> Result<bool, Status> {
+    let Some(rule) = contract
+        .payoff_rule
+        .as_ref()
+        .filter(|rule| !rule.fields.is_empty())
+    else {
+        return Ok(category.eq_ignore_ascii_case("YES") || numeric > 0);
+    };
+    let json = struct_to_json(rule);
+    let payoff = sarvex_domain::margin::listing::parse_payoff_rule(&json, contract.payout_ticks.max(1))
+        .map_err(|error| Status::failed_precondition(format!("invalid payoff_rule: {error}")))?;
+    let outcome = if category.is_empty() {
+        sarvex_domain::margin::Outcome::Numeric(numeric)
+    } else {
+        sarvex_domain::margin::Outcome::Category(category.to_owned())
+    };
+    payoff
+        .value_at(&outcome)
+        .map(|value| value > 0)
+        .map_err(|error| Status::failed_precondition(error.to_string()))
+}
+
+fn struct_to_json(value: &prost_types::Struct) -> serde_json::Value {
+    fn convert(value: &prost_types::Value) -> serde_json::Value {
+        use prost_types::value::Kind;
+        match &value.kind {
+            None | Some(Kind::NullValue(_)) => serde_json::Value::Null,
+            Some(Kind::BoolValue(v)) => serde_json::Value::Bool(*v),
+            Some(Kind::NumberValue(v)) if v.fract() == 0.0 && v.abs() < 9.0e15 => {
+                serde_json::Value::from(*v as i64)
+            }
+            Some(Kind::NumberValue(v)) => serde_json::Number::from_f64(*v)
+                .map(serde_json::Value::Number)
+                .unwrap_or(serde_json::Value::Null),
+            Some(Kind::StringValue(v)) => serde_json::Value::String(v.clone()),
+            Some(Kind::ListValue(list)) => {
+                serde_json::Value::Array(list.values.iter().map(convert).collect())
+            }
+            Some(Kind::StructValue(inner)) => struct_to_json(inner),
+        }
+    }
+    serde_json::Value::Object(
+        value
+            .fields
+            .iter()
+            .map(|(key, value)| (key.clone(), convert(value)))
+            .collect(),
+    )
+}
+
 fn winner_payout(contract: &sarvex_contracts::sarvex::v1::Contract, _category: &str) -> i64 {
     if contract.kind == ContractKind::Binary as i32 {
-        contract.multiplier_micro_usdc
+        binary_unit_payout_micro(contract)
     } else {
         0
     }
@@ -481,6 +619,83 @@ mod tests {
         assert_eq!(compute_payout(&contract, "YES", 0, 3).unwrap(), 3_000_000);
         assert_eq!(compute_payout(&contract, "YES", 0, -3).unwrap(), 0);
     }
+    fn rule(json: serde_json::Value) -> prost_types::Struct {
+        fn convert(value: &serde_json::Value) -> prost_types::Value {
+            use prost_types::value::Kind;
+            prost_types::Value {
+                kind: Some(match value {
+                    serde_json::Value::Null => Kind::NullValue(0),
+                    serde_json::Value::Bool(v) => Kind::BoolValue(*v),
+                    serde_json::Value::Number(v) => Kind::NumberValue(v.as_f64().unwrap()),
+                    serde_json::Value::String(v) => Kind::StringValue(v.clone()),
+                    serde_json::Value::Array(v) => Kind::ListValue(prost_types::ListValue {
+                        values: v.iter().map(convert).collect(),
+                    }),
+                    serde_json::Value::Object(_) => Kind::StructValue(to_struct(value)),
+                }),
+            }
+        }
+        fn to_struct(value: &serde_json::Value) -> prost_types::Struct {
+            prost_types::Struct {
+                fields: value
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), convert(v)))
+                    .collect(),
+            }
+        }
+        to_struct(&json)
+    }
+
+    #[test]
+    fn binary_winners_are_paid_even_when_multiplier_is_zero() {
+        let contract = sarvex_contracts::sarvex::v1::Contract {
+            kind: ContractKind::Binary as i32,
+            multiplier_micro_usdc: 0,
+            ..Default::default()
+        };
+        assert_eq!(winner_payout(&contract, "YES"), 1_000_000);
+        assert_eq!(compute_payout(&contract, "YES", 0, 4).unwrap(), 4_000_000);
+        assert_eq!(compute_payout(&contract, "YES", 0, -4).unwrap(), 0);
+        assert_eq!(compute_payout(&contract, "NO", 0, -4).unwrap(), 4_000_000);
+        let custom = sarvex_contracts::sarvex::v1::Contract {
+            payout_ticks: 200,
+            ..contract
+        };
+        assert_eq!(compute_payout(&custom, "YES", 0, 1).unwrap(), 2_000_000);
+    }
+
+    #[test]
+    fn strike_range_decides_yes_for_numeric_resolution() {
+        // "CPI > 3.40%" is lo = 341, hi = open.
+        let contract = sarvex_contracts::sarvex::v1::Contract {
+            kind: ContractKind::Binary as i32,
+            payout_ticks: 100,
+            payoff_rule: Some(rule(serde_json::json!({"type":"range","lo":341,"hi":null}))),
+            ..Default::default()
+        };
+        assert_eq!(compute_payout(&contract, "", 340, 2).unwrap(), 0);
+        assert_eq!(compute_payout(&contract, "", 341, 2).unwrap(), 2_000_000);
+        assert_eq!(compute_payout(&contract, "", 340, -2).unwrap(), 2_000_000);
+        assert_eq!(compute_payout(&contract, "", 500, -2).unwrap(), 0);
+    }
+
+    #[test]
+    fn category_set_decides_yes_for_categorical_resolution() {
+        let contract = sarvex_contracts::sarvex::v1::Contract {
+            kind: ContractKind::Binary as i32,
+            payout_ticks: 100,
+            payoff_rule: Some(rule(
+                serde_json::json!({"type":"categories","yes_values":["HIKE_25"]}),
+            )),
+            ..Default::default()
+        };
+        assert_eq!(compute_payout(&contract, "HIKE_25", 0, 3).unwrap(), 3_000_000);
+        assert_eq!(compute_payout(&contract, "HOLD", 0, 3).unwrap(), 0);
+        assert_eq!(compute_payout(&contract, "HOLD", 0, -3).unwrap(), 3_000_000);
+    }
+
     #[test]
     fn scalar_payout_clamps_resolution_to_bounds() {
         let contract = sarvex_contracts::sarvex::v1::Contract {

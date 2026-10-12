@@ -9,7 +9,8 @@ use sarvex_contracts::sarvex::v1::{
     order_router_server::{OrderRouter, OrderRouterServer},
     ref_data_client::RefDataClient,
     risk_client::RiskClient,
-    AddBookRequest, AmendOrderRequest, AmendOrderResponse, CancelOrderRequest, CancelOrderResponse,
+    AddBookRequest, AmendOrderRequest, AmendOrderResponse, ApplyFillRequest, CancelOrderRequest,
+    CancelOrderResponse, ReleaseOrderRequest, ReserveOrderRequest,
     Contract, ContractKind, Fill, FillRecord, GetOrderRequest, LedgerEntry, ListFillsRequest,
     ListFillsResponse, ListOrdersRequest, ListOrdersResponse, Order, OrderStatus,
     PostTransactionRequest, SubmitOrderRequest, SubmitOrderResponse,
@@ -32,6 +33,10 @@ struct OrderRouterService {
     risk: RiskClient<Channel>,
     ledger: LedgerClient<Channel>,
     me: MeCoreClient,
+    /// `PORTFOLIO_MARGIN_ENABLED`: route PORTFOLIO events through risk-svc margin
+    /// instead of per-order holds. Off, the router never reads the margin columns, so
+    /// it is safe to deploy before migration 000016.
+    portfolio_enabled: bool,
 }
 
 #[derive(Clone)]
@@ -71,18 +76,30 @@ async fn main() -> Result<()> {
         env::var("HTTP_PORT").unwrap_or_else(|_| "8085".to_owned())
     )
     .parse()?;
+    let portfolio_enabled = env::var("PORTFOLIO_MARGIN_ENABLED")
+        .map(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "yes"))
+        .unwrap_or(false);
     let service = OrderRouterService {
         pool: pool.clone(),
         refdata,
         risk,
         ledger,
         me,
+        portfolio_enabled,
     };
     tokio::spawn(run_fill_posting_worker(
         pool.clone(),
         service.ledger.clone(),
         service.refdata.clone(),
+        service.risk.clone(),
+        portfolio_enabled,
     ));
+    if portfolio_enabled {
+        tokio::spawn(run_margin_release_worker(
+            pool.clone(),
+            service.risk.clone(),
+        ));
+    }
     tokio::spawn(run_pending_order_reconciler(service.clone()));
     if let Ok(nats_url) = env::var("NATS_URL") {
         tokio::spawn(run_execution_event_publisher(pool.clone(), nats_url));
@@ -283,6 +300,19 @@ impl OrderRouter for OrderRouterService {
                 max_price_ticks: contract.max_price_ticks,
             })
             .await;
+        let (portfolio, halted) = self.event_flags(&request.ticker).await?;
+        if halted {
+            self.mark_rejected(&order_id, "EVENT_HALTED").await?;
+            return Ok(Response::new(
+                self.rejected_response(
+                    &request.user_id,
+                    &order_id,
+                    "EVENT_HALTED",
+                    "trading is halted for this event",
+                )
+                .await?,
+            ));
+        }
         let risk = match self
             .risk
             .clone()
@@ -322,7 +352,47 @@ impl OrderRouter for OrderRouterService {
             self.mark_rejected(&order_id, "RESERVATION_FAILED").await?;
             return Err(error);
         }
-        let (hold_id, hold_amount) = if risk.required_hold_micro_usdc > 0 {
+        let (hold_id, hold_amount) = if portfolio {
+            // Cross margin: one requirement per account and event, held by risk-svc.
+            // Released by `run_margin_release_worker` once the order is terminal and its
+            // fills are applied, so a rejected or cancelled order needs no cleanup here.
+            match self
+                .risk
+                .clone()
+                .reserve_order(ReserveOrderRequest {
+                    user_id: request.user_id.clone(),
+                    order_id: order_id.clone(),
+                    ticker: request.ticker.clone(),
+                    side: request.side,
+                    action: request.action,
+                    price_ticks: request.price_ticks,
+                    count: request.count,
+                    idempotency_key: format!("order:{order_id}:margin"),
+                })
+                .await
+            {
+                Ok(decision) => {
+                    let decision = decision.into_inner();
+                    if !decision.approved {
+                        self.mark_rejected(&order_id, &decision.reject_code).await?;
+                        return Ok(Response::new(
+                            self.rejected_response(
+                                &request.user_id,
+                                &order_id,
+                                &decision.reject_code,
+                                &decision.reject_reason,
+                            )
+                            .await?,
+                        ));
+                    }
+                }
+                Err(error) => {
+                    self.mark_rejected(&order_id, "MARGIN_RESERVE_FAILED").await?;
+                    return Err(internal(error));
+                }
+            }
+            (String::new(), 0)
+        } else if risk.required_hold_micro_usdc > 0 {
             let hold = match self
                 .ledger
                 .clone()
@@ -549,6 +619,13 @@ impl OrderRouter for OrderRouterService {
                 reject_code: "COUNT_BELOW_FILLED".to_owned(),
             }));
         }
+        if self.event_flags(&existing.ticker).await?.0 {
+            // Margin is reserved per order; cancel and re-submit instead.
+            return Ok(Response::new(AmendOrderResponse {
+                order: Some(existing),
+                reject_code: "AMEND_NOT_SUPPORTED".to_owned(),
+            }));
+        }
         let contract = self
             .refdata
             .clone()
@@ -754,6 +831,14 @@ impl OrderRouter for OrderRouterService {
 }
 
 impl OrderRouterService {
+    /// `(uses cross margin, trading halted)` for the event a contract belongs to.
+    async fn event_flags(&self, ticker: &str) -> Result<(bool, bool), Status> {
+        if !self.portfolio_enabled {
+            return Ok((false, false));
+        }
+        event_flags(&self.pool, ticker).await
+    }
+
     async fn release_order_remainder(&self, order_id: &str) -> Result<(), Status> {
         release_order_remainder(&self.pool, &self.ledger, &self.refdata, order_id).await
     }
@@ -1035,10 +1120,83 @@ async fn run_execution_event_publisher(pool: PgPool, nats_url: String) {
     }
 }
 
+async fn event_flags(pool: &PgPool, ticker: &str) -> Result<(bool, bool), Status> {
+    let row = sqlx::query("SELECT e.margin_model, e.trading_halted FROM refdata.contracts c JOIN refdata.events e ON e.event_ticker = c.event_ticker WHERE c.ticker = $1")
+        .bind(ticker)
+        .fetch_optional(pool)
+        .await
+        .map_err(internal)?;
+    Ok(row
+        .map(|row| {
+            (
+                row.get::<String, _>("margin_model") == "PORTFOLIO",
+                row.get::<bool, _>("trading_halted"),
+            )
+        })
+        .unwrap_or((false, false)))
+}
+
+/// Gives margin back for PORTFOLIO orders that are finished (filled, cancelled, expired or
+/// rejected) once all of their fills have been applied to margin, in that order (CM-02).
+/// This covers user cancels, expiries, IOC remainders and orders rejected after reserving.
+async fn run_margin_release_worker(pool: PgPool, risk: RiskClient<Channel>) {
+    loop {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let rows = match sqlx::query(
+            "SELECT m.order_id, m.user_id, COALESCE((SELECT MAX(f.global_seq) FROM orders.fills f WHERE f.maker_order_id = m.order_id OR f.taker_order_id = m.order_id), 0)::BIGINT AS last_seq
+             FROM risk.margin_orders m
+             JOIN orders.orders o ON o.order_id = m.order_id
+             WHERE o.status IN ('FILLED','CANCELLED','EXPIRED','REJECTED')
+               AND o.updated_at < now() - interval '1 second'
+               AND NOT EXISTS (
+                 SELECT 1 FROM orders.fills f
+                 JOIN orders.fill_posting_outbox ob ON ob.fill_id = f.fill_id
+                 WHERE (f.maker_order_id = m.order_id OR f.taker_order_id = m.order_id)
+                   AND ob.status <> 'POSTED')
+             ORDER BY m.updated_at
+             LIMIT 50",
+        )
+        .fetch_all(&pool)
+        .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::warn!(error = %error, "margin release scan failed");
+                continue;
+            }
+        };
+        for row in rows {
+            let order_id: String = row.get("order_id");
+            let result = risk
+                .clone()
+                .release_order(ReleaseOrderRequest {
+                    user_id: row.get("user_id"),
+                    order_id: order_id.clone(),
+                    remaining_count: 0,
+                    idempotency_key: format!("order:{order_id}:margin-release"),
+                    global_seq: row.get::<i64, _>("last_seq") as u64,
+                    reason: "TERMINAL".to_owned(),
+                })
+                .await;
+            match result {
+                Ok(response) if response.get_ref().approved => {}
+                Ok(response) => {
+                    tracing::warn!(order_id = %order_id, code = %response.get_ref().reject_code, "margin release refused");
+                }
+                Err(error) => {
+                    tracing::warn!(order_id = %order_id, error = %error, "margin release deferred");
+                }
+            }
+        }
+    }
+}
+
 async fn run_fill_posting_worker(
     pool: PgPool,
     ledger: LedgerClient<Channel>,
     refdata: RefDataClient<Channel>,
+    risk: RiskClient<Channel>,
+    portfolio_enabled: bool,
 ) {
     loop {
         let rows = match sqlx::query(
@@ -1060,7 +1218,7 @@ async fn run_fill_posting_worker(
         }
         for row in rows {
             let fill_id: String = row.get("fill_id");
-            let result = post_fill(&pool, &ledger, &refdata, &row).await;
+            let result = post_fill(&pool, &ledger, &refdata, &risk, portfolio_enabled, &row).await;
             match result {
                 Ok(()) => {
                     let _ = sqlx::query("UPDATE orders.fills SET posted=true WHERE fill_id=$1")
@@ -1108,10 +1266,38 @@ async fn post_fill(
     pool: &PgPool,
     ledger: &LedgerClient<Channel>,
     refdata: &RefDataClient<Channel>,
+    risk: &RiskClient<Channel>,
+    portfolio_enabled: bool,
     row: &sqlx::postgres::PgRow,
 ) -> Result<(), Status> {
     let fill_id: String = row.get("fill_id");
     let ticker: String = row.get("ticker");
+    if portfolio_enabled && event_flags(pool, &ticker).await?.0 {
+        // Cross margin: risk-svc moves the premium and re-margins both parties atomically.
+        let response = tokio::time::timeout(
+            Duration::from_secs(5),
+            risk.clone().apply_fill(ApplyFillRequest {
+                fill_id: fill_id.clone(),
+                global_seq: row.get::<i64, _>("global_seq") as u64,
+                ticker: ticker.clone(),
+                maker_user_id: row.get("maker_user_id"),
+                maker_order_id: row.get("maker_order_id"),
+                taker_user_id: row.get("taker_user_id"),
+                taker_order_id: row.get("taker_order_id"),
+                maker_side: row.get("maker_side"),
+                maker_action: row.get("maker_action"),
+                taker_side: row.get("taker_side"),
+                taker_action: row.get("taker_action"),
+                price_ticks: row.get("price_ticks"),
+                count: row.get("count"),
+            }),
+        )
+        .await
+        .map_err(|_| Status::deadline_exceeded("risk-svc fill application timed out"))?
+        .map_err(internal)?;
+        let _ = response;
+        return Ok(());
+    }
     let contract = tokio::time::timeout(
         Duration::from_secs(3),
         refdata
@@ -1210,6 +1396,27 @@ async fn opening_fill_count(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Cash owed to a binary closer at the fill price: a closing long sells YES at `price`, a
+/// closing short buys YES back and keeps the complement. `payout_ticks` defaults to 100.
+fn binary_close_credit_micro(
+    payout_ticks: i64,
+    is_long: bool,
+    price_ticks: i64,
+    closing_count: i64,
+) -> Result<i64, Status> {
+    let payout = if payout_ticks > 0 { payout_ticks } else { 100 };
+    let per_unit_ticks = if is_long { price_ticks } else { payout - price_ticks };
+    if per_unit_ticks < 0 {
+        return Err(Status::failed_precondition(
+            "binary fill price exceeds the contract payout",
+        ));
+    }
+    per_unit_ticks
+        .checked_mul(closing_count)
+        .and_then(|value| value.checked_mul(10_000))
+        .ok_or_else(|| Status::failed_precondition("binary closing credit overflow"))
+}
+
 async fn post_fill_party(
     ledger: &LedgerClient<Channel>,
     contract: &Contract,
@@ -1232,18 +1439,33 @@ async fn post_fill_party(
         commit_fill_hold(ledger, fill_id, party, &hold_id, amount, destination).await?;
     }
     let closing_count = count.saturating_sub(opening_count);
-    if closing_count > 0 && contract.kind == ContractKind::Scalar as i32 {
-        let signed = signed_position_delta(side, action, 1);
-        let is_long = signed < 0;
-        let amount = sarvex_domain::scalar_lock_micro(
-            is_long,
-            price_ticks,
-            closing_count,
-            contract.lower_bound_ticks,
-            contract.upper_bound_ticks,
-            contract.tick_value_micro,
-        )
-        .map_err(|error| Status::failed_precondition(error.to_string()))?;
+    let closing_credit = if closing_count > 0 {
+        let is_long = signed_position_delta(side, action, 1) < 0;
+        if contract.kind == ContractKind::Scalar as i32 {
+            Some((
+                sarvex_domain::scalar_lock_micro(
+                    is_long,
+                    price_ticks,
+                    closing_count,
+                    contract.lower_bound_ticks,
+                    contract.upper_bound_ticks,
+                    contract.tick_value_micro,
+                )
+                .map_err(|error| Status::failed_precondition(error.to_string()))?,
+                "scalar closing payout",
+            ))
+        } else if contract.kind == ContractKind::Binary as i32 {
+            Some((
+                binary_close_credit_micro(contract.payout_ticks, is_long, price_ticks, closing_count)?,
+                "binary closing payout",
+            ))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if let Some((amount, memo)) = closing_credit {
         if amount > 0 {
             let mut client = ledger.clone();
             client
@@ -1255,13 +1477,13 @@ async fn post_fill_party(
                             account_code: destination.to_owned(),
                             direction: "DR".to_owned(),
                             amount_micro_usdc: amount,
-                            memo: "scalar closing payout".to_owned(),
+                            memo: memo.to_owned(),
                         },
                         LedgerEntry {
                             account_code: format!("LIAB:USER:{user_id}:CASH"),
                             direction: "CR".to_owned(),
                             amount_micro_usdc: amount,
-                            memo: "scalar closing payout".to_owned(),
+                            memo: memo.to_owned(),
                         },
                     ],
                     metadata: None,
@@ -1655,7 +1877,19 @@ async fn shutdown_signal() {
 }
 
 #[cfg(test)]
+mod e2e_it;
+
+#[cfg(test)]
 mod tests {
+    #[test]
+    fn binary_close_credit_pays_price_for_longs_and_complement_for_shorts() {
+        assert_eq!(binary_close_credit_micro(100, true, 30, 5).unwrap(), 1_500_000);
+        assert_eq!(binary_close_credit_micro(100, false, 30, 5).unwrap(), 3_500_000);
+        assert_eq!(binary_close_credit_micro(0, true, 99, 1).unwrap(), 990_000);
+        assert_eq!(binary_close_credit_micro(200, false, 50, 2).unwrap(), 3_000_000);
+        assert!(binary_close_credit_micro(100, false, 120, 1).is_err());
+    }
+
     use super::*;
 
     #[test]

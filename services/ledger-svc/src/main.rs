@@ -569,6 +569,10 @@ async fn apply_entries(
     codes.dedup();
     let mut states = HashMap::new();
     for code in &codes {
+        // MARGIN and CLEARING accounts are created on first use (cross margin).
+        if let Some((account_type, user_id)) = lazy_account(code) {
+            ensure_account(tx, code, account_type, user_id.as_deref()).await?;
+        }
         let row =
             sqlx::query("SELECT account_id FROM ledger.accounts WHERE account_code=$1 FOR UPDATE")
                 .bind(code)
@@ -604,7 +608,7 @@ async fn apply_entries(
             state.balance.checked_add(entry.amount)
         }
         .ok_or_else(|| Status::failed_precondition("ledger balance overflow"))?;
-        if is_user_cash_or_holds(&entry.account_code) && balance < 0 {
+        if is_user_non_negative(&entry.account_code) && balance < 0 {
             return Err(Status::failed_precondition("insufficient funds"));
         }
         state.next_seq += 1;
@@ -729,6 +733,27 @@ fn user_account(user_id: &str, account: &str) -> String {
 fn is_user_cash_or_holds(code: &str) -> bool {
     code.starts_with("LIAB:USER:") && (code.ends_with(":CASH") || code.ends_with(":HOLDS"))
 }
+/// `LIAB:USER:{user}:MARGIN:{event}`: the per-event margin account of cross margin.
+fn margin_account_user(code: &str) -> Option<&str> {
+    let rest = code.strip_prefix("LIAB:USER:")?;
+    let (user, event) = rest.split_once(":MARGIN:")?;
+    (!user.is_empty() && !event.is_empty()).then_some(user)
+}
+fn is_clearing_account(code: &str) -> bool {
+    code.strip_prefix("LIAB:HOUSE:CLEARING:")
+        .is_some_and(|event| !event.is_empty())
+}
+/// Accounts that may never go negative: user cash, holds and margin.
+fn is_user_non_negative(code: &str) -> bool {
+    is_user_cash_or_holds(code) || margin_account_user(code).is_some()
+}
+/// Accounts ledger-svc creates on first use, as `(type, user_id)`.
+fn lazy_account(code: &str) -> Option<(&'static str, Option<String>)> {
+    if let Some(user) = margin_account_user(code) {
+        return Some(("LIABILITY", Some(user.to_owned())));
+    }
+    is_clearing_account(code).then_some(("LIABILITY", None))
+}
 fn require_text(value: &str, field: &str) -> Result<(), Status> {
     if value.trim().is_empty() {
         Err(Status::invalid_argument(format!("{field} is required")))
@@ -826,6 +851,22 @@ mod tests {
     fn invalid_direction_and_amount_are_rejected() {
         assert!(parse_entries(&[entry("A", "XX", 1)]).is_err());
         assert!(parse_entries(&[entry("A", "DR", 0)]).is_err());
+    }
+
+    #[test]
+    fn margin_and_clearing_accounts_are_created_lazily_and_margin_cannot_go_negative() {
+        assert_eq!(
+            lazy_account("LIAB:USER:u1:MARGIN:XEV-CPI"),
+            Some(("LIABILITY", Some("u1".to_owned())))
+        );
+        assert_eq!(
+            lazy_account("LIAB:HOUSE:CLEARING:XEV-CPI"),
+            Some(("LIABILITY", None))
+        );
+        assert_eq!(lazy_account("LIAB:USER:u1:CASH"), None);
+        assert!(is_user_non_negative("LIAB:USER:u1:MARGIN:XEV-CPI"));
+        assert!(!is_user_non_negative("LIAB:HOUSE:CLEARING:XEV-CPI"));
+        assert!(!is_user_non_negative("LIAB:USER:u1:MARGIN:"));
     }
 
     #[test]

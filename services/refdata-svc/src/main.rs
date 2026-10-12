@@ -247,7 +247,7 @@ impl RefData for RefDataService {
         let request = request.into_inner();
         let limit = request.limit.clamp(1, 200) as i64;
         let mut query = QueryBuilder::new(
-            "SELECT event_ticker, series_ticker, title, description, expected_resolution_at FROM refdata.events",
+            "SELECT event_ticker, series_ticker, title, description, expected_resolution_at, margin_model, outcome_kind, trading_halted, outcome_divider, outcome_step, outcome_anchor, outcome_min, outcome_max FROM refdata.events",
         );
         let mut has_where = false;
         if !request.series_ticker.trim().is_empty() {
@@ -320,6 +320,9 @@ impl RefData for RefDataService {
         let old = old
             .map(|row| row.get::<String, _>(0))
             .ok_or_else(|| Status::not_found("contract not found"))?;
+        if new_state == "OPEN" {
+            check_portfolio_listing(&mut tx, &request.ticker).await?;
+        }
         sqlx::query("UPDATE refdata.contracts SET state = $1::refdata.contract_state, updated_at = now() WHERE ticker = $2")
             .bind(new_state).bind(&request.ticker).execute(&mut *tx).await.map_err(internal)?;
         sqlx::query("INSERT INTO refdata.contract_state_history (ticker, old_state, new_state, reason, changed_by) VALUES ($1, $2::refdata.contract_state, $3::refdata.contract_state, $4, 'refdata-svc')")
@@ -341,21 +344,15 @@ impl RefData for RefDataService {
         &self,
         request: Request<GetEventRequest>,
     ) -> Result<Response<Event>, Status> {
-        let row = sqlx::query("SELECT event_ticker, series_ticker, title, description, expected_resolution_at FROM refdata.events WHERE event_ticker = $1")
+        let row = sqlx::query("SELECT event_ticker, series_ticker, title, description, expected_resolution_at, margin_model, outcome_kind, trading_halted, outcome_divider, outcome_step, outcome_anchor, outcome_min, outcome_max FROM refdata.events WHERE event_ticker = $1")
             .bind(request.into_inner().event_ticker).fetch_optional(&self.pool).await.map_err(internal)?
             .ok_or_else(|| Status::not_found("event not found"))?;
-        Ok(Response::new(Event {
-            event_ticker: row.get("event_ticker"),
-            series_ticker: row.get("series_ticker"),
-            title: row.get("title"),
-            description: row.get("description"),
-            expected_resolution_at: timestamp(row.get("expected_resolution_at")),
-        }))
+        Ok(Response::new(event_from_row(&row)))
     }
 }
 
-const CONTRACT_SELECT_BASE: &str = "SELECT ticker, event_ticker, series_ticker, kind::text AS kind, question, underlying, tick_size, min_price_ticks, max_price_ticks, lower_bound_ticks, upper_bound_ticks, multiplier_micro_usdc, max_order_size, position_limit_per_user, state::text AS state, listed_at, open_at, close_at, expected_resolution_at, settlement_source, oracle_policy, settlement_rule, close_global_seq, divider, multiplier_micro_per_display_unit, tick_value_micro FROM refdata.contracts";
-const CONTRACT_SELECT: &str = "SELECT ticker, event_ticker, series_ticker, kind::text AS kind, question, underlying, tick_size, min_price_ticks, max_price_ticks, lower_bound_ticks, upper_bound_ticks, multiplier_micro_usdc, max_order_size, position_limit_per_user, state::text AS state, listed_at, open_at, close_at, expected_resolution_at, settlement_source, oracle_policy, settlement_rule, close_global_seq, divider, multiplier_micro_per_display_unit, tick_value_micro FROM refdata.contracts WHERE ticker = $1";
+const CONTRACT_SELECT_BASE: &str = "SELECT ticker, event_ticker, series_ticker, kind::text AS kind, question, underlying, tick_size, min_price_ticks, max_price_ticks, lower_bound_ticks, upper_bound_ticks, multiplier_micro_usdc, max_order_size, position_limit_per_user, state::text AS state, listed_at, open_at, close_at, expected_resolution_at, settlement_source, oracle_policy, settlement_rule, close_global_seq, divider, multiplier_micro_per_display_unit, tick_value_micro, payoff_rule, payout_ticks FROM refdata.contracts";
+const CONTRACT_SELECT: &str = "SELECT ticker, event_ticker, series_ticker, kind::text AS kind, question, underlying, tick_size, min_price_ticks, max_price_ticks, lower_bound_ticks, upper_bound_ticks, multiplier_micro_usdc, max_order_size, position_limit_per_user, state::text AS state, listed_at, open_at, close_at, expected_resolution_at, settlement_source, oracle_policy, settlement_rule, close_global_seq, divider, multiplier_micro_per_display_unit, tick_value_micro, payoff_rule, payout_ticks FROM refdata.contracts WHERE ticker = $1";
 
 fn contract_from_row(row: &sqlx::postgres::PgRow) -> Contract {
     Contract {
@@ -404,6 +401,10 @@ fn contract_from_row(row: &sqlx::postgres::PgRow) -> Contract {
             .get::<Option<i64>, _>("multiplier_micro_per_display_unit")
             .unwrap_or_default(),
         tick_value_micro: row.get::<i64, _>("tick_value_micro"),
+        payoff_rule: row
+            .get::<Option<serde_json::Value>, _>("payoff_rule")
+            .and_then(json_to_struct),
+        payout_ticks: row.get::<i64, _>("payout_ticks"),
     }
 }
 
@@ -462,7 +463,94 @@ fn event_from_row(row: &sqlx::postgres::PgRow) -> Event {
         title: row.get("title"),
         description: row.get("description"),
         expected_resolution_at: timestamp(row.get("expected_resolution_at")),
+        margin_model: row.get("margin_model"),
+        outcome_kind: row.get("outcome_kind"),
+        trading_halted: row.get("trading_halted"),
+        outcome_divider: row
+            .get::<Option<i64>, _>("outcome_divider")
+            .unwrap_or_default(),
+        outcome_step: row.get("outcome_step"),
+        outcome_anchor: row.get("outcome_anchor"),
+        outcome_min: row.get("outcome_min"),
+        outcome_max: row.get("outcome_max"),
     }
+}
+
+/// CM-06: a contract on a PORTFOLIO event may only open when the whole event
+/// passes the listing rules (one outcome axis, same ticks, same source,
+/// resolution time and rounding, machine-readable payoffs). Runs inside the
+/// transition's transaction so the check and the state change see one snapshot.
+async fn check_portfolio_listing(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ticker: &str,
+) -> Result<(), Status> {
+    use sarvex_domain::margin::listing::{
+        validate_portfolio_event, ListingContract, ListingEvent, ListingKind,
+    };
+    use sarvex_domain::margin::{OutcomeGrid, OutcomeKind};
+
+    let event = sqlx::query("SELECT e.event_ticker, e.margin_model, e.outcome_kind, e.outcome_divider, e.outcome_step, e.outcome_anchor, e.outcome_min, e.outcome_max FROM refdata.events e JOIN refdata.contracts c ON c.event_ticker = e.event_ticker WHERE c.ticker = $1 FOR SHARE OF e")
+        .bind(ticker)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(internal)?;
+    if event.get::<String, _>("margin_model") != "PORTFOLIO" {
+        return Ok(());
+    }
+    let event_ticker: String = event.get("event_ticker");
+    let outcome_kind = match event.get::<String, _>("outcome_kind").as_str() {
+        "CATEGORICAL" => OutcomeKind::Categorical,
+        _ => OutcomeKind::Numeric,
+    };
+    let listing_event = ListingEvent {
+        event_ticker: event_ticker.clone(),
+        outcome_kind,
+        outcome_divider: event.get("outcome_divider"),
+        grid: OutcomeGrid {
+            step: event.get("outcome_step"),
+            anchor: event.get("outcome_anchor"),
+            min: event.get("outcome_min"),
+            max: event.get("outcome_max"),
+        },
+    };
+    let contracts = sqlx::query("SELECT ticker, kind::text AS kind, divider, lower_bound_ticks, upper_bound_ticks, tick_value_micro, min_price_ticks, max_price_ticks, payout_ticks, payoff_rule, COALESCE(settlement_source, '') AS settlement_source, expected_resolution_at, settlement_rule FROM refdata.contracts WHERE event_ticker = $1 ORDER BY ticker")
+        .bind(&event_ticker)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(internal)?
+        .iter()
+        .map(|row| ListingContract {
+            ticker: row.get("ticker"),
+            kind: if row.get::<String, _>("kind") == "SCALAR" {
+                ListingKind::Future
+            } else {
+                ListingKind::Binary
+            },
+            divider: row.get("divider"),
+            lower_bound_ticks: row.get("lower_bound_ticks"),
+            upper_bound_ticks: row.get("upper_bound_ticks"),
+            tick_value_micro: row.get("tick_value_micro"),
+            min_price_ticks: row.get("min_price_ticks"),
+            max_price_ticks: row.get("max_price_ticks"),
+            payout_ticks: row.get("payout_ticks"),
+            payoff_rule: row.get("payoff_rule"),
+            settlement_source: row.get("settlement_source"),
+            expected_resolution_at: row
+                .get::<DateTime<Utc>, _>("expected_resolution_at")
+                .to_rfc3339(),
+            settlement_rule: row.get("settlement_rule"),
+        })
+        .collect::<Vec<_>>();
+    validate_portfolio_event(&listing_event, &contracts).map_err(|violations| {
+        let detail = violations
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ");
+        Status::failed_precondition(format!(
+            "LISTING_INVALID: {event_ticker} cannot open under PORTFOLIO margin: {detail}"
+        ))
+    })
 }
 
 fn timestamp(value: DateTime<Utc>) -> Option<Timestamp> {

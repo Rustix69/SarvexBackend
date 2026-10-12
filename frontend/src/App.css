@@ -1759,3 +1759,25 @@ body { background: #111113; }
 .cancel-order-btn:hover:not(:disabled) { background: #422636; }
 .cancel-order-btn:disabled { opacity: .5; cursor: default; }
 .exit-price-form .exit-qty-input { width: 64px; text-align: center; }
+
+.margin-panel { margin: 0 0 18px; padding: 16px; border: 1px solid #2d2d33; border-radius: 3px; background: #1a1a1e; }
+.margin-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 12px 0 14px; }
+.margin-summary div { display: grid; gap: 4px; padding: 10px 12px; border-radius: 3px; background: #242429; }
+.margin-summary span { color: #88878f; font: 11px "Geist Mono", ui-monospace, monospace; }
+.margin-summary strong { color: #f1eff5; font: 600 18px "Geist Mono", ui-monospace, monospace; }
+.portfolio-row.margin-row { grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(80px, 0.7fr)) minmax(90px, 0.8fr); }
+.margin-note { margin: 10px 0 0; color: #88878f; font: 11px "Geist Mono", ui-monospace, monospace; }
+@media (max-width: 760px) { .margin-summary { grid-template-columns: 1fr; } .portfolio-row.margin-row { grid-template-columns: 1fr 1fr; } }
+
+.ticket-margin { border-top: 1px dashed rgba(255,255,255,.12); margin-top: 6px; padding-top: 6px; }
+.margin-page { max-width: 960px; margin: 0 auto; padding: 28px 16px 60px; }
+.margin-page-head h1 { margin: 0 0 6px; font-size: 28px; }
+.margin-page-head p { margin: 0 0 10px; opacity: .75; max-width: 640px; }
+.margin-badge { display: inline-block; font-size: 12px; padding: 3px 10px; border-radius: 999px; background: rgba(255,200,0,.14); color: #f5c542; }
+.margin-cards { display: grid; gap: 14px; margin-top: 16px; }
+.margin-card { border: 1px solid rgba(255,255,255,.1); border-radius: 12px; padding: 14px 16px; }
+.margin-bar { height: 8px; border-radius: 99px; background: rgba(255,255,255,.08); margin: 10px 0 12px; overflow: hidden; }
+.margin-bar i { display: block; height: 100%; background: #35c27a; border-radius: 99px; }
+.margin-card-numbers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.margin-card-numbers span { display: block; font-size: 12px; opacity: .65; }
+@media (max-width: 600px) { .margin-card-numbers { grid-template-columns: 1fr; } }

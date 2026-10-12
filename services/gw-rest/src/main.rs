@@ -18,13 +18,14 @@ use sarvex_contracts::sarvex::v1::{
     ref_data_client::RefDataClient, rfq_service_client::RfqServiceClient, risk_client::RiskClient,
     settlement_client::SettlementClient, AcceptQuoteRequest, Action, Balance, BookSnapshot,
     CancelOrderRequest, CancelQuoteRequest, CancelRfqRequest, Contract, ContractKind,
-    ContractState, CreateRfqRequest, Event, Fill, GetAccountHistoryRequest, GetBalanceRequest,
-    GetContractRequest, GetOpenInterestRequest, GetOrderRequest, GetPositionRequest,
-    GetResolutionRequest, GetRfqRequest, GetSettlementRequest, GetUserLimitsRequest,
-    ListContractsRequest, ListEventsRequest, ListFillsRequest, ListOrdersRequest,
-    ListPositionsRequest, ListQuotesRequest, ListSeriesRequest, Order, OrderStatus, Resolution,
-    Rfq, RfqQuote, RfqQuoteStatus, RfqStatus, SelfTradePreventionType, Series, SettlementResult,
-    Side, SubmitOrderRequest, SubmitQuoteRequest, TimeInForce, UserLimits,
+    ContractState, CreateRfqRequest, Event, Fill, GetAccountHistoryRequest,
+    GetAccountMarginRequest, GetBalanceRequest, GetContractRequest, GetOpenInterestRequest,
+    GetOrderRequest, GetPositionRequest, GetResolutionRequest, GetRfqRequest, GetSettlementRequest,
+    GetUserLimitsRequest, ListContractsRequest, ListEventsRequest, ListFillsRequest,
+    ListOrdersRequest, ListPositionsRequest, ListQuotesRequest, ListSeriesRequest, Order,
+    OrderStatus, PreviewMarginRequest, Resolution, Rfq, RfqQuote, RfqQuoteStatus, RfqStatus,
+    SelfTradePreventionType, Series, SettlementResult, Side, SubmitOrderRequest,
+    SubmitQuoteRequest, TimeInForce, UserLimits,
 };
 use sarvex_db::connect;
 use sarvex_me_client::{MeCoreClient, MeCoreError};
@@ -130,6 +131,14 @@ struct DepositInput {
     amount_micro_usdc: Option<i64>,
     amount_usdc: Option<i64>,
     note: Option<String>,
+}
+#[derive(Debug, Deserialize)]
+struct MarginPreviewInput {
+    ticker: String,
+    side: String,
+    action: String,
+    price_ticks: i64,
+    count: i64,
 }
 #[derive(Debug, Deserialize)]
 struct HistoryQuery {
@@ -254,6 +263,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/orders/{order_id}/cancel", post(cancel_order))
         .route("/v1/account/balance", get(get_balance))
         .route("/v1/account/risk", get(get_account_risk))
+        .route("/v1/account/margin", get(get_account_margin))
+        .route("/v1/account/margin/preview", post(preview_account_margin))
         .route("/v1/account/history", get(get_history))
         .route("/v1/positions", get(list_positions))
         .route("/v1/positions/{ticker}", get(get_position))
@@ -1118,6 +1129,7 @@ async fn submit_order(
     } {
         return response;
     }
+    let outcome = async {
     if input.client_order_id.len() > 128 {
         return error_response(
             StatusCode::BAD_REQUEST,
@@ -1223,6 +1235,17 @@ async fn submit_order(
     } else {
         input.price_ticks
     };
+    // CM-05: me-core books every order on one YES/LONG book, and risk sizes holds from the
+    // normalised order. NO becomes YES at the complement price and SHORT becomes LONG at the
+    // same price, with the action flipped. Market orders already carry a YES-book price.
+    let (side, action, price_ticks) = normalize_order_side(
+        side,
+        action,
+        price_ticks,
+        market,
+        contract.min_price_ticks,
+        contract.max_price_ticks,
+    );
     let expires_at = match input.expires_at.as_deref() {
         Some(value) => match parse_timestamp(value) {
             Ok(value) => value,
@@ -1293,6 +1316,18 @@ async fn submit_order(
         return response;
     }
     (response_status, Json(value)).into_response()
+    }
+    .await;
+    finalize_idempotency(
+        &state.pool,
+        &user_id,
+        "POST",
+        "/v1/orders",
+        &idempotency_key,
+        &request_body,
+        outcome,
+    )
+    .await
 }
 
 async fn list_orders(
@@ -1375,6 +1410,7 @@ async fn cancel_order(
     } {
         return response;
     }
+    let outcome = async {
     let mut client = state.orders;
     let value = match rpc(client.cancel_order(CancelOrderRequest {
         user_id: user_id.clone(),
@@ -1403,6 +1439,18 @@ async fn cancel_order(
         return response;
     }
     Json(value).into_response()
+    }
+    .await;
+    finalize_idempotency(
+        &state.pool,
+        &user_id,
+        "POST",
+        &request_path,
+        &idempotency_key,
+        &request_body,
+        outcome,
+    )
+    .await
 }
 
 async fn get_balance(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -1540,6 +1588,89 @@ async fn get_account_risk(State(state): State<AppState>, headers: HeaderMap) -> 
         }
     }))
     .into_response()
+}
+
+/// Cross margin per event (Stage 1). Served in SHADOW mode: computed from live
+/// positions and working orders, no money moves.
+async fn get_account_margin(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let user_id = match authenticated_user(&headers, &state.auth) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let mut client = state.risk;
+    match rpc(client.get_account_margin(GetAccountMarginRequest { user_id })).await {
+        Ok(margin) => Json(json!({
+            "user_id": margin.user_id,
+            "mode": margin.mode,
+            "total_margin_micro_usdc": margin.total_margin_micro_usdc,
+            "total_standalone_micro_usdc": margin.total_standalone_micro_usdc,
+            "savings_micro_usdc": margin.savings_micro_usdc,
+            "events": margin.events.iter().map(|event| json!({
+                "event_ticker": event.event_ticker,
+                "margin_model": event.margin_model,
+                "eligible": event.eligible,
+                "ineligible_reason": event.ineligible_reason,
+                "margin_micro_usdc": event.margin_micro_usdc,
+                "position_requirement_micro_usdc": event.position_requirement_micro_usdc,
+                "order_margin_micro_usdc": event.order_margin_micro_usdc,
+                "standalone_micro_usdc": event.standalone_micro_usdc,
+                "worst_outcome": event.worst_outcome,
+                "tickers": event.tickers,
+            })).collect::<Vec<_>>(),
+        }))
+        .into_response(),
+        Err(error) => grpc_error(error),
+    }
+}
+
+/// What-if: cross margin on the order's event before and after adding the order.
+/// Read-only, so no Idempotency-Key is required.
+async fn preview_account_margin(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<MarginPreviewInput>, JsonRejection>,
+) -> Response {
+    let user_id = match authenticated_user(&headers, &state.auth) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let Ok(Json(input)) = body else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "INVALID_ARGUMENT",
+            "invalid JSON request body",
+        );
+    };
+    let (Some(side), Some(action)) = (side_value(&input.side), action_value(&input.action)) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "INVALID_ARGUMENT",
+            "invalid side or action",
+        );
+    };
+    let mut client = state.risk;
+    match rpc(client.preview_margin(PreviewMarginRequest {
+        user_id,
+        ticker: input.ticker,
+        side,
+        action,
+        price_ticks: input.price_ticks,
+        count: input.count,
+    }))
+    .await
+    {
+        Ok(preview) => Json(json!({
+            "event_ticker": preview.event_ticker,
+            "eligible": preview.eligible,
+            "ineligible_reason": preview.ineligible_reason,
+            "margin_before_micro_usdc": preview.margin_before_micro_usdc,
+            "margin_after_micro_usdc": preview.margin_after_micro_usdc,
+            "delta_micro_usdc": preview.delta_micro_usdc,
+            "standalone_delta_micro_usdc": preview.standalone_delta_micro_usdc,
+        }))
+        .into_response(),
+        Err(error) => grpc_error(error),
+    }
 }
 
 async fn get_history(
@@ -1978,6 +2109,7 @@ async fn demo_deposit(
     } {
         return response;
     }
+    let outcome = async {
     let amount = input
         .amount_micro_usdc
         .or_else(|| {
@@ -2032,6 +2164,18 @@ async fn demo_deposit(
         },
         Err(error) => grpc_error(error),
     }
+    }
+    .await;
+    finalize_idempotency(
+        &state.pool,
+        &user_id,
+        "POST",
+        "/v1/demo/deposits/credit",
+        &idempotency_key,
+        &request_body,
+        outcome,
+    )
+    .await
 }
 
 async fn rpc<T>(
@@ -2218,6 +2362,69 @@ async fn store_idempotency(
         .map_err(|error| error_response(StatusCode::SERVICE_UNAVAILABLE, "IDEMPOTENCY_STORE_UNAVAILABLE", &error.to_string()))
 }
 
+/// Stores a terminal 4xx outcome on the idempotency record so a retry with the same
+/// key replays the same error instead of staying `IN_PROGRESS` until expiry. 5xx and
+/// transient (408/429) outcomes are left for reconciliation: the downstream effect is unknown.
+async fn finalize_idempotency(
+    pool: &PgPool,
+    user_id: &str,
+    method: &str,
+    path: &str,
+    key: &str,
+    request: &Value,
+    response: Response,
+) -> Response {
+    let status = response.status();
+    if !status.is_client_error()
+        || status == StatusCode::REQUEST_TIMEOUT
+        || status == StatusCode::TOO_MANY_REQUESTS
+    {
+        return response;
+    }
+    let (parts, body) = response.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, 1 << 20).await else {
+        return error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "IDEMPOTENCY_STORE_ERROR",
+            "failed to read response body",
+        );
+    };
+    if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
+        let _ = store_idempotency(pool, user_id, method, path, key, request, &value, status).await;
+    }
+    Response::from_parts(parts, axum::body::Body::from(bytes))
+}
+
+/// Maps NO/SHORT orders onto the single YES/LONG book (CM-05). A binary NO limit at `p`
+/// is a YES order at `min + max - p` (100 - p on a 1..99 contract); a futures SHORT keeps
+/// its price. `market` orders already hold a YES-book protection price and are not complemented.
+fn normalize_order_side(
+    side: i32,
+    action: i32,
+    price_ticks: i64,
+    market: bool,
+    min_price_ticks: i64,
+    max_price_ticks: i64,
+) -> (i32, i32, i64) {
+    let flipped = if action == Action::Buy as i32 {
+        Action::Sell as i32
+    } else {
+        Action::Buy as i32
+    };
+    if side == Side::No as i32 {
+        let price = if market {
+            price_ticks
+        } else {
+            min_price_ticks + max_price_ticks - price_ticks
+        };
+        (Side::Yes as i32, flipped, price)
+    } else if side == Side::Short as i32 {
+        (Side::Long as i32, flipped, price_ticks)
+    } else {
+        (side, action, price_ticks)
+    }
+}
+
 fn side_value(value: &str) -> Option<i32> {
     match value.trim().to_ascii_uppercase().as_str() {
         "YES" => Some(Side::Yes as i32),
@@ -2345,7 +2552,7 @@ fn query_timestamp(value: Option<&str>, field: &str) -> Result<Option<Timestamp>
 }
 
 fn contract_json(contract: &Contract) -> Value {
-    json!({"ticker":contract.ticker,"event_ticker":contract.event_ticker,"series_ticker":contract.series_ticker,"kind":contract.kind,"question":contract.question,"underlying":contract.underlying,"tick_size":contract.tick_size,"min_price_ticks":contract.min_price_ticks,"max_price_ticks":contract.max_price_ticks,"lower_bound_ticks":contract.lower_bound_ticks,"upper_bound_ticks":contract.upper_bound_ticks,"multiplier_micro_usdc":contract.multiplier_micro_usdc,"divider":contract.divider,"multiplier_micro_per_display_unit":contract.multiplier_micro_per_display_unit,"tick_value_micro":contract.tick_value_micro,"max_order_size":contract.max_order_size,"position_limit_per_user":contract.position_limit_per_user,"state":contract.state,"listed_at":timestamp_json(contract.listed_at.as_ref()),"open_at":timestamp_json(contract.open_at.as_ref()),"close_at":timestamp_json(contract.close_at.as_ref()),"expected_resolution_at":timestamp_json(contract.expected_resolution_at.as_ref()),"settlement_source":contract.settlement_source,"oracle_policy":contract.oracle_policy,"settlement_rule":contract.settlement_rule.as_ref().map(struct_json),"close_global_seq":contract.close_global_seq})
+    json!({"ticker":contract.ticker,"event_ticker":contract.event_ticker,"series_ticker":contract.series_ticker,"kind":contract.kind,"question":contract.question,"underlying":contract.underlying,"tick_size":contract.tick_size,"min_price_ticks":contract.min_price_ticks,"max_price_ticks":contract.max_price_ticks,"lower_bound_ticks":contract.lower_bound_ticks,"upper_bound_ticks":contract.upper_bound_ticks,"multiplier_micro_usdc":contract.multiplier_micro_usdc,"divider":contract.divider,"multiplier_micro_per_display_unit":contract.multiplier_micro_per_display_unit,"tick_value_micro":contract.tick_value_micro,"max_order_size":contract.max_order_size,"position_limit_per_user":contract.position_limit_per_user,"state":contract.state,"listed_at":timestamp_json(contract.listed_at.as_ref()),"open_at":timestamp_json(contract.open_at.as_ref()),"close_at":timestamp_json(contract.close_at.as_ref()),"expected_resolution_at":timestamp_json(contract.expected_resolution_at.as_ref()),"settlement_source":contract.settlement_source,"oracle_policy":contract.oracle_policy,"settlement_rule":contract.settlement_rule.as_ref().map(struct_json),"close_global_seq":contract.close_global_seq,"payoff_rule":contract.payoff_rule.as_ref().map(struct_json),"payout_ticks":contract.payout_ticks})
 }
 fn series_json(series: &Series) -> Value {
     json!({
@@ -2361,6 +2568,16 @@ fn event_json(event: &Event) -> Value {
         "title": event.title,
         "description": event.description,
         "expected_resolution_at": timestamp_json(event.expected_resolution_at.as_ref()),
+        "margin_model": event.margin_model,
+        "outcome_kind": event.outcome_kind,
+        "trading_halted": event.trading_halted,
+        "outcome_grid": {
+            "divider": event.outcome_divider,
+            "step": event.outcome_step,
+            "anchor": event.outcome_anchor,
+            "min": event.outcome_min,
+            "max": event.outcome_max,
+        },
     })
 }
 fn resolution_json(resolution: &Resolution) -> Value {
@@ -2616,6 +2833,40 @@ async fn shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn normalizes_no_and_short_onto_the_yes_long_book() {
+        let buy = Action::Buy as i32;
+        let sell = Action::Sell as i32;
+        // NO BUY at 20 is YES SELL at 80.
+        assert_eq!(
+            normalize_order_side(Side::No as i32, buy, 20, false, 1, 99),
+            (Side::Yes as i32, sell, 80)
+        );
+        // NO SELL at 35 is YES BUY at 65.
+        assert_eq!(
+            normalize_order_side(Side::No as i32, sell, 35, false, 1, 99),
+            (Side::Yes as i32, buy, 65)
+        );
+        // Market orders carry a YES-book price already.
+        assert_eq!(
+            normalize_order_side(Side::No as i32, buy, 12, true, 1, 99),
+            (Side::Yes as i32, sell, 12)
+        );
+        // SHORT keeps its price; YES and LONG are untouched.
+        assert_eq!(
+            normalize_order_side(Side::Short as i32, sell, 500, false, 0, 1000),
+            (Side::Long as i32, buy, 500)
+        );
+        assert_eq!(
+            normalize_order_side(Side::Yes as i32, buy, 40, false, 1, 99),
+            (Side::Yes as i32, buy, 40)
+        );
+        assert_eq!(
+            normalize_order_side(Side::Long as i32, sell, 40, false, 0, 100),
+            (Side::Long as i32, sell, 40)
+        );
+    }
+
     use super::*;
     use axum::http::HeaderValue;
 

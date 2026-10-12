@@ -49,6 +49,12 @@ message Contract {
   int64 multiplier_micro_per_display_unit = 25;
   // Derived listing-time value in micro-USDC per raw price tick.
   int64 tick_value_micro = 26;
+  // Binary YES condition on the event outcome axis (cross margin, Stage 1):
+  // {"type":"range","lo":341,"hi":null} or {"type":"categories","yes_values":[...]}.
+  // Empty for futures, whose band defines the payoff.
+  google.protobuf.Struct payoff_rule = 27;
+  // Settlement value of a winning binary in price ticks (100 = 1 USDC).
+  int64 payout_ticks = 28;
 }
 
 message Event {
@@ -57,6 +63,21 @@ message Event {
   string title = 3;
   string description = 4;
   google.protobuf.Timestamp expected_resolution_at = 5;
+  // ISOLATED (per-contract locks) or PORTFOLIO (cross margin per event).
+  string margin_model = 6;
+  // NUMERIC or CATEGORICAL outcome axis.
+  string outcome_kind = 7;
+  // Kill switch (CM-04): new orders rejected with EVENT_HALTED; cancels, matched
+  // fills and settlement continue on the event's margin path.
+  bool trading_halted = 8;
+  // Raw outcome ticks per display unit (CM-06); 0 when not set.
+  int64 outcome_divider = 9;
+  // Contractual outcome grid (CM-11): { outcome_anchor + n * outcome_step }
+  // within [outcome_min, outcome_max] when those are present.
+  int64 outcome_step = 10;
+  int64 outcome_anchor = 11;
+  optional int64 outcome_min = 12;
+  optional int64 outcome_max = 13;
 }
 
 message Series {
