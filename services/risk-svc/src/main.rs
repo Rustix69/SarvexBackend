@@ -5,6 +5,8 @@ use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::ge
 mod margin_exec;
 #[cfg(test)]
 mod margin_exec_it;
+#[cfg(test)]
+mod listing_audit_it;
 mod portfolio;
 mod shadow;
 #[cfg(test)]
