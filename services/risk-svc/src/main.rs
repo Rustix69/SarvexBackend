@@ -6,6 +6,9 @@ mod margin_exec;
 #[cfg(test)]
 mod margin_exec_it;
 mod portfolio;
+mod shadow;
+#[cfg(test)]
+mod shadow_it;
 
 use portfolio::{ContractRow, EventExposure, EventRow};
 use sarvex_contracts::sarvex::v1::{
@@ -70,6 +73,21 @@ async fn main() -> Result<()> {
         portfolio_enabled,
     };
     tokio::spawn(run_margin_reconciler(service.clone()));
+    if env::var("MARGIN_SHADOW_LOG_ENABLED")
+        .map(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "yes"))
+        .unwrap_or(false)
+    {
+        let secs = env::var("MARGIN_SHADOW_LOG_INTERVAL_SECS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|secs| *secs >= 30)
+            .unwrap_or(600);
+        tracing::info!(interval_secs = secs, "margin shadow logger enabled");
+        tokio::spawn(shadow::run_margin_shadow_logger(
+            service.clone(),
+            std::time::Duration::from_secs(secs),
+        ));
+    }
     let http_state = HealthState { pool };
     let http = tokio::spawn(run_http(http_addr, http_state));
     let grpc = tokio::spawn(
