@@ -119,14 +119,6 @@ pub fn evaluate(
     positions: &BTreeMap<String, i64>,
     orders: &[ShadowOrder],
 ) -> Result<ShadowRow, String> {
-    for (ticker, recorded) in positions {
-        let derived = lots.get(ticker).map_or(0, |lot| lot.qty);
-        if derived != *recorded {
-            return Err(format!(
-                "POSITION_MISMATCH: {ticker} fills give {derived}, positions table has {recorded}"
-            ));
-        }
-    }
     let exposure = EventExposure {
         positions: positions
             .iter()
@@ -140,6 +132,16 @@ pub fn evaluate(
     };
     let margin = portfolio::event_margin(event, contracts, &exposure)?;
     let worst_position_loss = portfolio::event_worst_position_loss(event, contracts, &exposure)?;
+
+    // Only once the listing and rules are usable, so a skipped pair names its real blocker.
+    for (ticker, recorded) in positions {
+        let derived = lots.get(ticker).map_or(0, |lot| lot.qty);
+        if derived != *recorded {
+            return Err(format!(
+                "POSITION_MISMATCH: {ticker} fills give {derived}, positions table has {recorded}"
+            ));
+        }
+    }
 
     let mut net_premium = 0_i128;
     let mut held_today = 0_i128;
@@ -343,12 +345,13 @@ impl RiskService {
             let Some(contract) = contracts.get(&ticker) else {
                 continue;
             };
-            let Ok(instrument) = instrument_from_row(contract) else {
-                continue; // reported when the pair itself is evaluated
-            };
             let price: i64 = row.get("price_ticks");
             let count: i64 = row.get("count");
-            let unit_value = instrument.payoff.value_of_price(price);
+            // A contract the engine cannot price still has a position; its cost is
+            // irrelevant because the pair is skipped with the engine's reason.
+            let unit_value = instrument_from_row(contract)
+                .map(|instrument| instrument.payoff.value_of_price(price))
+                .unwrap_or(0);
             for (user_col, side_col, action_col) in [
                 ("maker_user_id", "maker_side", "maker_action"),
                 ("taker_user_id", "taker_side", "taker_action"),
@@ -578,5 +581,18 @@ mod tests {
             error.contains("PAYOFF_RULE_MISSING") || error.contains("LISTING_INVALID"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn an_unpriced_contract_is_reported_for_its_rule_not_as_a_position_mismatch() {
+        let mut rows = contracts();
+        rows.get_mut("CPI-360").unwrap().payoff_rule = None;
+        // The fills walk could not price CPI-360, so no lot exists for it.
+        let lots: BTreeMap<_, _> = [("CPI-340".to_owned(), lot(10, 60))].into_iter().collect();
+        let positions: BTreeMap<_, _> = [("CPI-340".to_owned(), 10), ("CPI-360".to_owned(), -10)]
+            .into_iter()
+            .collect();
+        let error = evaluate("u1", &event(), &rows, &lots, &positions, &[]).unwrap_err();
+        assert!(!error.starts_with("POSITION_MISMATCH"), "{error}");
     }
 }
