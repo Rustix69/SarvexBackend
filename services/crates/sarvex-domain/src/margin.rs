@@ -508,6 +508,18 @@ impl EventBook {
         })
     }
 
+    /// Largest amount the positions alone can cost the account at settlement, found by
+    /// settling them at every candidate outcome. Same quantity as
+    /// `EventMargin::position_requirement_micro`, but computed through `settlement_micro`,
+    /// so the shadow log can check one code path against the other.
+    pub fn worst_position_loss_micro(&self, positions: &[Position]) -> Result<i64> {
+        let mut worst = 0_i64;
+        for x in self.candidates(&[]) {
+            worst = worst.max(self.settlement_micro(positions, &x)?.saturating_neg());
+        }
+        Ok(worst)
+    }
+
     /// Net amount one account receives (positive) or pays (negative) at settlement.
     pub fn settlement_micro(&self, positions: &[Position], outcome: &Outcome) -> Result<i64> {
         self.check_outcome(outcome)?;

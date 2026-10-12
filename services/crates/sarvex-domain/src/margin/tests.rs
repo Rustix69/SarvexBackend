@@ -355,6 +355,10 @@ fn margin_equals_brute_force_worst_case() {
             i128::from(margin.position_requirement_micro),
             brute_force_margin(&book, &positions, &[])
         );
+        assert_eq!(
+            book.worst_position_loss_micro(&positions).unwrap(),
+            margin.position_requirement_micro
+        );
         assert!(margin.position_requirement_micro <= margin.margin_micro);
         assert!(
             margin.margin_micro <= margin.standalone_micro,

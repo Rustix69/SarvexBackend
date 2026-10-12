@@ -251,11 +251,18 @@ pub fn check_listing(
     })
 }
 
-pub fn event_margin(
+/// The engine book for one exposure, with its positions and orders in engine units.
+struct PreparedBook {
+    book: EventBook,
+    positions: Vec<Position>,
+    orders: Vec<WorkingOrder>,
+}
+
+fn prepare_book(
     event: &EventRow,
     contracts: &BTreeMap<String, ContractRow>,
     exposure: &EventExposure,
-) -> Result<EventMargin, String> {
+) -> Result<PreparedBook, String> {
     let kind = outcome_kind(&event.outcome_kind)?;
     check_listing(event, contracts)?;
     let tickers = exposure.tickers();
@@ -297,7 +304,36 @@ pub fn event_margin(
             price_ticks: *price,
         })
         .collect();
-    book.event_margin(&positions, &orders)
+    Ok(PreparedBook {
+        book,
+        positions,
+        orders,
+    })
+}
+
+pub fn event_margin(
+    event: &EventRow,
+    contracts: &BTreeMap<String, ContractRow>,
+    exposure: &EventExposure,
+) -> Result<EventMargin, String> {
+    let prepared = prepare_book(event, contracts, exposure)?;
+    prepared
+        .book
+        .event_margin(&prepared.positions, &prepared.orders)
+        .map_err(engine_reason)
+}
+
+/// Worst loss of the positions alone, through the settlement path rather than the
+/// margin path (see `EventBook::worst_position_loss_micro`).
+pub fn event_worst_position_loss(
+    event: &EventRow,
+    contracts: &BTreeMap<String, ContractRow>,
+    exposure: &EventExposure,
+) -> Result<i64, String> {
+    let prepared = prepare_book(event, contracts, exposure)?;
+    prepared
+        .book
+        .worst_position_loss_micro(&prepared.positions)
         .map_err(engine_reason)
 }
 

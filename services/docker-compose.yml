@@ -87,6 +87,8 @@ services:
       POSTGRES_URL: postgres://sarvex:sarvex@postgres:5432/sarvex
       REFDATA_ADDR: http://refdata-svc:50051
       LEDGER_ADDR: http://ledger-svc:50052
+      MARGIN_SHADOW_LOG_ENABLED: "true"
+      MARGIN_SHADOW_LOG_INTERVAL_SECS: "600"
       GRPC_PORT: 50053
       HTTP_PORT: 8082
       RUST_LOG: info
