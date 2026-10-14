@@ -2441,7 +2441,7 @@ function ExitPriceForm({ position, market, mark, busy, onSubmit, onCancel }) {
 }
 
 function MarginPage({ margin, authed }) {
-  const events = (margin?.events || []).filter((event) => Number(event.margin_micro_usdc) > 0 || Number(event.standalone_micro_usdc) > 0)
+  const events = (margin?.events || []).filter((event) => Number(event.margin_micro_usdc) > 0 || Number(event.standalone_micro_usdc) > 0 || event.tickers?.length > 0)
   const shadow = String(margin?.mode || '').toUpperCase() === 'SHADOW'
   const totalStandalone = Number(margin?.total_standalone_micro_usdc || 0)
   const savedPct = totalStandalone > 0 ? Math.round((Number(margin?.savings_micro_usdc || 0) / totalStandalone) * 100) : 0
@@ -2476,6 +2476,7 @@ function MarginPage({ margin, authed }) {
                     <div><span>If separate</span><strong>{formatUSDC(separate)}</strong></div>
                     <div><span>Saved</span><strong className={saved > 0 ? 'pnl-positive' : ''}>{formatUSDC(saved)}{pct > 0 ? ` (${pct}%)` : ''}</strong></div>
                   </div>
+                  {cross === 0 && separate === 0 ? <p className="margin-note">Nothing extra is locked here. Long positions are already paid for by the premium, so the worst case is the amount you paid.</p> : null}
                   <p className="margin-note">Positions {formatUSDC(event.position_requirement_micro_usdc)} · Open orders {formatUSDC(event.order_margin_micro_usdc)}{event.worst_outcome ? ` · Worst case at ${event.worst_outcome}` : ''}</p>
                   {event.tickers?.length ? <p className="margin-note">{event.tickers.join(' · ')}</p> : null}
                   {event.eligible === false ? <p className="margin-note">Not eligible for cross margin yet{event.ineligible_reason ? `: ${event.ineligible_reason}` : ''}.</p> : null}
@@ -2490,7 +2491,7 @@ function MarginPage({ margin, authed }) {
 }
 
 function MarginPanel({ margin }) {
-  const events = (margin?.events || []).filter((event) => Number(event.margin_micro_usdc) > 0 || Number(event.standalone_micro_usdc) > 0)
+  const events = (margin?.events || []).filter((event) => Number(event.margin_micro_usdc) > 0 || Number(event.standalone_micro_usdc) > 0 || event.tickers?.length > 0)
   if (!margin || !events.length) return null
   const shadow = String(margin.mode || '').toUpperCase() === 'SHADOW'
   return (
