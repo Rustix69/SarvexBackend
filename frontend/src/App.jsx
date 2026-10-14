@@ -2019,13 +2019,15 @@ function useMarginPreview(ticker, action, yesPriceTicks, count, enabled, side = 
 
 function MarginPreviewLine({ preview }) {
   if (!preview || preview.eligible === false) return null
-  const delta = Number(preview.delta_micro_usdc)
-  const standalone = Number(preview.standalone_delta_micro_usdc)
-  const saved = standalone - delta
+  const portfolio = Math.max(0, Number(preview.delta_micro_usdc))
+  const alone = Math.max(0, Number(preview.standalone_delta_micro_usdc))
+  const saved = alone - portfolio
+  const pct = alone > 0 ? Math.round((saved / alone) * 100) : 0
   return (
     <div className="ticket-margin">
-      <div className="ticket-summary"><span>Margin needed</span><strong>{delta <= 0 ? '$0.00' : formatUSDC(delta)}</strong></div>
-      {saved > 0 ? <div className="ticket-summary muted"><span>Saved by cross margin</span><strong className="pnl-positive">{formatUSDC(saved)}</strong></div> : null}
+      <div className="ticket-summary muted"><span>Margin if traded alone</span><strong>{formatUSDC(alone)}</strong></div>
+      <div className="ticket-summary"><span>Margin as portfolio</span><strong>{formatUSDC(portfolio)}</strong></div>
+      {saved > 0 ? <div className="ticket-summary muted"><span>You save</span><strong className="pnl-positive">{formatUSDC(saved)}{pct > 0 ? ` (${pct}%)` : ''}</strong></div> : null}
     </div>
   )
 }
@@ -2455,9 +2457,9 @@ function MarginPage({ margin, authed }) {
       ) : (
         <>
           <div className="margin-summary">
-            <div><span>With cross margin</span><strong>{formatUSDC(margin.total_margin_micro_usdc)}</strong></div>
-            <div><span>Separate margin</span><strong>{formatUSDC(margin.total_standalone_micro_usdc)}</strong></div>
-            <div><span>Saved</span><strong className="pnl-positive">{formatUSDC(margin.savings_micro_usdc)}{savedPct > 0 ? ` (${savedPct}%)` : ''}</strong></div>
+            <div><span>Portfolio margin</span><strong>{formatUSDC(margin.total_margin_micro_usdc)}</strong></div>
+            <div><span>If each trade were separate</span><strong>{formatUSDC(margin.total_standalone_micro_usdc)}</strong></div>
+            <div><span>Total saved</span><strong className="pnl-positive">{formatUSDC(margin.savings_micro_usdc)}{savedPct > 0 ? ` (${savedPct}%)` : ''}</strong></div>
           </div>
           <div className="margin-cards">
             {events.map((event) => {
@@ -2470,8 +2472,8 @@ function MarginPage({ margin, authed }) {
                   <div className="panel-head"><h2>{event.event_ticker}</h2><span>{event.eligible === false ? 'Separate margin' : 'Cross margin'}</span></div>
                   <div className="margin-bar" aria-hidden="true"><i style={{ width: `${separate > 0 ? Math.max(4, Math.round((cross / separate) * 100)) : 100}%` }} /></div>
                   <div className="margin-card-numbers">
-                    <div><span>Locked</span><strong>{formatUSDC(cross)}</strong></div>
-                    <div><span>Without cross margin</span><strong>{formatUSDC(separate)}</strong></div>
+                    <div><span>Portfolio margin</span><strong>{formatUSDC(cross)}</strong></div>
+                    <div><span>If separate</span><strong>{formatUSDC(separate)}</strong></div>
                     <div><span>Saved</span><strong className={saved > 0 ? 'pnl-positive' : ''}>{formatUSDC(saved)}{pct > 0 ? ` (${pct}%)` : ''}</strong></div>
                   </div>
                   <p className="margin-note">Positions {formatUSDC(event.position_requirement_micro_usdc)} · Open orders {formatUSDC(event.order_margin_micro_usdc)}{event.worst_outcome ? ` · Worst case at ${event.worst_outcome}` : ''}</p>
@@ -2498,12 +2500,12 @@ function MarginPanel({ margin }) {
         <span>{shadow ? 'Preview · not applied yet' : 'Cross margin'}</span>
       </div>
       <div className="margin-summary">
-        <div><span>With cross margin</span><strong>{formatUSDC(margin.total_margin_micro_usdc)}</strong></div>
-        <div><span>Separate margin</span><strong>{formatUSDC(margin.total_standalone_micro_usdc)}</strong></div>
-        <div><span>Savings</span><strong className="pnl-positive">{formatUSDC(margin.savings_micro_usdc)}</strong></div>
+        <div><span>Portfolio margin</span><strong>{formatUSDC(margin.total_margin_micro_usdc)}</strong></div>
+        <div><span>If each trade were separate</span><strong>{formatUSDC(margin.total_standalone_micro_usdc)}</strong></div>
+        <div><span>Total saved</span><strong className="pnl-positive">{formatUSDC(margin.savings_micro_usdc)}{Number(margin.total_standalone_micro_usdc) > 0 && Number(margin.savings_micro_usdc) > 0 ? ` (${Math.round((Number(margin.savings_micro_usdc) / Number(margin.total_standalone_micro_usdc)) * 100)}%)` : ''}</strong></div>
       </div>
       <div className="portfolio-table">
-        <div className="portfolio-row margin-row header"><span>Event</span><span>Cross</span><span>Separate</span><span>Saved</span><span>Worst case at</span></div>
+        <div className="portfolio-row margin-row header"><span>Event</span><span>Portfolio</span><span>If separate</span><span>Saved</span><span>Worst case at</span></div>
         {events.map((event) => {
           const saved = Number(event.standalone_micro_usdc) - Number(event.margin_micro_usdc)
           return (
