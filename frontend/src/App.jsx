@@ -103,7 +103,7 @@ function viewFromPath(pathname) {
   if (pathname === '/margin') return 'margin'
   if (pathname === '/profile') return 'profile'
   if (pathname === '/trading-api') return 'trading-api'
-  return 'markets'
+  return 'markets' // /discover and anything unknown
 }
 
 function pathForView(view) {
@@ -113,7 +113,7 @@ function pathForView(view) {
   if (view === 'margin') return '/margin'
   if (view === 'profile') return '/profile'
   if (view === 'trading-api') return '/trading-api'
-  return '/'
+  return '/discover'
 }
 
 function pushViewPath(view) {
@@ -666,7 +666,7 @@ function App() {
   const handleMarketSelect = (ticker) => {
     setSelectedTicker(ticker)
     setActiveView('trade')
-    if (window.location.pathname === '/health') window.history.pushState({}, '', '/')
+    if (window.location.pathname === '/health') window.history.pushState({}, '', '/discover')
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -933,7 +933,7 @@ function TopNav({ selectedUser, token, busy, onLogin, onLogout, onProfile, onMar
 
   return (
     <header className="topbar">
-      <button className="brand" type="button" onClick={onMarkets}>
+      <button className="brand" type="button" onClick={() => window.location.assign('/')}>
         <img className="brand-company-logo" src="/logo.png" alt="Company Logo" />
         <span>SarvaEX</span>
       </button>
