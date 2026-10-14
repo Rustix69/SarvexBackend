@@ -950,7 +950,7 @@ function TopNav({ selectedUser, token, busy, onLogin, onLogout, onProfile, onMar
   return (
     <header className="topbar">
       <button className="brand" type="button" onClick={() => window.location.assign('/')}>
-        <svg className="brand-logo" width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="#C9C9C9" strokeWidth="1.5" aria-hidden="true"><rect x="1" y="1" width="20" height="20" /><rect x="6" y="6" width="10" height="10" /><path d="M1 1l5 5M21 1l-5 5M1 21l5-5M21 21l-5-5" /></svg>
+        <img className="brand-company-logo" src="/logo.png" alt="SarvaEX logo" />
         <span>SarvaEX</span>
       </button>
       <div className="topbar-center">
