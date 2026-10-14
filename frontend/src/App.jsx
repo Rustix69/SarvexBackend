@@ -2276,7 +2276,7 @@ function PortfolioPage({ balance, authed, busy, positions, orders, history, marg
 
       <section className="portfolio-workspace">
         <aside className="portfolio-metrics-rail">
-          <div className="workspace-title">Metrics</div>
+          <div className="workspace-title"><i className="pf-tag">MET</i>Metrics</div>
           <div className="portfolio-winrate"><strong>{authed ? winRate : '--'}</strong><span>Win Rate</span><em>{authed ? formatSignedUSDC(livePnl) : '--'} <small>Live PnL</small></em></div>
           <PortfolioRailMetric label="Realized PnL" value={authed ? formatSignedUSDC(realizedPnl) : '--'} tone={pnlClassName(realizedPnl)} />
           <PortfolioRailMetric label="Unrealized PnL" value={authed ? formatSignedUSDC(livePnl) : '--'} tone={pnlClassName(livePnl)} />
@@ -2288,6 +2288,7 @@ function PortfolioPage({ balance, authed, busy, positions, orders, history, marg
 
         <section className="portfolio-calendar-panel">
           <div className="workspace-tabs">
+            <i className="pf-tag">CAL</i>
             <button className={workspaceView === 'calendar' ? 'active' : ''} type="button" onClick={() => setWorkspaceView('calendar')}>Calendar</button>
             <button className={workspaceView === 'chart' ? 'active' : ''} type="button" onClick={() => setWorkspaceView('chart')}>Chart</button>
             <div className="workspace-tabs-spacer" />
@@ -2302,7 +2303,7 @@ function PortfolioPage({ balance, authed, busy, positions, orders, history, marg
 
       <section className="portfolio-grid-page portfolio-data-panels">
         <div className="portfolio-panel">
-          <div className="panel-head"><h2>Positions</h2><span>{openPositions.length} total</span></div>
+          <div className="panel-head"><h2><i className="pf-tag">POS</i>Positions</h2><span>{openPositions.length} total</span></div>
           <div className="portfolio-table">
             <div className="portfolio-row positions-header"><span>Ticker</span><span>Net Qty</span><span>Avg</span><span>Mark</span><span>Live PnL</span><span>Realized</span><span>Action</span></div>
             {positions.length ? positions.map((position) => {
@@ -2353,7 +2354,7 @@ function PortfolioPage({ balance, authed, busy, positions, orders, history, marg
         </div>
 
         <div className="portfolio-panel">
-          <div className="panel-head"><h2>Orders</h2><span>{orders.length} total</span></div>
+          <div className="panel-head"><h2><i className="pf-tag">ORD</i>Orders</h2><span>{orders.length} total</span></div>
           <div className="portfolio-table">
             <div className="portfolio-row orders-row header"><span>Ticker</span><span>Trade</span><span>Price</span><span>Qty</span><span>Filled</span><span>Status</span><span>Action</span></div>
             {orders.length ? orders.map((order) => (
@@ -2497,7 +2498,7 @@ function MarginPanel({ margin }) {
   return (
     <section className="margin-panel" aria-label="Cross margin">
       <div className="panel-head">
-        <h2>Margin</h2>
+        <h2><i className="pf-tag">MRG</i>Margin</h2>
         <span>{shadow ? 'Preview · not applied yet' : 'Cross margin'}</span>
       </div>
       <div className="margin-summary">
