@@ -1558,7 +1558,7 @@ function SectionView({ section, markets, fills, marketPrices, onSelect, kind = '
       </aside>
       <div className="section-main">
         <div className="section-head">
-          <h2>{section}</h2>
+          <h2><i className="pf-tag">{kind === 'future' ? 'FUT' : 'MKT'}</i>{section}<small className="section-count">{markets.length} {kind === 'future' ? 'futures' : 'markets'}</small></h2>
           <label className="section-sort">
             <select value={sort} onChange={(event) => setSort(event.target.value)} aria-label="Sort markets">
               {SECTION_SORTS.map((item) => <option key={item} value={item}>{item}</option>)}

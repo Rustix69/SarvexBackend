@@ -1970,3 +1970,66 @@ body:has(.terminal-page) { background: var(--pf-bg); }
 .terminal-page .contract-row em.no { background: transparent !important; border: 1px solid var(--pf-rose) !important; color: var(--pf-rose) !important; font-style: normal; border-radius: 0 !important; letter-spacing: 0.1em; text-transform: uppercase; }
 .terminal-page .contracts-table { display: grid; grid-template-columns: 1fr 1fr; }
 .terminal-page .contract-row:first-child { border-right: 1px solid var(--pf-line) !important; }
+
+/* ===== Platform theme for Discover / Futures dashboards ===== */
+body:has(.dashboard-page) { background: var(--pf-bg); }
+.dashboard-page, .dashboard-page * { font-family: var(--pf-mono); letter-spacing: 0; }
+.dashboard-page .category-nav { border-bottom: 1px solid var(--pf-line); height: 44px; gap: 6px; }
+.dashboard-page .category-link { font: 400 11px var(--pf-mono) !important; letter-spacing: 0.12em !important; text-transform: uppercase; color: var(--pf-dim) !important; padding: 15px 8px; }
+.dashboard-page .category-link::after { margin: 0 0 2px 14px; background: var(--pf-line2); }
+.dashboard-page .category-link:hover { color: var(--pf-mid) !important; }
+.dashboard-page .category-link.active { color: var(--pf-text) !important; box-shadow: 0 1px 0 #c9c9c9; }
+
+.dashboard-page .trending-section-title, .dashboard-page .trending-section-title button, .dashboard-page .section-head h2, .dashboard-page .featured-title,
+.dashboard-page .section-filter, .dashboard-page .smc-q, .dashboard-page .smc-title, .dashboard-page .bmc-q, .dashboard-page .bml-q { font-family: var(--pf-serif) !important; }
+.dashboard-page .trending-section-title { font-weight: 500; font-size: 26px; }
+.dashboard-page .trending-section-title button:hover svg { color: var(--pf-green); }
+.dashboard-page .section-head h2 { font-weight: 500; font-size: 30px; display: flex; align-items: baseline; gap: 6px; }
+.dashboard-page .section-count { font: 400 10px var(--pf-mono) !important; letter-spacing: 0.12em !important; text-transform: uppercase; color: var(--pf-dim); margin-left: 12px; }
+.dashboard-page .section-sort select { border-radius: 0 !important; background: #111 !important; border: 1px solid var(--pf-line) !important; color: var(--pf-text) !important; font: 400 11px var(--pf-mono) !important; letter-spacing: 0.1em; text-transform: uppercase; }
+
+/* sidebar filters */
+.dashboard-page .section-filters h4 { font: 400 10px var(--pf-mono) !important; letter-spacing: 0.14em !important; color: var(--pf-dim) !important; }
+.dashboard-page .section-filter { border-radius: 0 !important; color: var(--pf-mid); font-size: 14px; font-weight: 400; }
+.dashboard-page .section-filter:hover { background: var(--pf-raise); color: var(--pf-text); }
+.dashboard-page .section-filter.active { color: var(--pf-text) !important; box-shadow: inset 2px 0 0 #c9c9c9; background: transparent; }
+.dashboard-page .section-filter small { color: var(--pf-dim) !important; }
+
+/* featured card */
+.dashboard-page .featured-market-card { background: var(--pf-panel) !important; border: 1px solid var(--pf-line) !important; border-radius: 0 !important; box-shadow: none !important; }
+.dashboard-page .featured-market-head { border-bottom: 1px solid var(--pf-line) !important; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--pf-dim); }
+.dashboard-page .featured-category { color: var(--pf-mid) !important; }
+.dashboard-page .featured-kicker, .dashboard-page .featured-settlement span { font-family: var(--pf-mono) !important; color: var(--pf-dim) !important; letter-spacing: 0.12em !important; }
+.dashboard-page .featured-title { font-weight: 400; color: var(--pf-text) !important; }
+.dashboard-page .featured-title:hover { color: var(--pf-green) !important; }
+.dashboard-page .featured-price strong { font-weight: 400; font-size: 34px; }
+.dashboard-page .featured-outcome { border-radius: 0 !important; background: transparent !important; font: 400 11px var(--pf-mono) !important; letter-spacing: 0.1em; text-transform: uppercase; }
+.dashboard-page .featured-outcome.yes { border: 1px solid #2f5a45 !important; color: var(--pf-green) !important; }
+.dashboard-page .featured-outcome.no { border: 1px solid #5c3a42 !important; color: var(--pf-rose) !important; }
+.dashboard-page .featured-outcome.yes:hover { background: rgba(127,214,164,.08) !important; } .dashboard-page .featured-outcome.no:hover { background: rgba(217,138,150,.08) !important; }
+.dashboard-page .featured-market-chart .mpc { background: var(--pf-panel) !important; }
+.dashboard-page .featured-nav button { border-radius: 0 !important; border: 1px solid var(--pf-line) !important; background: transparent !important; color: var(--pf-mid); }
+
+/* cards: futures (.smc) and binary (.bmc) */
+.dashboard-page .smc, .dashboard-page .bmc, .dashboard-page .market-card { background: var(--pf-panel) !important; border: 1px solid var(--pf-line) !important; border-radius: 0 !important; box-shadow: none !important; }
+.dashboard-page .smc:hover, .dashboard-page .bmc:hover { border-color: var(--pf-line2) !important; background: #101010 !important; }
+.dashboard-page .smc-q, .dashboard-page .smc-title, .dashboard-page .bmc-q { font-weight: 400 !important; font-size: 16px; line-height: 1.4; color: var(--pf-text); }
+.dashboard-page .smc-cat, .dashboard-page .bmc-cat, .dashboard-page .smc-exp { font: 400 10px var(--pf-mono) !important; letter-spacing: 0.12em !important; text-transform: uppercase; color: var(--pf-dim) !important; }
+.dashboard-page .smc-logo, .dashboard-page .bmc-logo { border-radius: 0 !important; }
+.dashboard-page .smc-val b, .dashboard-page .bmc-odds b { font: 400 30px/1 var(--pf-mono) !important; color: var(--pf-text); }
+.dashboard-page .smc-chg.up { color: var(--pf-green) !important; } .dashboard-page .smc-chg.down { color: var(--pf-rose) !important; }
+.dashboard-page .smc-track { background: var(--pf-line) !important; height: 2px !important; border-radius: 0 !important; }
+.dashboard-page .smc-fill { background: #c9c9c9 !important; border-radius: 0 !important; }
+.dashboard-page .smc-mark { background: #c9c9c9 !important; border-radius: 0 !important; border: 0 !important; width: 9px !important; height: 9px !important; box-shadow: none !important; }
+.dashboard-page .smc-ends, .dashboard-page .smc-sub { font-family: var(--pf-mono) !important; color: var(--pf-dim) !important; font-size: 10px; }
+.dashboard-page .bm-btn { border-radius: 0 !important; background: transparent !important; font-size: 11px !important; letter-spacing: 0.08em; text-transform: uppercase; }
+.dashboard-page .bm-btn.yes { border: 1px solid #2f5a45 !important; color: var(--pf-green) !important; }
+.dashboard-page .bm-btn.no { border: 1px solid #5c3a42 !important; color: var(--pf-rose) !important; }
+.dashboard-page .bm-btn.yes:hover { background: rgba(127,214,164,.08) !important; } .dashboard-page .bm-btn.no:hover { background: rgba(217,138,150,.08) !important; }
+.dashboard-page .bm-bar { border-radius: 0 !important; }
+.dashboard-page .bm-chg.up { color: var(--pf-green) !important; } .dashboard-page .bm-chg.down { color: var(--pf-rose) !important; }
+.dashboard-page .loading-panel { background: var(--pf-panel); border: 1px solid var(--pf-line); border-radius: 0; color: var(--pf-dim); }
+.dashboard-page .smc-logo { display: none !important; }
+.dashboard-page .smc-cat::before { content: 'SXF'; border: 1px solid var(--pf-line2); padding: 2px 6px; font-size: 10px; letter-spacing: 0.1em; color: var(--pf-mid); margin-right: 4px; }
+.dashboard-page .bmc-logo { display: none !important; }
+.dashboard-page .bmc-cat::before { content: 'XS'; border: 1px solid var(--pf-line2); padding: 2px 6px; font-size: 10px; letter-spacing: 0.1em; color: var(--pf-mid); margin-right: 4px; }
