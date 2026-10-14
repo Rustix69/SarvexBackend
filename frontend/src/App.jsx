@@ -96,7 +96,13 @@ function clearStoredSession() {
   localStorage.removeItem('sarvex_user_name')
 }
 
+function tickerFromPath(pathname) {
+  const match = /^\/terminal\/([^/]+)/.exec(pathname)
+  return match ? decodeURIComponent(match[1]) : ''
+}
+
 function viewFromPath(pathname) {
+  if (pathname === '/terminal' || pathname.startsWith('/terminal/')) return 'trade'
   if (pathname === '/health') return 'health'
   if (pathname === '/futures') return 'futures'
   if (pathname === '/portfolio') return 'portfolio'
@@ -113,6 +119,7 @@ function pathForView(view) {
   if (view === 'margin') return '/margin'
   if (view === 'profile') return '/profile'
   if (view === 'trading-api') return '/trading-api'
+  if (view === 'trade') return '/terminal'
   return '/discover'
 }
 
@@ -132,7 +139,7 @@ function App() {
   }))
   const [markets, setMarkets] = useState([])
   const [futures, setFutures] = useState([])
-  const [selectedTicker, setSelectedTicker] = useState('')
+  const [selectedTicker, setSelectedTicker] = useState(() => tickerFromPath(window.location.pathname))
   const [searchQuery, setSearchQuery] = useState('')
   const [orderbook, setOrderbook] = useState(null)
   const [fills, setFills] = useState([])
@@ -618,8 +625,16 @@ function App() {
   }, [api, streamTickers])
 
   useEffect(() => {
+    if (activeView !== 'trade' || selectedTicker) return
+    const first = markets[0]?.ticker || futures[0]?.ticker
+    if (!first) return
+    setSelectedTicker(first)
+    window.history.replaceState({}, '', `/terminal/${encodeURIComponent(first)}`)
+  }, [activeView, selectedTicker, markets, futures])
+
+  useEffect(() => {
     const onPopState = () => {
-      setSelectedTicker('')
+      setSelectedTicker(tickerFromPath(window.location.pathname))
       setActiveView(viewFromPath(window.location.pathname))
     }
     window.addEventListener('popstate', onPopState)
@@ -666,7 +681,8 @@ function App() {
   const handleMarketSelect = (ticker) => {
     setSelectedTicker(ticker)
     setActiveView('trade')
-    if (window.location.pathname === '/health') window.history.pushState({}, '', '/discover')
+    const terminalPath = `/terminal/${encodeURIComponent(ticker)}`
+    if (window.location.pathname !== terminalPath) window.history.pushState({}, '', terminalPath)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -934,7 +950,7 @@ function TopNav({ selectedUser, token, busy, onLogin, onLogout, onProfile, onMar
   return (
     <header className="topbar">
       <button className="brand" type="button" onClick={() => window.location.assign('/')}>
-        <img className="brand-company-logo" src="/logo.png" alt="Company Logo" />
+        <svg className="brand-logo" width="22" height="22" viewBox="0 0 22 22" fill="none" stroke="#C9C9C9" strokeWidth="1.5" aria-hidden="true"><rect x="1" y="1" width="20" height="20" /><rect x="6" y="6" width="10" height="10" /><path d="M1 1l5 5M21 1l-5 5M1 21l5-5M21 21l-5-5" /></svg>
         <span>SarvaEX</span>
       </button>
       <div className="topbar-center">
@@ -1656,7 +1672,7 @@ function TerminalWatchlist({ markets, selectedTicker, onSelect, fills = [], pinn
 
   return (
     <aside className="terminal-watchlist">
-      <div className="terminal-watchlist-head"><span>Markets</span><span><RefreshCw size={12} /></span></div>
+      <div className="terminal-watchlist-head"><span><i className="pf-tag">MKT</i>Markets</span><span><RefreshCw size={12} /></span></div>
       <div className="terminal-watchlist-list">
         {orderedMarkets.slice(0, 14).map((item, index) => <button className={`${item.ticker === selectedTicker ? 'watch-item active' : 'watch-item'}${pinned.has(item.ticker) ? ' pinned' : ''}`} type="button" key={item.ticker} onClick={() => onSelect(item.ticker)}>
           <span className={`watch-icon watch-${index % 5}`}>{avatarText(item)}</span>
@@ -1956,7 +1972,7 @@ function OracleDetails({ market }) {
   return (
     <section className="oracle-details">
       <div className="panel-head compact">
-        <div className="oracle-title"><Activity size={16} /><h2>Oracle & settlement</h2></div>
+        <div className="oracle-title"><i className="pf-tag">SET</i><h2>Oracle &amp; settlement</h2></div>
         <span>{market?.catalogOnly ? 'Awaiting refdata' : 'Configured'}</span>
       </div>
       <div className="oracle-grid">
@@ -2677,7 +2693,7 @@ function OrderBook({ book, market }) {
   const scalar = isFutureMarket(market)
   return (
     <section className="book-card">
-      <h3><BarChart3 size={18} /> Order book</h3>
+      <h3><i className="pf-tag">OB</i>Order book</h3>
       <BookHeader />
       {asks.map((level) => <BookRow key={bookRowKey(level, 'ask')} level={level} type="ask" market={market} />)}
       <div className="spread-row">Spread {scalar ? formatFutureTickDiff(market, spread(book)) : `${spread(book)}¢`}</div>
@@ -2707,7 +2723,7 @@ function RecentTrades({ fills, market }) {
   const scalar = isFutureMarket(market)
   return (
     <section className="trades-card">
-      <h3><Activity size={18} /> Recent trades</h3>
+      <h3><i className="pf-tag">TR</i>Recent trades</h3>
       {latest.length ? latest.map((fill) => (
         <div className="trade-line" key={fill.fill_id || fill.fillId || `${fill.global_seq || fill.globalSeq}-${fill.price_ticks || fill.priceTicks}-${fill.count}`}>
           <span>{scalar ? futuresFillLabel(fill) : `${fill.taker_action === 1 || fill.takerAction === 1 ? 'Buy' : 'Sell'} Yes`}</span>

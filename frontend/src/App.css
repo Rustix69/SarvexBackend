@@ -1867,3 +1867,106 @@ body:has(.portfolio-page), body:has(.margin-page) { background: #0a0a0a; }
 .portfolio-page .workspace-title { text-transform: none !important; letter-spacing: 0 !important; font-size: 16px !important; }
 .portfolio-page .margin-panel { margin-top: 14px; }
 .margin-page .margin-page-head p { font-size: 12px; line-height: 1.7; max-width: 720px; }
+
+/* ===== Shared top bar and Terminal theme (matches the new design) ===== */
+:root { --pf-bg: #0a0a0a; --pf-panel: #0d0d0d; --pf-raise: #141414; --pf-line: #262626; --pf-line2: #3f3f3f; --pf-dim: #8a8a8a; --pf-mid: #b4b4b4; --pf-text: #e8e8e8; --pf-green: #7fd6a4; --pf-rose: #d98a96; --pf-gold: #c8a96a;
+  --pf-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; --pf-serif: "Playfair Display", Georgia, serif; }
+body:has(.terminal-page) { background: var(--pf-bg); }
+
+/* top bar */
+.topbar { background: var(--pf-bg) !important; border-bottom: 1px solid var(--pf-line) !important; height: 56px; padding: 0 16px; }
+.topbar *, .terminal-page * { font-family: var(--pf-mono); letter-spacing: 0; }
+.brand { gap: 10px !important; color: var(--pf-text) !important; }
+.brand span { font-family: var(--pf-serif) !important; font-size: 20px !important; font-weight: 400 !important; letter-spacing: -0.01em !important; }
+.brand-logo { flex: none; display: block; }
+.global-search { height: 34px; max-width: 380px; border: 1px solid var(--pf-line); border-radius: 0 !important; background: #111 !important; }
+.global-search input { font-family: var(--pf-mono) !important; font-size: 12px !important; color: var(--pf-text) !important; }
+.global-search kbd { border: 1px solid var(--pf-line2); padding: 1px 5px; font-size: 11px !important; color: var(--pf-dim) !important; }
+.main-nav { gap: 2px !important; }
+.main-nav .nav-link { font-size: 11px !important; letter-spacing: 0.1em !important; text-transform: uppercase; color: var(--pf-mid) !important; padding: 19px 10px !important; border: 0 !important; border-radius: 0 !important; background: transparent !important; font-weight: 400 !important; height: auto; }
+.main-nav .nav-link:hover { color: var(--pf-text) !important; }
+.main-nav .nav-link.active { color: var(--pf-text) !important; border-bottom: 1px solid #c9c9c9 !important; margin-bottom: -1px; }
+.user-cluster .account-icon { width: 34px; height: 34px; border: 1px solid var(--pf-line) !important; background: #111 !important; color: var(--pf-mid) !important; border-radius: 0 !important; }
+.user-cluster .logout-btn, .user-cluster .login-btn { height: 34px; padding: 0 12px; border: 1px solid var(--pf-line2) !important; background: transparent !important; color: var(--pf-text) !important; border-radius: 0 !important; font-size: 11px !important; letter-spacing: 0.1em !important; text-transform: uppercase; font-weight: 400 !important; }
+.user-cluster .logout-btn:hover, .user-cluster .login-btn:hover { background: var(--pf-raise) !important; }
+
+/* terminal surfaces */
+.terminal-page { gap: 8px; color: var(--pf-text); font-size: 12px; }
+.terminal-page .terminal-watchlist, .terminal-page .detail-heading, .terminal-page .metric-row, .terminal-page .chart-card, .terminal-page .binary-chart-shell, .terminal-page .oracle-details,
+.terminal-page .book-card, .terminal-page .trades-card, .terminal-page .ticket, .terminal-page .position-card, .terminal-page .contracts-table, .terminal-page .future-chart {
+  background: var(--pf-panel) !important; border: 1px solid var(--pf-line) !important; border-radius: 0 !important; box-shadow: none !important;
+}
+.terminal-page .detail-heading { padding: 14px 16px; align-items: flex-start; border-bottom: 0 !important; }
+.terminal-page .detail-heading h1 { font-family: var(--pf-serif) !important; font-weight: 500; font-size: 18px; line-height: 1.35; color: var(--pf-text); white-space: normal; }
+.terminal-page .crumb { font-size: 10px !important; letter-spacing: 0.12em !important; text-transform: uppercase; color: var(--pf-dim) !important; }
+.terminal-page .market-avatar { width: 48px; height: 48px; border: 1px solid var(--pf-line2); border-radius: 0 !important; background: transparent !important; color: var(--pf-text) !important; font-family: var(--pf-serif) !important; font-size: 22px; }
+.terminal-page .market-avatar.xl { width: 48px; height: 48px; }
+.terminal-page .heading-actions svg { color: var(--pf-dim); }
+.terminal-page .metric-row { padding: 10px 16px; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--pf-dim) !important; border-top: 0 !important; }
+.terminal-page .metric-row strong { color: var(--pf-text); }
+.terminal-page .back-btn { font-size: 10px !important; letter-spacing: 0.12em; text-transform: uppercase; color: var(--pf-dim) !important; background: transparent !important; border: 0 !important; }
+
+/* markets list */
+.terminal-watchlist-head { font-size: 10px !important; letter-spacing: 0.14em !important; text-transform: uppercase; color: var(--pf-dim) !important; border-bottom: 1px solid var(--pf-line) !important; }
+.watch-item { border: 0 !important; border-bottom: 1px solid var(--pf-line) !important; border-radius: 0 !important; background: transparent !important; color: var(--pf-text) !important; }
+.watch-item.active { background: var(--pf-raise) !important; box-shadow: inset 2px 0 0 var(--pf-mid); }
+.watch-item b { font-family: var(--pf-serif) !important; font-weight: 400; font-size: 12.5px; color: var(--pf-text); }
+.watch-item small { font-size: 11px; color: var(--pf-green); }
+.watch-item small em { color: var(--pf-rose); font-style: normal; }
+.watch-icon { border: 1px solid var(--pf-line2); border-radius: 0 !important; background: transparent !important; color: var(--pf-mid) !important; font-size: 9px; width: 24px; height: 18px; }
+
+/* chart header, periods, toggles */
+.terminal-page .chart-card *, .terminal-page .binary-chart-shell * { font-family: var(--pf-mono); }
+.terminal-page .future-chart-periods button, .terminal-page .binary-chart-shell button, .terminal-page .order-type-toggle button, .terminal-page .ticket-tabs button {
+  border-radius: 0 !important; border: 1px solid var(--pf-line) !important; background: transparent !important; color: var(--pf-mid) !important; font-size: 11px !important; box-shadow: none !important;
+}
+.terminal-page .future-chart-periods button.active, .terminal-page .binary-chart-shell button.active, .terminal-page .order-type-toggle button.active, .terminal-page .ticket-tabs button.active {
+  background: #c9c9c9 !important; color: #0a0a0a !important; border-color: #c9c9c9 !important;
+}
+
+/* oracle and settlement */
+.terminal-page .oracle-title { border-bottom: 1px solid var(--pf-line); padding-bottom: 10px; }
+.terminal-page .oracle-title h2, .terminal-page h3 { font-family: var(--pf-serif) !important; font-weight: 500; font-size: 16px; color: var(--pf-text); }
+.terminal-page .oracle-title svg, .terminal-page h3 svg { display: none; }
+.terminal-page .oracle-item { background: transparent !important; border: 0 !important; border-top: 1px solid var(--pf-line) !important; border-radius: 0 !important; color: var(--pf-text) !important; font-size: 12px; }
+.terminal-page .oracle-item span, .terminal-page .oracle-item small { font-size: 10px !important; letter-spacing: 0.12em; text-transform: uppercase; color: var(--pf-dim) !important; }
+
+/* Yes / No strip */
+.terminal-page .contract-row { background: transparent !important; border-radius: 0 !important; }
+.terminal-page .contract-row button { background: transparent !important; border-radius: 0 !important; font-size: 11px !important; letter-spacing: 0.1em; text-transform: uppercase; }
+.terminal-page .contract-row.yes button, .terminal-page .contract-row .yes { border: 1px solid var(--pf-green) !important; color: var(--pf-green) !important; }
+.terminal-page .contract-row.no button, .terminal-page .contract-row .no { border: 1px solid var(--pf-rose) !important; color: var(--pf-rose) !important; }
+
+/* order book and trades */
+.terminal-page .book-card h3, .terminal-page .trades-card h3 { border-bottom: 1px solid var(--pf-line); padding-bottom: 10px; margin: 0 0 6px; }
+.terminal-page .book-header { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--pf-dim) !important; }
+.terminal-page .book-row { border-radius: 0 !important; font-size: 11.5px; }
+.terminal-page .book-row.ask { color: var(--pf-rose); } .terminal-page .book-row.bid { color: var(--pf-green); }
+.terminal-page .book-row.ask i { background: rgba(217,138,150,.14) !important; border-radius: 0 !important; }
+.terminal-page .book-row.bid i { background: rgba(127,214,164,.14) !important; border-radius: 0 !important; }
+.terminal-page .spread-row { background: transparent !important; border: 0 !important; border-top: 1px solid var(--pf-line) !important; border-bottom: 1px solid var(--pf-line) !important; border-radius: 0 !important; color: var(--pf-dim) !important; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; }
+.terminal-page .trade-line { border-bottom: 1px solid var(--pf-line); font-size: 12px; }
+.terminal-page .trade-line span { color: var(--pf-rose); } .terminal-page .trade-line strong { color: var(--pf-text); } .terminal-page .trade-line em { color: var(--pf-dim); font-style: normal; }
+
+/* ticket */
+.terminal-page .ticket-summary, .terminal-page .amount-input span, .terminal-page .ticket-note { font-size: 10px !important; letter-spacing: 0.1em; text-transform: uppercase; color: var(--pf-dim) !important; }
+.terminal-page .ticket-summary strong { color: var(--pf-text); font-size: 12px; }
+.terminal-page .amount-input input { font-family: var(--pf-mono) !important; background: #111 !important; border: 1px solid var(--pf-line) !important; border-radius: 0 !important; color: var(--pf-text) !important; }
+.terminal-page .quick-amounts button { border: 1px solid var(--pf-line) !important; border-radius: 0 !important; background: transparent !important; color: var(--pf-mid) !important; font-size: 11px; }
+.terminal-page .outcome-toggle button { border-radius: 0 !important; background: transparent !important; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+.terminal-page .outcome-toggle button.yes { border: 1px solid var(--pf-green) !important; color: var(--pf-green) !important; }
+.terminal-page .outcome-toggle button.no { border: 1px solid var(--pf-rose) !important; color: var(--pf-rose) !important; }
+.terminal-page .outcome-toggle button.yes.active { background: var(--pf-green) !important; color: #0a0a0a !important; }
+.terminal-page .outcome-toggle button.no.active { background: var(--pf-rose) !important; color: #0a0a0a !important; }
+.terminal-page .trade-btn { border-radius: 0 !important; background: var(--pf-text) !important; color: #0a0a0a !important; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; box-shadow: none !important; }
+.terminal-page .trade-btn.long-submit { background: transparent !important; color: var(--pf-green) !important; border: 1px solid var(--pf-green) !important; }
+.terminal-page .trade-btn.short-submit { background: transparent !important; color: var(--pf-rose) !important; border: 1px solid var(--pf-rose) !important; }
+.terminal-page .position-card h2, .terminal-page .position-card h3 { font-family: var(--pf-serif) !important; font-size: 18px; font-weight: 500; }
+.terminal-page .pnl-positive { color: var(--pf-green) !important; } .terminal-page .pnl-negative { color: var(--pf-rose) !important; }
+.terminal-page .contract-row { border: 0 !important; color: var(--pf-text) !important; }
+.terminal-page .contract-row div strong { font-family: var(--pf-serif) !important; font-weight: 400; font-size: 17px; }
+.terminal-page .contract-row span { color: var(--pf-dim) !important; font-weight: 400; }
+.terminal-page .contract-row em.yes { background: transparent !important; border: 1px solid var(--pf-green) !important; color: var(--pf-green) !important; font-style: normal; border-radius: 0 !important; letter-spacing: 0.1em; text-transform: uppercase; }
+.terminal-page .contract-row em.no { background: transparent !important; border: 1px solid var(--pf-rose) !important; color: var(--pf-rose) !important; font-style: normal; border-radius: 0 !important; letter-spacing: 0.1em; text-transform: uppercase; }
+.terminal-page .contracts-table { display: grid; grid-template-columns: 1fr 1fr; }
+.terminal-page .contract-row:first-child { border-right: 1px solid var(--pf-line) !important; }

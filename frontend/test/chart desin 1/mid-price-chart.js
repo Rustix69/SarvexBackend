@@ -10,7 +10,7 @@
 // chart.tick({ bid, ask, fill })  updates the live point; chart.destroy() cleans up.
 
 const MPC_CSS = `
-.mpc{--yes:#2bb3a0;--no:#d0496a;--accent:#6d5ce8;--mpc-bg:#16161a;--line:#2a2a30;--muted:#8b8b93;
+.mpc{--yes:#7fd6a4;--no:#d98a96;--accent:#c9c9c9;--mid:#c9c9c9;--mpc-bg:#0d0d0d;--line:#262626;--muted:#8b8b93;
   background:var(--mpc-bg);color:#e8e8ea;border:1px solid var(--line);padding:16px 16px 12px;
   display:flex;flex-direction:column;gap:12px;min-width:0;
   font-family:"Source Serif 4",Georgia,"Times New Roman",serif}
@@ -37,15 +37,15 @@ const MPC_CSS = `
 .mpc-legend button[aria-pressed="false"]{opacity:.4}
 .mpc button:focus-visible,.mpc-plot:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .mpc-sw{display:inline-block;width:14px;height:2px;border-radius:2px}
-.mpc-sw.mid{background:var(--yes);height:3px}
-.mpc-sw.band{height:10px;background:rgba(43,179,160,.22);border-top:1px solid rgba(43,179,160,.5);border-bottom:1px solid rgba(43,179,160,.5);border-radius:1px}
+.mpc-sw.mid{background:var(--mid);height:3px}
+.mpc-sw.band{height:10px;background:rgba(201,201,201,.10);border-top:1px solid rgba(201,201,201,.35);border-bottom:1px solid rgba(201,201,201,.35);border-radius:1px}
 .mpc-sw.fill{width:9px;height:9px;border-radius:50%;background:linear-gradient(90deg,var(--yes) 50%,var(--no) 50%)}
 .mpc-sw.ev{width:0;height:12px;border-left:1px dashed var(--muted);border-radius:0}
 .mpc-plot{position:relative;height:var(--mpc-h,300px);border-radius:4px}
 .mpc-plot canvas,.mpc-volwrap canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .mpc-volwrap{position:relative;height:56px;border-top:1px solid #222228}
-.mpc-live{position:absolute;width:10px;height:10px;margin:-5px 0 0 -5px;border-radius:50%;background:var(--yes);pointer-events:none}
-.mpc-live::after{content:"";position:absolute;inset:-6px;border-radius:50%;border:2px solid var(--yes);opacity:0;animation:mpc-ping 1.8s ease-out infinite}
+.mpc-live{position:absolute;width:10px;height:10px;margin:-5px 0 0 -5px;border-radius:50%;background:var(--mid);pointer-events:none}
+.mpc-live::after{content:"";position:absolute;inset:-6px;border-radius:50%;border:2px solid var(--mid);opacity:0;animation:mpc-ping 1.8s ease-out infinite}
 @keyframes mpc-ping{0%{transform:scale(.4);opacity:.8}100%{transform:scale(1.4);opacity:0}}
 @media (prefers-reduced-motion:reduce){.mpc-live::after{animation:none}}
 .mpc-tip{position:absolute;top:26px;pointer-events:none;background:#0e0e11;border:1px solid #30303a;border-radius:8px;padding:8px 10px;
@@ -65,7 +65,7 @@ export function mountMidPriceChart(root, userOpts = {}) {
     initialRange: '1D',
     height: 300,
     minPoints: 3,
-    colors: { yes: '#2bb3a0', no: '#d0496a', accent: '#6d5ce8', bg: '#16161a', grid: '#232329', text: '#8b8b93', ref: '#5a3b4b' },
+    colors: { yes: '#7fd6a4', no: '#d98a96', mid: '#c9c9c9', accent: '#c9c9c9', bg: '#0d0d0d', grid: '#1a1a1a', text: '#8b8b93', ref: '#5a3b4b' },
     ...userOpts,
   };
   const C = o.colors;
@@ -254,17 +254,17 @@ export function mountMidPriceChart(root, userOpts = {}) {
       for (let i = pts.length - 1; i >= 1; i--) { ctx.lineTo(X(pts[i].t), Y(pts[i].bid)); ctx.lineTo(X(pts[i].t), Y(pts[i - 1].bid)); }
       ctx.lineTo(X(pts[0].t), Y(pts[0].bid));
       ctx.closePath();
-      ctx.fillStyle = hexA(C.yes, 0.1); ctx.fill();
+      ctx.fillStyle = hexA(C.mid, 0.1); ctx.fill();
     }
     // area under mid
     const grad = ctx.createLinearGradient(0, T, 0, T + ph);
-    grad.addColorStop(0, hexA(C.yes, 0.22)); grad.addColorStop(1, hexA(C.yes, 0));
+    grad.addColorStop(0, hexA(C.mid, 0.22)); grad.addColorStop(1, hexA(C.mid, 0));
     ctx.beginPath(); stepPath(ctx, mid);
     ctx.lineTo(X(t1), T + ph); ctx.lineTo(X(t0), T + ph); ctx.closePath();
     ctx.fillStyle = grad; ctx.fill();
     // mid line
     ctx.beginPath(); stepPath(ctx, mid);
-    ctx.strokeStyle = C.yes; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.stroke();
+    ctx.strokeStyle = C.mid; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.stroke();
     ctx.lineWidth = 1;
     // fills
     if (show.fills) {
@@ -323,7 +323,7 @@ export function mountMidPriceChart(root, userOpts = {}) {
       ctx.beginPath(); ctx.moveTo(x, T); ctx.lineTo(x, T + ph); ctx.stroke();
       vctx.strokeStyle = '#6a6a75'; vctx.beginPath(); vctx.moveTo(x, 0); vctx.lineTo(x, vs.h); vctx.stroke();
       ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2);
-      ctx.fillStyle = C.bg; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = C.yes; ctx.stroke(); ctx.lineWidth = 1;
+      ctx.fillStyle = C.bg; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = C.mid; ctx.stroke(); ctx.lineWidth = 1;
     }
   }
 
