@@ -2033,3 +2033,17 @@ body:has(.dashboard-page) { background: var(--pf-bg); }
 .dashboard-page .smc-cat::before { content: 'SXF'; border: 1px solid var(--pf-line2); padding: 2px 6px; font-size: 10px; letter-spacing: 0.1em; color: var(--pf-mid); margin-right: 4px; }
 .dashboard-page .bmc-logo { display: none !important; }
 .dashboard-page .bmc-cat::before { content: 'XS'; border: 1px solid var(--pf-line2); padding: 2px 6px; font-size: 10px; letter-spacing: 0.1em; color: var(--pf-mid); margin-right: 4px; }
+
+/* Global black surfaces (matches landing #0a0a0a): replace the older grey fills on every page */
+body, #root, .app-shell, .terminal-page, .detail-page, .portfolio-page, .margin-page, .health-page, .profile-page, .dashboard-page { background: #0a0a0a !important; }
+.topbar, .top-nav, header.topbar { background: #0a0a0a !important; border-bottom-color: #262626 !important; }
+.chart-card, .book-card, .trades-card, .ticket, .position-card, .portfolio-panel, .portfolio-metrics div, .health-panel, .health-summary div,
+.loading-panel, .margin-panel, .profile-card, .live-panel, .empty-feature, .market-card, .terminal-watchlist, .terminal-page .detail-heading,
+.terminal-page .chart-card, .terminal-page .oracle-details, .terminal-page .contracts-table, .portfolio-metrics-rail, .portfolio-calendar-panel,
+.portfolio-referrals, .portfolio-account-strip, .portfolio-subnav, .portfolio-data-panels .portfolio-panel, .auth-dialog, .trade-confirmation,
+.api-docs-layout, .api-docs-reference, .api-docs-sidebar, .api-docs-console, .api-search-dialog, .section-sort select { background: #0d0d0d !important; border-color: #262626 !important; }
+.position-stat-grid div, .ticket-summary.market-estimate, .ticket-note, .order-type-toggle, .spread-row, .empty-state, .oracle-item, .exit-price-form,
+.scope-option, .secondary-btn, .quick-amounts button { background: #141414 !important; border-color: #262626 !important; }
+.terminal-page .kline-chart-container, .terminal-page .price-chart, .featured-market-chart .mpc, .featured-future-chart .future-chart,
+.featured-future-chart .kline-chart-container, .exit-price-form input { background: #0d0d0d !important; }
+.live-market:hover, .watch-item:hover, .watch-item.active, .section-filter:hover { background: #141414 !important; }
