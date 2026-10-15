@@ -1440,7 +1440,7 @@ function MarketDashboard({ loading, markets, fills, marketPrices, onSelect, sear
           <SectionView key={section} section={section} markets={rows} fills={fills} marketPrices={marketPrices} onSelect={onSelect} />
         )
       ) : <div className="loading-panel">No markets match your search.</div>}
-      <footer className="status-bar"><span><i /> Connected</span><span>Demo market</span><span>{markets.filter((m) => !m.catalogOnly).length} live</span></footer>
+      <footer className="status-bar"><span><i /> Connected</span><span>{markets.filter((m) => !m.catalogOnly).length} live</span></footer>
     </main>
   )
 }
@@ -1678,7 +1678,7 @@ function FuturesDashboard({ loading, futures, fills, marketPrices, onSelect, sea
       {loading ? (
         <div className="loading-panel"><Loader2 className="spin" /> Loading Sarvaex futures...</div>
       ) : !matching.length ? (
-        <div className="loading-panel">{searchQuery.trim() ? 'No futures match your search.' : 'No numeric futures are open yet.'}</div>
+        <div className="loading-panel">{searchQuery.trim() ? 'No futures match your search.' : 'No futures are open yet.'}</div>
       ) : section === 'Trending' ? (
         buildTrendingSections(matching, fills).map((group) => (
           <section className="trending-section" key={group.section} aria-label={group.section}>
@@ -1756,7 +1756,7 @@ function MarketDetail({ market, watchlist, onSelect, orderbook, fills, position,
         <div className="detail-heading">
           <ContractLogo market={market} className="market-avatar xl" />
           <div>
-            <p className="crumb">{market.series_ticker || market.seriesTicker || 'Sarvaex'} · {market.kind === 2 ? 'Scalar Future' : 'Binary Contract'}</p>
+            <p className="crumb">{market.series_ticker || market.seriesTicker || 'Sarvaex'} · {market.kind === 2 ? 'Futures' : 'Yes/No Event Contract'}</p>
             <h1>{market.question || market.underlying || market.ticker}</h1>
           </div>
           <div className="heading-actions"><Share2 size={18} /><Link2 size={18} /><button className={pinnedTickers?.includes(market.ticker) ? 'pin-btn active' : 'pin-btn'} type="button" title={pinnedTickers?.includes(market.ticker) ? 'Unpin market' : 'Pin market'} aria-label={pinnedTickers?.includes(market.ticker) ? 'Unpin market' : 'Pin market'} onClick={() => onTogglePin?.(market.ticker)}><Bookmark size={18} /></button></div>
@@ -1764,7 +1764,7 @@ function MarketDetail({ market, watchlist, onSelect, orderbook, fills, position,
 
         <div className="metric-row">
           <span>Last traded: <strong>{last}¢</strong></span>
-          <span><Clock3 size={15} /> {formatDate(market.close_at || market.closeAt || market.expected_resolution_at)}</span>
+          {formatDate(market.close_at || market.closeAt || market.expected_resolution_at) && <span><Clock3 size={15} /> {formatDate(market.close_at || market.closeAt || market.expected_resolution_at)}</span>}
           <span><Activity size={15} /> {fills.length} recent fills</span>
         </div>
 
@@ -1862,7 +1862,7 @@ function FutureDetail({ market, watchlist, watchlistFills, onSelect, orderbook, 
         <div className="detail-heading">
           <ContractLogo market={market} className="market-avatar xl" />
           <div>
-            <p className="crumb">{market.series_ticker || market.seriesTicker || 'Sarvaex'} · Numeric Future</p>
+            <p className="crumb">{market.series_ticker || market.seriesTicker || 'Sarvaex'} · Futures</p>
             <h1>{market.question || market.underlying || market.ticker}</h1>
           </div>
           <div className="heading-actions"><Share2 size={18} /><Link2 size={18} /><button className={pinnedTickers?.includes(market.ticker) ? 'pin-btn active' : 'pin-btn'} type="button" title={pinnedTickers?.includes(market.ticker) ? 'Unpin market' : 'Pin market'} aria-label={pinnedTickers?.includes(market.ticker) ? 'Unpin market' : 'Pin market'} onClick={() => onTogglePin?.(market.ticker)}><Bookmark size={18} /></button></div>
@@ -1870,7 +1870,7 @@ function FutureDetail({ market, watchlist, watchlistFills, onSelect, orderbook, 
 
         <div className="metric-row">
           <span>Current price: <strong>{formatFuturePrice(market, last)}</strong></span>
-          <span><Clock3 size={15} /> {formatDate(market.close_at || market.closeAt || market.expected_resolution_at)}</span>
+          {formatDate(market.close_at || market.closeAt || market.expected_resolution_at) && <span><Clock3 size={15} /> {formatDate(market.close_at || market.closeAt || market.expected_resolution_at)}</span>}
           <span><Activity size={15} /> {fills.length} recent fills</span>
           <span>Tick: <strong>{formatFutureTick(market)}</strong></span>
         </div>
@@ -2022,7 +2022,7 @@ function KlineFutureChart({ fills, market, period }) {
 function OracleDetails({ market }) {
   const source = market?.settlement_source || market?.settlementSource || 'Not published'
   const policy = market?.oracle_policy || market?.oraclePolicy || 'Not published'
-  const underlying = market?.underlying || (isFutureMarket(market) ? 'Numeric value defined by the contract' : 'Binary outcome defined by the contract')
+  const underlying = market?.underlying || (isFutureMarket(market) ? 'Value defined by the contract' : 'Yes/No outcome defined by the contract')
   const closeAt = market?.close_at || market?.closeAt
   const resolutionAt = market?.expected_resolution_at || market?.expectedResolutionAt
 
@@ -2051,11 +2051,11 @@ function OracleDetails({ market }) {
         </div>
         <div className="oracle-item">
           <span>Trading closes</span>
-          <strong>{formatDate(closeAt)}</strong>
+          <strong>{formatDate(closeAt) || '—'}</strong>
         </div>
         <div className="oracle-item">
           <span>Expected resolution</span>
-          <strong>{formatDate(resolutionAt)}</strong>
+          <strong>{formatDate(resolutionAt) || '—'}</strong>
         </div>
       </div>
     </section>
@@ -2285,7 +2285,7 @@ function FutureTradeTicket({ market, bestBid, bestAsk, mark, authed, busy, onTra
       <button className={tab === 'buy' ? 'trade-btn long-submit' : 'trade-btn short-submit'} type="button" disabled={!authed || busy || Boolean(orderIssue)} onClick={submit}>
         {busy ? <Loader2 className="spin" size={17} /> : <CircleDollarSign size={17} />} {authed ? `${orderType === 'market' ? 'Market' : 'Limit'} ${tab === 'buy' ? 'buy' : 'sell'} ${contracts}` : 'Login to trade'}
       </button>
-      <p>Numeric futures are demo USDC-settled contracts.</p>
+      <p>Futures are demo USDC-settled contracts.</p>
     </section>
   )
 }
@@ -3174,7 +3174,7 @@ function pnlClassName(value) {
 
 function formatDate(value) {
   const seconds = value?.seconds
-  if (!seconds) return 'Demo market'
+  if (!seconds) return ''
   return new Date(Number(seconds) * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
@@ -3190,7 +3190,7 @@ function formatSettlementRule(value) {
   }
   if (rule?.type === 'categorical_equals') {
     const values = Array.isArray(rule.yes_values) ? rule.yes_values.join(', ') : 'YES'
-    return `Binary: ${values}`
+    return `Yes/No: ${values}`
   }
   if (rule?.type === 'scalar_numeric') return 'Scalar numeric'
   return rule?.type || 'Configured rule'
