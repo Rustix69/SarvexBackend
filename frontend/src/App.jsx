@@ -1352,11 +1352,21 @@ function MarketDashboard({ loading, markets, fills, marketPrices, onSelect, sear
                 focus="34% 55%"
                 options={{ market: 'SARVAEX LIVE MARKETS' }}
               />
-              <div className="matrix-hero-copy"><span>Powered by Sarvaex</span><strong>Trade What Happens Next</strong></div>
+              <div className="matrix-hero-copy">
+                <span>&gt; Powered by Sarvaex</span>
+                <strong>Trade What Happens Next</strong>
+                <p>Binary Yes / No contracts and futures on economics, finance, crypto, commodities, elections, climate and geopolitics.</p>
+                <div className="hero-actions">
+                  <button type="button" className="hero-btn primary" onClick={() => window.location.assign('/terminal')}>Open terminal →</button>
+                  <button type="button" className="hero-btn" onClick={() => setSection('Economics')}>Browse markets</button>
+                </div>
+              </div>
             </div>
             <aside className="live-panel">
-              <div className="live-panel-head"><span><i /> Live markets</span><span>1 / 11 <ChevronDown size={13} /></span></div>
+              <div className="live-panel-head"><span><i /> Live markets</span><span>{markets.filter((m) => !m.catalogOnly).length} live</span></div>
+              <div className="live-table-head"><span>Market</span><span>Yes</span></div>
               {markets.slice(0, 5).map((market, index) => <button type="button" className="live-market" key={market.ticker} onClick={() => onSelect(market.ticker)}><span className={`live-avatar avatar-${index}`}>{avatarText(market)}</span><span><small>{contractSection(market)} · {market.catalogOnly ? 'Planned' : 'Live'}</small><b>{market.question || market.underlying || market.ticker}</b></span><strong>{Math.max(1, Math.min(99, marketPrices[market.ticker] || impliedPrice(market, fills)))}%</strong></button>)}
+              <button type="button" className="live-all" onClick={() => setSection('Economics')}>All live markets <span>→</span></button>
             </aside>
           </section>
         </>
@@ -1368,7 +1378,11 @@ function MarketDashboard({ loading, markets, fills, marketPrices, onSelect, sear
         section === 'Trending' ? (
           buildTrendingSections(filteredMarkets, fills).map((group) => (
             <section className="trending-section" key={group.section} aria-label={group.section}>
-              <h2 className="trending-section-title"><button type="button" onClick={() => onOpenSection(group.section)}>{group.section}<ChevronRight size={22} aria-hidden="true" /></button></h2>
+              <div className="trending-section-head">
+                <h2 className="trending-section-title"><button type="button" onClick={() => onOpenSection(group.section)}>{group.section}<ChevronRight size={22} aria-hidden="true" /></button></h2>
+                <small className="section-count">{group.markets.length} markets</small>
+                <button type="button" className="view-all" onClick={() => onOpenSection(group.section)}>View all →</button>
+              </div>
               <div className="market-grid">
                 {group.markets.map((market, index) => (
                   <MarketCard
@@ -1388,6 +1402,7 @@ function MarketDashboard({ loading, markets, fills, marketPrices, onSelect, sear
           <SectionView key={section} section={section} markets={rows} fills={fills} marketPrices={marketPrices} onSelect={onSelect} />
         )
       ) : <div className="loading-panel">No markets match your search.</div>}
+      <footer className="status-bar"><span><i /> Connected</span><span>Demo market</span><span>{markets.filter((m) => !m.catalogOnly).length} live</span></footer>
     </main>
   )
 }
@@ -1629,7 +1644,11 @@ function FuturesDashboard({ loading, futures, fills, marketPrices, onSelect, sea
       ) : section === 'Trending' ? (
         buildTrendingSections(matching, fills).map((group) => (
           <section className="trending-section" key={group.section} aria-label={group.section}>
-            <h2 className="trending-section-title"><button type="button" onClick={() => onOpenSection(group.section)}>{group.section}<ChevronRight size={22} aria-hidden="true" /></button></h2>
+            <div className="trending-section-head">
+                <h2 className="trending-section-title"><button type="button" onClick={() => onOpenSection(group.section)}>{group.section}<ChevronRight size={22} aria-hidden="true" /></button></h2>
+                <small className="section-count">{group.markets.length} markets</small>
+                <button type="button" className="view-all" onClick={() => onOpenSection(group.section)}>View all →</button>
+              </div>
             <div className="market-grid">
               {group.markets.map((market, index) => (
                 <FutureCard key={market.ticker} market={market} fills={fills} marketPrices={marketPrices} index={index} onClick={() => onSelect(market.ticker)} />

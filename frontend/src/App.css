@@ -2067,3 +2067,24 @@ html, html body, .sarvex-shell, #root { background: #000 !important; }
 /* Category pages: no left filter list and no sort dropdown */
 .section-filters, .section-sort { display: none !important; }
 .section-layout { grid-template-columns: minmax(0, 1fr) !important; }
+
+/* Discover: layout from the new design (hero copy + buttons, live table, section headers, status bar) */
+.dashboard-page .matrix-hero-copy { gap: 14px; max-width: min(46%, 520px); pointer-events: none; }
+.dashboard-page .matrix-hero-copy span { font: 400 10px var(--pf-mono); letter-spacing: .14em; color: var(--pf-dim); }
+.dashboard-page .matrix-hero-copy strong { font: 400 clamp(38px, 4.6vw, 64px)/1.02 "Playfair Display", Georgia, serif; color: var(--pf-text); }
+.dashboard-page .matrix-hero-copy p { margin: 0; max-width: 40ch; color: var(--pf-mid); font: 400 11px/1.7 var(--pf-mono); }
+.hero-actions { display: flex; gap: 10px; pointer-events: auto; }
+.hero-btn { padding: 10px 16px; border: 1px solid var(--pf-line2); background: transparent; color: var(--pf-text); font: 400 10px var(--pf-mono); letter-spacing: .12em; text-transform: uppercase; cursor: pointer; }
+.hero-btn.primary { border-color: #c9c9c9; background: #c9c9c9; color: #0a0a0a; }
+.hero-btn:hover { border-color: var(--pf-green); }
+.hero-btn.primary:hover { background: #fff; }
+.live-table-head { display: flex; justify-content: space-between; padding: 0 5px 8px; border-bottom: 1px solid var(--pf-line); color: var(--pf-dim); font: 400 9px var(--pf-mono); letter-spacing: .12em; text-transform: uppercase; }
+.live-all { display: flex; justify-content: space-between; width: 100%; margin-top: 8px; padding: 12px 5px 4px; border: 0; border-top: 1px solid var(--pf-line); background: transparent; color: var(--pf-dim); font: 400 10px var(--pf-mono); letter-spacing: .12em; text-transform: uppercase; cursor: pointer; }
+.live-all:hover { color: var(--pf-text); }
+.trending-section-head { display: flex; align-items: baseline; gap: 14px; margin: 0 0 14px; }
+.trending-section-head .trending-section-title { margin: 0; }
+.trending-section-head .section-count { color: var(--pf-dim); font: 400 10px var(--pf-mono); letter-spacing: .1em; text-transform: uppercase; }
+.view-all { margin-left: auto; padding: 0; border: 0; background: transparent; color: var(--pf-dim); font: 400 10px var(--pf-mono); letter-spacing: .12em; text-transform: uppercase; cursor: pointer; }
+.view-all:hover { color: var(--pf-green); }
+.status-bar { display: flex; gap: 22px; margin-top: 40px; padding: 14px 0; border-top: 1px solid var(--pf-line); color: var(--pf-dim); font: 400 10px var(--pf-mono); letter-spacing: .1em; text-transform: uppercase; }
+.status-bar i { display: inline-block; width: 6px; height: 6px; margin-right: 6px; background: var(--pf-green); }
