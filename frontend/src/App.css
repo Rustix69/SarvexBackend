@@ -2047,3 +2047,7 @@ body, #root, .app-shell, .terminal-page, .detail-page, .portfolio-page, .margin-
 .terminal-page .kline-chart-container, .terminal-page .price-chart, .featured-market-chart .mpc, .featured-future-chart .future-chart,
 .featured-future-chart .kline-chart-container, .exit-price-form input { background: #0d0d0d !important; }
 .live-market:hover, .watch-item:hover, .watch-item.active, .section-filter:hover { background: #141414 !important; }
+html, html body, .sarvex-shell, #root { background: #000 !important; }
+.sarvex-shell, #root, .dashboard-page, .terminal-page, .detail-page, .portfolio-page, .margin-page, .health-page, .profile-page { background: #000 !important; }
+.topbar { background: #000 !important; }
+.dashboard-page .smc, .dashboard-page .bmc, .dashboard-page .featured-card, .dashboard-page .section-sidebar { background: #050505 !important; }
