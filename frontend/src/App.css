@@ -2051,3 +2051,16 @@ html, html body, .sarvex-shell, #root { background: #000 !important; }
 .sarvex-shell, #root, .dashboard-page, .terminal-page, .detail-page, .portfolio-page, .margin-page, .health-page, .profile-page { background: #000 !important; }
 .topbar { background: #000 !important; }
 .dashboard-page .smc, .dashboard-page .bmc, .dashboard-page .featured-card, .dashboard-page .section-sidebar { background: #050505 !important; }
+
+/* Trading API page: same black, green/rose palette and fonts as the rest of the platform */
+.api-docs-page { --api-bg: #000; --api-pane: #0a0a0a; --api-pane-2: #0d0d0d; --api-well: #050505; --api-line: #262626; --api-text: #e8e8e8; --api-muted: #8a8a8a; --api-faint: #5c5c5c; --api-teal: #7fd6a4; --api-pink: #d98a96; --api-amber: #c8a96a; --mono: "JetBrains Mono", ui-monospace, monospace; font-family: "JetBrains Mono", ui-monospace, monospace; background: #000 !important; }
+.api-docs-page h1, .api-docs-title h1, .api-reference-pager span { font-family: "Playfair Display", Georgia, serif !important; font-weight: 500; }
+.api-docs-page h2, .api-docs-page h3 { font-family: "JetBrains Mono", ui-monospace, monospace !important; }
+.api-docs-sidebar, .api-docs-console, .api-sidebar-search, .api-global-search, .api-search-dialog { background: #050505 !important; border-color: #262626 !important; }
+.api-docs-reference, .api-docs-layout { background: #0a0a0a !important; }
+.api-docs-icon, .api-generated-label span:first-child, .api-guide-content > p code, .api-global-search kbd, .api-search-footer kbd, .api-sidebar-search kbd { background: #141414 !important; border-color: #262626 !important; }
+.api-tree-item:hover, .api-tree-item.active, .api-output-tabs button:hover, .api-output-tabs button.active, .api-search-result:hover, .api-search-result.active { background: #141414 !important; }
+.api-method.get { background: rgba(127,214,164,.12); color: #7fd6a4; }
+.api-method.post { background: rgba(217,138,150,.12); color: #d98a96; }
+.api-method.delete { background: rgba(200,169,106,.13); color: #c8a96a; }
+.api-docs-page .primary-btn, .api-docs-page button.run, .api-docs-page .api-run { background: #7fd6a4 !important; color: #0a0a0a !important; }
