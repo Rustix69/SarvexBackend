@@ -1331,6 +1331,58 @@ function buildTrendingMarkets(markets, fills) {
   return buildTrendingSections(markets, fills).flatMap((group) => group.markets)
 }
 
+const BOARD_ROWS = 8
+
+function boardClock() {
+  return new Date().toLocaleTimeString('en-GB', { hour12: false, timeZone: 'America/New_York' })
+}
+
+function DepartureBoard({ markets, fills, marketPrices, onSelect }) {
+  const [clock, setClock] = useState(boardClock)
+  const [offset, setOffset] = useState(0)
+  const live = useMemo(() => markets
+    .filter((market) => !market.catalogOnly && new Date(market.close_at || market.closeAt || market.expected_resolution_at) > new Date())
+    .sort((a, b) => new Date(a.close_at || a.closeAt || a.expected_resolution_at) - new Date(b.close_at || b.closeAt || b.expected_resolution_at)), [markets])
+  useEffect(() => {
+    const tick = setInterval(() => setClock(boardClock()), 1000)
+    return () => clearInterval(tick)
+  }, [])
+  useEffect(() => {
+    if (live.length <= BOARD_ROWS) return undefined
+    const flip = setInterval(() => setOffset((value) => (value + 1) % live.length), 6000)
+    return () => clearInterval(flip)
+  }, [live.length])
+  const rows = Array.from({ length: Math.min(BOARD_ROWS, live.length) }, (_, index) => live[(offset + index) % live.length])
+  return (
+    <div className="dep-board">
+      <div className="dep-head">
+        <span className="dep-tag">Board</span>
+        <small>Sorted by settle date · {live.length} live</small>
+        <small className="dep-clock">Board time <b>{clock} ET</b><i /></small>
+      </div>
+      <div className="dep-cols"><span>Settles</span><span /><span>Market</span><span>Status</span><span>Trade</span></div>
+      <div className="dep-rows">
+        {rows.map((market, index) => {
+          const price = Math.max(1, Math.min(99, Math.round(marketPrices[market.ticker] || impliedPrice(market, fills))))
+          const closeAt = new Date(market.close_at || market.closeAt || market.expected_resolution_at)
+          const closing = closeAt - Date.now() < 3 * 24 * 3600 * 1000
+          return (
+            <button type="button" className="dep-row" key={market.ticker} onClick={() => onSelect(market.ticker)} style={{ animationDelay: `${index * 40}ms` }}>
+              <span>{closeAt.toLocaleDateString('en-US', { month: 'short', day: '2-digit', timeZone: 'UTC' }).toUpperCase()}</span>
+              <span><img src={`/SarvaeX_contract_logos/logos/${encodeURIComponent(market.ticker)}.svg`} alt="" onError={(event) => { event.currentTarget.style.visibility = 'hidden' }} /></span>
+              <span className="dep-title">{cardMarketTitle(market)}</span>
+              <span className={closing ? 'dep-status closing' : 'dep-status'}><i />{closing ? 'Closing' : 'Live'}</span>
+              <span className="dep-trade"><em className="yes">YES {price}¢</em><em className="no">NO {100 - price}¢</em></span>
+            </button>
+          )
+        })}
+      </div>
+      <div className="dep-foot"><span className="live">Live</span><span className="closing">Closing</span><button type="button" onClick={() => window.location.assign('/terminal')}>Open terminal →</button></div>
+    </div>
+  )
+}
+
+
 function MarketDashboard({ loading, markets, fills, marketPrices, onSelect, searchQuery }) {
   const [section, setSection] = useState('Trending')
   const onOpenSection = setSection
@@ -1347,21 +1399,7 @@ function MarketDashboard({ loading, markets, fills, marketPrices, onSelect, sear
       {section === 'Trending' ? (
         <>
           <section className="dashboard-hero">
-            <div className="promo-banner">
-              <MatrixBackdrop
-                focus="34% 55%"
-                options={{ market: 'SARVAEX LIVE MARKETS' }}
-              />
-              <div className="matrix-hero-copy">
-                <span>&gt; Powered by Sarvaex</span>
-                <strong>Trade What Happens Next</strong>
-                <p>Binary Yes / No contracts and futures on economics, finance, crypto, commodities, elections, climate and geopolitics.</p>
-                <div className="hero-actions">
-                  <button type="button" className="hero-btn primary" onClick={() => window.location.assign('/terminal')}>Open terminal →</button>
-                  <button type="button" className="hero-btn" onClick={() => setSection('Economics')}>Browse markets</button>
-                </div>
-              </div>
-            </div>
+            <DepartureBoard markets={markets} fills={fills} marketPrices={marketPrices} onSelect={onSelect} />
             <aside className="live-panel">
               <div className="live-panel-head"><span><i /> Live markets</span><span>{markets.filter((m) => !m.catalogOnly).length} live</span></div>
               <div className="live-table-head"><span>Market</span><span>Yes</span></div>
