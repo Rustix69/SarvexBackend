@@ -2029,10 +2029,6 @@ body:has(.dashboard-page) { background: var(--pf-bg); }
 .dashboard-page .bm-bar { border-radius: 0 !important; }
 .dashboard-page .bm-chg.up { color: var(--pf-green) !important; } .dashboard-page .bm-chg.down { color: var(--pf-rose) !important; }
 .dashboard-page .loading-panel { background: var(--pf-panel); border: 1px solid var(--pf-line); border-radius: 0; color: var(--pf-dim); }
-.dashboard-page .smc-logo { display: none !important; }
-.dashboard-page .smc-cat::before { content: 'SXF'; border: 1px solid var(--pf-line2); padding: 2px 6px; font-size: 10px; letter-spacing: 0.1em; color: var(--pf-mid); margin-right: 4px; }
-.dashboard-page .bmc-logo { display: none !important; }
-.dashboard-page .bmc-cat::before { content: 'XS'; border: 1px solid var(--pf-line2); padding: 2px 6px; font-size: 10px; letter-spacing: 0.1em; color: var(--pf-mid); margin-right: 4px; }
 
 /* Global black surfaces (matches landing #0a0a0a): replace the older grey fills on every page */
 body, #root, .app-shell, .terminal-page, .detail-page, .portfolio-page, .margin-page, .health-page, .profile-page, .dashboard-page { background: #0a0a0a !important; }
@@ -2064,3 +2060,6 @@ html, html body, .sarvex-shell, #root { background: #000 !important; }
 .api-method.post { background: rgba(217,138,150,.12); color: #d98a96; }
 .api-method.delete { background: rgba(200,169,106,.13); color: #c8a96a; }
 .api-docs-page .primary-btn, .api-docs-page button.run, .api-docs-page .api-run { background: #7fd6a4 !important; color: #0a0a0a !important; }
+
+.dashboard-page .smc-cat, .dashboard-page .bmc-cat, .dashboard-page .featured-category { display: inline-flex; align-items: center; gap: 8px; }
+.dashboard-page .smc-logo, .dashboard-page .bmc-logo, .dashboard-page .featured-logo-sm { width: 20px; height: 20px; flex: none; object-fit: contain; border-radius: 4px !important; }
