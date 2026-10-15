@@ -2121,3 +2121,11 @@ html, html body, .sarvex-shell, #root { background: #000 !important; }
 .dashboard-hero { align-items: stretch; }
 @media (max-width: 900px) { .dep-cols, .dep-row { grid-template-columns: 64px 36px minmax(0, 1fr) 150px; } .dep-cols span:nth-child(4), .dep-row > span:nth-child(4) { display: none; } }
 @media (prefers-reduced-motion: reduce) { .dep-row, .dep-clock i { animation: none; } }
+
+/* Contract logos in place of initials (Terminal list/heading/ticket, live markets) */
+.has-logo { display: inline-grid; place-items: center; overflow: hidden; border-radius: 4px !important; flex: none; }
+.has-logo img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.watch-icon.has-logo, .live-avatar.has-logo { background: transparent !important; }
+.market-avatar.has-logo { background: transparent !important; }
+.market-avatar.xl.has-logo { width: 34px; height: 34px; }
+.market-avatar.small.has-logo { width: 22px; height: 22px; }

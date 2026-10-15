@@ -1403,7 +1403,7 @@ function MarketDashboard({ loading, markets, fills, marketPrices, onSelect, sear
             <aside className="live-panel">
               <div className="live-panel-head"><span><i /> Live markets</span><span>{markets.filter((m) => !m.catalogOnly).length} live</span></div>
               <div className="live-table-head"><span>Market</span><span>Yes</span></div>
-              {markets.slice(0, 5).map((market, index) => <button type="button" className="live-market" key={market.ticker} onClick={() => onSelect(market.ticker)}><span className={`live-avatar avatar-${index}`}>{avatarText(market)}</span><span><small>{contractSection(market)} · {market.catalogOnly ? 'Planned' : 'Live'}</small><b>{market.question || market.underlying || market.ticker}</b></span><strong>{Math.max(1, Math.min(99, marketPrices[market.ticker] || impliedPrice(market, fills)))}%</strong></button>)}
+              {markets.slice(0, 5).map((market, index) => <button type="button" className="live-market" key={market.ticker} onClick={() => onSelect(market.ticker)}><ContractLogo market={market} className="live-avatar" /><span><small>{contractSection(market)} · {market.catalogOnly ? 'Planned' : 'Live'}</small><b>{market.question || market.underlying || market.ticker}</b></span><strong>{Math.max(1, Math.min(99, marketPrices[market.ticker] || impliedPrice(market, fills)))}%</strong></button>)}
               <button type="button" className="live-all" onClick={() => setSection('Economics')}>All live markets <span>→</span></button>
             </aside>
           </section>
@@ -1732,7 +1732,7 @@ function TerminalWatchlist({ markets, selectedTicker, onSelect, fills = [], pinn
       <div className="terminal-watchlist-head"><span><i className="pf-tag">MKT</i>Markets</span><span><RefreshCw size={12} /></span></div>
       <div className="terminal-watchlist-list">
         {orderedMarkets.slice(0, 14).map((item, index) => <button className={`${item.ticker === selectedTicker ? 'watch-item active' : 'watch-item'}${pinned.has(item.ticker) ? ' pinned' : ''}`} type="button" key={item.ticker} onClick={() => onSelect(item.ticker)}>
-          <span className={`watch-icon watch-${index % 5}`}>{avatarText(item)}</span>
+          <ContractLogo market={item} className="watch-icon" />
           <span><b>{pinned.has(item.ticker) && <span className="watch-pin" aria-label="Pinned">•</span>}{item.question || item.ticker}</b>{isFutureMarket(item)
             ? <small>{fills.some((fill) => fill.ticker === item.ticker) ? formatFuturePrice(item, impliedPrice(item, fills)) : '--'}</small>
             : <small>{Math.max(1, Math.min(99, impliedPrice(item, fills)))}¢ <em>{100 - Math.max(1, Math.min(99, impliedPrice(item, fills)))}¢</em></small>}</span>
@@ -1754,7 +1754,7 @@ function MarketDetail({ market, watchlist, onSelect, orderbook, fills, position,
       <section className="market-main">
         <button className="back-btn" type="button" onClick={onBack}><ArrowLeft size={16} /> All markets</button>
         <div className="detail-heading">
-          <div className="market-avatar xl">{avatarText(market)}</div>
+          <ContractLogo market={market} className="market-avatar xl" />
           <div>
             <p className="crumb">{market.series_ticker || market.seriesTicker || 'Sarvaex'} · {market.kind === 2 ? 'Scalar Future' : 'Binary Contract'}</p>
             <h1>{market.question || market.underlying || market.ticker}</h1>
@@ -1860,7 +1860,7 @@ function FutureDetail({ market, watchlist, watchlistFills, onSelect, orderbook, 
       <section className="market-main">
         <button className="back-btn" type="button" onClick={onBack}><ArrowLeft size={16} /> All futures</button>
         <div className="detail-heading">
-          <div className="market-avatar xl">{avatarText(market)}</div>
+          <ContractLogo market={market} className="market-avatar xl" />
           <div>
             <p className="crumb">{market.series_ticker || market.seriesTicker || 'Sarvaex'} · Numeric Future</p>
             <h1>{market.question || market.underlying || market.ticker}</h1>
@@ -2168,7 +2168,7 @@ function TradeTicket({ market, bestBid, bestAsk, authed, busy, onTrade }) {
 
   return (
     <section className="ticket" id="trade-ticket">
-      <div className="ticket-market"><div className="market-avatar small">{avatarText(market)}</div><span>{market.ticker}</span></div>
+      <div className="ticket-market"><ContractLogo market={market} className="market-avatar small" /><span>{market.ticker}</span></div>
       <div className="ticket-tabs">
         <button className={tab === 'buy' ? 'active' : ''} type="button" onClick={() => switchTab('buy')}>Buy</button>
         <button className={tab === 'sell' ? 'active' : ''} type="button" onClick={() => switchTab('sell')}>Sell</button>
@@ -2253,7 +2253,7 @@ function FutureTradeTicket({ market, bestBid, bestAsk, mark, authed, busy, onTra
 
   return (
     <section className="ticket futures-ticket" id="trade-ticket">
-      <div className="ticket-market"><div className="market-avatar small">{avatarText(market)}</div><span>{market.ticker}</span></div>
+      <div className="ticket-market"><ContractLogo market={market} className="market-avatar small" /><span>{market.ticker}</span></div>
       <div className="ticket-tabs">
         <button className={tab === 'buy' ? 'active long-tab' : 'long-tab'} type="button" onClick={() => switchSide('buy')}>Buy / Long</button>
         <button className={tab === 'sell' ? 'active short-tab' : 'short-tab'} type="button" onClick={() => switchSide('sell')}>Sell / Short</button>
@@ -2789,6 +2789,17 @@ function RecentTrades({ fills, market }) {
         </div>
       )) : <div className="empty-state">Run the demo simulator to create trades.</div>}
     </section>
+  )
+}
+
+function ContractLogo({ market, className }) {
+  const [failed, setFailed] = useState(false)
+  return (
+    <span className={`${className} has-logo`}>
+      {failed
+        ? avatarText(market)
+        : <img src={`/SarvaeX_contract_logos/logos/${encodeURIComponent(market.ticker)}.svg`} alt="" loading="lazy" onError={() => setFailed(true)} />}
+    </span>
   )
 }
 
